@@ -1,0 +1,74 @@
+{
+  "screens_dir": "C:\\Screens",
+  "check_interval": 300,
+  "offline_thr": 7200,
+  "log_thr": 3600,
+  "widget_width": 20,
+  "tasks_to_check": [
+    "LD СЛЁТ",
+    "LD РАЗЛОГ",
+    "LD GN ПРОВЕРКА"
+  ],
+  "telegram_token": "",
+  "telegram_chat": "",
+  "servers": [
+    {
+      "name": "208",
+      "ip": "185.186.143.208",
+      "url": "https://hotly-large-coral.cloudpub.ru",
+      "mon_url": "https://laxly-beneficial-sapsucker.cloudpub.ru",
+      "log_path": "C:\\Program Files (x86)\\Gnbots\\logs",
+      "include_acc": true,
+      "main_script": "",
+      "monitor_scripts": {
+        "RssCounterWebV7": "RssV7",
+        "clo.exe": "CLO"
+      }
+    },
+    {
+      "name": "F99",
+      "ip": "192.168.31.211",
+      "url": "https://tastelessly-quickened-chub.cloudpub.ru",
+      "mon_url": "https://vividly-poignant-waterbear.cloudpub.ru/",
+      "log_path": "C:\\Program Files (x86)\\Gnbots\\logs",
+      "include_acc": true,
+      "main_script": "",
+      "monitor_scripts": {
+        "RssCounterWebV7": "RssV7",
+        "clo.exe": "CLO"
+      }
+    },
+    {
+      "name": "R9",
+      "ip": "192.168.31.46",
+      "url": "https://creakily-big-spaniel.cloudpub.ru/",
+      "mon_url": "https://specially-approving-petrel.cloudpub.ru",
+      "log_path": "C:\\Program Files (x86)\\Gnbots\\logs",
+      "include_acc": true,
+      "main_script": "",
+      "monitor_scripts": {
+        "RssCounterWebV7": "RssV7",
+        "clo.exe": "CLO"
+      }
+    },
+    {
+      "name": "RSS",
+      "ip": "192.168.31.9",
+      "url": "https://fiendishly-awake-stickleback.cloudpub.ru/",
+      "mon_url": "https://thunderously-apposite-goose.cloudpub.ru",
+      "log_path": "C:\\Program Files (x86)\\Gnbots\\logs",
+      "include_acc": false,
+      "main_script": "",
+      "monitor_scripts": {
+        "RssCounterWebV7": "RssV7",
+        "clo.exe": "CLO"
+      }
+    }
+  ],
+  "font_size": 10,
+  "pay_cols": [
+    45,
+    25,
+    30
+  ]
+}
