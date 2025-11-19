@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% if is_new %}
+    {% set page_title = "Добавление аккаунта" %}
+{% else %}
+    {% set page_title = "Редактирование аккаунта: " ~ account.name %}
+{% endif %}
+
+{% block title %}{{ page_title }}{% endblock %}
+
+{% block content %}
+<h1>{{ page_title }}</h1>
+
+<div class="card">
+    <form method="post">
+        <label class="form-label">
+            Имя фермы / аккаунта
+            <input type="text" name="name" class="form-input"
+                   value="{{ account.name if account else '' }}" required>
+        </label>
+
+        <label class="form-label">
+            Internal ID (ID в твоём Rss-сервисе / логах)
+            <input type="text" name="internal_id" class="form-input"
+                   value="{{ account.internal_id if account else '' }}" required>
+        </label>
+
+        <label class="form-label">
+            Сервер
+            <select name="server_id" class="form-input" required>
+                <option value="">— выберите сервер —</option>
+                {% for s in servers %}
+                    <option value="{{ s.id }}"
+                        {% if account and account.server_id == s.id %}selected{% endif %}>
+                        {{ s.name }} ({{ s.host }})
+                    </option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="form-label">
+            Владелец (клиент)
+            <select name="owner_id" class="form-input" required>
+                <option value="">— выберите клиента —</option>
+                {% for c in clients %}
+                    <option value="{{ c.id }}"
+                        {% if account and account.owner_id == c.id %}selected{% endif %}>
+                        {{ c.username }}
+                    </option>
+                {% endfor %}
+            </select>
+        </label>
+
+        <label class="form-label form-label-inline">
+            <input type="checkbox" name="is_active" {% if not account or account.is_active %}checked{% endif %}>
+            Активен
+        </label>
+
+        <label class="form-label">
+            Мир / сервер игры (опционально)
+            <input type="text" name="game_world" class="form-input"
+                   value="{{ account.game_world if account else '' }}">
+        </label>
+
+        <label class="form-label">
+            Заметки
+            <textarea name="notes" class="form-input" rows="3">{{ account.notes if account else '' }}</textarea>
+        </label>
+
+        <button type="submit" class="btn btn-primary">Сохранить</button>
+        <a href="{{ url_for('admin.accounts_list') }}" class="btn btn-outline">Отмена</a>
+    </form>
+</div>
+{% endblock %}

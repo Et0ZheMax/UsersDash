@@ -1,0 +1,421 @@
+# client_views.py
+# Маршруты клиентской части (UsersDash):
+# - /dashboard                       — список ферм + ресурсы
+# - /account/<id>/settings           — настройки фермы (мини-manage)
+# - /account/<id>/settings/step/...  — AJAX-тоггл шагов
+# - /account/<id>/refresh            — AJAX-обновление ресурсов по ферме
+
+from flask import (
+    Blueprint,
+    render_template,
+    abort,
+    jsonify,
+    request,
+    redirect,
+    url_for,
+)
+from flask_login import login_required, current_user
+from sqlalchemy.orm import joinedload
+from models import Account, FarmData, db
+from services.remote_api import (
+    fetch_resources_for_accounts,
+    fetch_account_settings,
+    update_account_step_settings,
+)
+
+client_bp = Blueprint("client", __name__, url_prefix="")
+
+
+
+@client_bp.route("/dashboard")
+@login_required
+def dashboard():
+    """
+    Дашборд клиента:
+    - если пользователь админ — перенаправляем в админ-панель;
+    - если клиент — показываем только его фермы и ресурсы по ним.
+    """
+    if getattr(current_user, "role", None) == "admin":
+        return redirect(url_for("admin.admin_dashboard"))
+
+    accounts = (
+        Account.query
+        .options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter_by(owner_id=current_user.id, is_active=True)
+        .order_by(Account.created_at.desc())
+        .all()
+    )
+
+    total_accounts = len(accounts)
+
+    # Ближайшие оплаты по фермам (если в БД есть такие данные)
+    upcoming_all = []
+    for acc in accounts:
+        # поля next_payment_at / next_payment_amount добавим в Account (см. ниже)
+        if getattr(acc, "next_payment_at", None):
+            upcoming_all.append({
+                "account_name": acc.name,
+                "date": acc.next_payment_at,
+                "date_str": acc.next_payment_at.strftime("%d.%m.%Y"),
+                "amount": acc.next_payment_amount,
+            })
+
+    upcoming_all.sort(key=lambda x: x["date"])
+    upcoming_payments = upcoming_all[:3]
+    upcoming_more = max(0, len(upcoming_all) - len(upcoming_payments))
+
+    if not accounts:
+        return render_template(
+            "client/dashboard.html",
+            accounts_data=[],
+            total_accounts=0,
+            upcoming_payments=[],
+            upcoming_more=0,
+        )
+
+    resources_map = fetch_resources_for_accounts(accounts)
+
+    accounts_data = []
+    for acc in accounts:
+        res_info = resources_map.get(acc.id)
+
+        if res_info:
+            resources_brief = res_info.get("brief", "—")
+            today_gain = res_info.get("today_gain")
+            last_updated = res_info.get("last_updated_fmt") or res_info.get("last_updated")
+            has_data = True
+        else:
+            resources_brief = "—"
+            today_gain = None
+            last_updated = None
+            has_data = False
+
+        accounts_data.append({
+            "account": acc,
+            "resources_brief": resources_brief,
+            "today_gain": today_gain,
+            "last_updated": last_updated,
+            "has_data": has_data,
+        })
+
+    return render_template(
+        "client/dashboard.html",
+        accounts_data=accounts_data,
+        total_accounts=total_accounts,
+        upcoming_payments=upcoming_payments,
+        upcoming_more=upcoming_more,
+    )
+
+
+@client_bp.route("/account/<int:account_id>/settings")
+@login_required
+def account_settings(account_id: int):
+    """
+    Страница настроек конкретной фермы для клиента.
+
+    Защита:
+    - клиент видит только свои аккаунты (owner_id == current_user.id).
+    """
+    account = (
+        Account.query
+        .options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter_by(id=account_id, owner_id=current_user.id)
+        .first()
+    )
+    if not account:
+        abort(404)
+
+    raw_settings = fetch_account_settings(account)
+    if not raw_settings or "Data" not in raw_settings:
+        return render_template(
+            "client/account_settings_error.html",
+            account=account,
+        )
+
+    steps = raw_settings.get("Data") or []
+    menu = raw_settings.get("MenuData") or {}
+
+    view_steps = []
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step = {}
+
+        cfg = step.get("Config", {})
+        name = ""
+        if isinstance(cfg, dict):
+            name = cfg.get("Name") or cfg.get("name") or ""
+        if not name:
+            name = f"Шаг {idx + 1}"
+
+        is_active = bool(step.get("IsActive", True))
+
+        view_steps.append({
+            "index": idx,
+            "name": name,
+            "is_active": is_active,
+        })
+
+    return render_template(
+        "client/account_settings.html",
+        account=account,
+        steps=steps,
+        view_steps=view_steps,
+        menu=menu,
+    )
+
+
+@client_bp.route("/account/<int:account_id>/settings/step/<int:step_idx>/toggle", methods=["POST"])
+@login_required
+def account_toggle_step(account_id: int, step_idx: int):
+    """
+    AJAX-эндпоинт: включение/выключение шага (IsActive) для аккаунта.
+
+    Принимает JSON: {"is_active": true|false}
+    """
+    account = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(id=account_id, owner_id=current_user.id)
+        .first()
+    )
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    if "is_active" not in payload:
+        return jsonify({"ok": False, "error": "is_active is required"}), 400
+
+    new_active = bool(payload.get("is_active"))
+
+    ok, msg = update_account_step_settings(account, step_idx, {"IsActive": new_active})
+    status = 200 if ok else 500
+    return jsonify({"ok": ok, "message": msg}), status
+
+
+@client_bp.route("/account/<int:account_id>/refresh", methods=["POST"])
+@login_required
+def account_refresh(account_id: int):
+    """
+    AJAX-эндпоинт: обновление ресурсов для одной фермы.
+
+    Логика:
+    - проверяем, что аккаунт принадлежит текущему пользователю;
+    - вызываем fetch_resources_for_accounts([account]);
+    - отдаём JSON с текущими ресурсами для обновления строки в таблице.
+    """
+    account = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(id=account_id, owner_id=current_user.id)
+        .first()
+    )
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    res_map = fetch_resources_for_accounts([account])
+    res_info = res_map.get(account.id)
+
+    if not res_info:
+        return jsonify({"ok": False, "error": "no resource data for this account"}), 404
+
+
+    return jsonify({
+        "ok": True,
+        "resources_brief": res_info.get("brief"),
+        "today_gain": res_info.get("today_gain"),
+        "last_updated": res_info.get("last_updated_fmt") or res_info.get("last_updated"),
+    })
+
+
+@client_bp.route("/farm-data")
+@login_required
+def farm_data():
+    """
+    Страница 'Данные ферм' для клиента.
+
+    Теперь:
+    - подставляем список ферм (Account) текущего пользователя;
+    - к каждой ферме подтягиваем, если есть, FarmData по имени;
+    - имя фермы пользователь НЕ вводит, оно всегда из Account.name.
+    """
+    if getattr(current_user, "role", None) == "admin":
+        return redirect(url_for("admin.admin_dashboard"))
+
+    # Все активные аккаунты клиента
+    accounts = (
+        Account.query
+        .filter_by(owner_id=current_user.id, is_active=True)
+        .order_by(Account.name.asc())
+        .all()
+    )
+
+    # Все FarmData этого пользователя
+    farm_entries = (
+        FarmData.query
+        .filter_by(user_id=current_user.id)
+        .all()
+    )
+    by_name = {entry.farm_name: entry for entry in farm_entries}
+
+    items = []
+    for acc in accounts:
+        items.append({
+            "account": acc,
+            "farmdata": by_name.get(acc.name),
+        })
+
+    return render_template(
+        "client/farm_data.html",
+        items=items,
+    )
+
+
+@client_bp.route("/farm-data/save", methods=["POST"])
+@login_required
+def farm_data_save():
+    """
+    Сохранение клиентских «Данных ферм» из таблицы.
+
+    Фронтенд (static/js/main.js → handleFarmDataSave) отправляет JSON вида:
+    {
+      "items": [
+        {
+          "account_id": "123",   // ID из таблицы accounts
+          "email": "...",
+          "login": "...",
+          "password": "...",
+          "igg_id": "123456789",
+          "server": "K72"
+        },
+        ...
+      ]
+    }
+
+    В базе мы:
+      - находим все аккаунты текущего пользователя по переданным account_id;
+      - для каждого аккаунта создаём/обновляем запись FarmData
+        (user_id = current_user.id, farm_name = Account.name).
+    """
+    # Админ не должен сюда писать — у него есть своя админская таблица
+    if getattr(current_user, "role", None) == "admin":
+        return jsonify({"ok": False, "error": "admin cannot edit farm data here"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("items") or []
+
+    if not isinstance(items, list) or not items:
+        return jsonify({"ok": False, "error": "Нет данных для сохранения"}), 400
+
+    # Собираем валидные account_id из payload
+    cleaned_items = []
+    account_ids = set()
+
+    for row in items:
+        account_id_raw = row.get("account_id")
+        try:
+            acc_id = int(account_id_raw)
+        except (TypeError, ValueError):
+            # некорректный ID — пропускаем
+            continue
+
+        cleaned_items.append((acc_id, row))
+        account_ids.add(acc_id)
+
+    if not cleaned_items:
+        return jsonify({"ok": False, "error": "Нет валидных ферм для сохранения"}), 400
+
+    # Подтягиваем аккаунты текущего пользователя одним запросом
+    from models import Account, FarmData  # локальный импорт, чтобы избежать циклов
+
+    accounts = (
+        Account.query
+        .filter(
+            Account.id.in_(account_ids),
+            Account.owner_id == current_user.id,
+            Account.is_active.is_(True),
+        )
+        .all()
+    )
+    acc_by_id = {acc.id: acc for acc in accounts}
+
+    if not acc_by_id:
+        return jsonify({"ok": False, "error": "Фермы не найдены или не принадлежат вам"}), 400
+
+    # Для оптимизации сразу вытаскиваем все FarmData по (user_id, farm_name)
+    farm_names = {acc.name for acc in accounts}
+    farmdata_entries = (
+        FarmData.query
+        .filter(
+            FarmData.user_id == current_user.id,
+            FarmData.farm_name.in_(farm_names),
+        )
+        .all()
+    )
+    fd_by_key = {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
+
+    # Первая проходка — валидация IGG
+    for acc_id, row in cleaned_items:
+        acc = acc_by_id.get(acc_id)
+        if not acc:
+            continue
+
+        igg_id = (row.get("igg_id") or "").strip()
+        if igg_id and not igg_id.isdigit():
+            return jsonify({
+                "ok": False,
+                "error": f"IGG ID для фермы «{acc.name}» должен содержать только цифры",
+            }), 400
+
+    # Вторая проходка — применение изменений
+    try:
+        for acc_id, row in cleaned_items:
+            acc = acc_by_id.get(acc_id)
+            if not acc:
+                # чужой аккаунт или неактивный — на всякий случай игнорируем
+                continue
+
+            farm_name = acc.name
+            key = (current_user.id, farm_name)
+
+            email = (row.get("email") or "").strip()
+            login_val = (row.get("login") or "").strip()
+            password_val = (row.get("password") or "").strip()
+            igg_id = (row.get("igg_id") or "").strip()
+            server_val = (row.get("server") or "").strip()
+
+            fd = fd_by_key.get(key)
+            if not fd:
+                # создаём только если есть хоть какие-то данные
+                if not any([email, login_val, password_val, igg_id, server_val]):
+                    continue
+
+                fd = FarmData(
+                    user_id=current_user.id,
+                    farm_name=farm_name,
+                )
+                db.session.add(fd)
+                fd_by_key[key] = fd
+
+            # Обновляем поля
+            fd.email = email or None
+            fd.login = login_val or None
+            fd.password = password_val or None
+            fd.igg_id = igg_id or None
+            fd.server = server_val or None
+            fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        print(f"[farm_data_save] ERROR: {exc}")
+        return jsonify({"ok": False, "error": "Ошибка при сохранении данных."}), 500
+
+    return jsonify({"ok": True})
+
+
