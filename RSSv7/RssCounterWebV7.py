@@ -551,14 +551,25 @@ def init_accounts_db():
     c    = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS account_meta(
-          id       TEXT PRIMARY KEY,   -- ID = тот же, что в profile.json
-          email    TEXT,
-          passwd   TEXT,
-          igg      TEXT,
-          pay_until  TEXT,   -- YYYY-MM-DD
-          tariff_rub INTEGER DEFAULT 0
+          id          TEXT PRIMARY KEY,   -- ID = тот же, что в profile.json
+          email       TEXT,
+          passwd      TEXT,
+          igg         TEXT,
+          pay_until   TEXT,   -- YYYY-MM-DD
+          tariff_rub  INTEGER DEFAULT 0,
+          server      TEXT,
+          tg_tag      TEXT
         )
     """)
+
+    # Таблица могла быть создана в старой версии без новых колонок.
+    existing_cols = {
+        row[1] for row in c.execute("PRAGMA table_info(account_meta)").fetchall()
+    }
+    if "server" not in existing_cols:
+        c.execute("ALTER TABLE account_meta ADD COLUMN server TEXT")
+    if "tg_tag" not in existing_cols:
+        c.execute("ALTER TABLE account_meta ADD COLUMN tg_tag TEXT")
     conn.commit(); conn.close()
 
 
@@ -583,11 +594,11 @@ def sync_account_meta():
 
     # ── вставить недостающие ──
     if active_ids:
-        placeholders = ",".join("(?, '', '', '', '', NULL)"
+        placeholders = ",".join("(?, '', '', '', '', NULL, '', '')"
                                 for _ in active_ids)
         c.execute(f"""
             INSERT OR IGNORE INTO account_meta
-            (id,email,passwd,igg,pay_until,tariff_rub)
+            (id,email,passwd,igg,pay_until,tariff_rub,server,tg_tag)
             VALUES {placeholders}
         """, tuple(active_ids))
 
@@ -1836,68 +1847,86 @@ def api_apply_template(acc_id):
 
 @app.route("/api/accounts_meta_full")
 def api_accounts_meta_full():
-    # ids фильтр
-    ids = set(filter(None, request.args.get("ids", "").split(","))) or None
+    try:
+        # ids фильтр
+        ids = set(filter(None, request.args.get("ids", "").split(","))) or None
 
-    # 1) читаем профиль (только активные)
-    profile = []
-    if os.path.exists(PROFILE_PATH):
-        with open(PROFILE_PATH, "r", encoding="utf-8") as f:
-            for a in json.load(f):
-                if not a.get("Active"):
-                    continue
-                if ids and a.get("Id") not in ids:
-                    continue
+        # 1) читаем профиль (только активные)
+        profile = []
+        if os.path.exists(PROFILE_PATH):
+            with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+                for a in json.load(f):
+                    if not a.get("Active"):
+                        continue
+                    if ids and a.get("Id") not in ids:
+                        continue
 
-                # --- E-mail / Pass / IGG из профиля ---
-                email = passwd = igg = ""
-                try:
-                    md = json.loads(a.get("MenuData", "{}"))
-                    cfg = md.get("Config", {})
-                    email  = cfg.get("Email", "") or ""
-                    passwd = cfg.get("Password", "") or ""
-                    igg    = cfg.get("Custom", "") or ""
-                except Exception:
-                    pass
+                    # --- E-mail / Pass / IGG из профиля ---
+                    email = passwd = igg = ""
+                    try:
+                        md = json.loads(a.get("MenuData", "{}"))
+                        cfg = md.get("Config", {})
+                        email  = cfg.get("Email", "") or ""
+                        passwd = cfg.get("Password", "") or ""
+                        igg    = cfg.get("Custom", "") or ""
+                    except Exception:
+                        pass
 
-                profile.append({
-                    "id": a.get("Id"),
-                    "name": a.get("Name", ""),
-                    "email": email,
-                    "passwd": passwd,
-                    "igg": igg,
-                })
+                    profile.append({
+                        "id": a.get("Id"),
+                        "name": a.get("Name", ""),
+                        "email": email,
+                        "passwd": passwd,
+                        "igg": igg,
+                        "server": SERVER,
+                    })
 
-    # 2) account_meta: берём ВСЕ поля, чтобы был фолбэк для учёток
-    conn = open_db(RESOURCES_DB)
-    c = conn.cursor()
-    meta = {
-        r[0]: {
-            "email":     r[1] or "",
-            "passwd":    r[2] or "",
-            "igg":       r[3] or "",
-            "pay_until": r[4] or "",
-            "tariff_rub": r[5] or 0,
+        # 2) account_meta: берём ВСЕ поля, чтобы был фолбэк для учёток
+        conn = open_db(RESOURCES_DB)
+        c = conn.cursor()
+        meta = {
+            r[0]: {
+                "email":      r[1] or "",
+                "passwd":     r[2] or "",
+                "igg":        r[3] or "",
+                "pay_until":  r[4] or "",
+                "tariff_rub": r[5] or 0,
+                "server":     r[6] or "",
+                "tg_tag":     r[7] or "",
+            }
+            for r in c.execute("""
+                SELECT id, email, passwd, igg, pay_until, tariff_rub, server, tg_tag
+                FROM account_meta
+            """)
         }
-        for r in c.execute("""
-            SELECT id, email, passwd, igg, pay_until, tariff_rub
-            FROM account_meta
-        """)
-    }
-    conn.close()
+        conn.close()
 
-    # 3) объединяем с фолбэком: пустые поля из профиля → подставляем из БД
-    out = []
-    for p in profile:
-        m = meta.get(p["id"], {})
-        p["email"]      = p["email"]  or m.get("email", "")
-        p["passwd"]     = p["passwd"] or m.get("passwd", "")
-        p["igg"]        = p["igg"]    or m.get("igg", "")
-        p["pay_until"]  = m.get("pay_until", "")
-        p["tariff_rub"] = m.get("tariff_rub", 0) or 0
-        out.append(p)
+        # 3) объединяем с фолбэком: пустые поля из профиля → подставляем из БД
+        out = []
+        for p in profile:
+            m = meta.get(p["id"], {})
+            merged = {
+                "id": p.get("id"),
+                "name": p.get("name", ""),
+                "email": p.get("email") or m.get("email", ""),
+                "passwd": p.get("passwd") or m.get("passwd", ""),
+                "igg": p.get("igg") or m.get("igg", ""),
+                "pay_until": m.get("pay_until", ""),
+                "tariff_rub": m.get("tariff_rub", 0) or 0,
+                "server": p.get("server") or m.get("server") or SERVER,
+                "tg_tag": m.get("tg_tag", ""),
+            }
+            out.append(merged)
 
-    return jsonify(out)
+        return jsonify({
+            "ok": True,
+            "server": SERVER,
+            "count": len(out),
+            "items": out,
+        })
+    except Exception as exc:
+        app.logger.exception("api_accounts_meta_full failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/payalert")

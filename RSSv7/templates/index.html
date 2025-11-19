@@ -986,10 +986,13 @@
           .map(a => a.id);
         const qs = ids.length ? ('?ids=' + ids.join(',')) : '';
 
-        const data = await fetch('/api/accounts_meta_full' + qs).then(r => {
-          if (!r.ok) throw new Error("Ошибка загрузки данных аккаунтов");
-          return r.json();
-        });
+        const resp = await fetch('/api/accounts_meta_full' + qs);
+        const data = await resp.json();
+        if (!resp.ok || (data && typeof data === 'object' && 'ok' in data && !data.ok)) {
+          const msg = data && data.error ? data.error : 'Ошибка загрузки данных аккаунтов';
+          throw new Error(msg);
+        }
+        const rows = Array.isArray(data) ? data : (data.items || []);
 
         const tbl = document.getElementById('metaTable');
         tbl.innerHTML = `
@@ -1000,7 +1003,7 @@
           </tr>
         `;
 
-        data.forEach(r => {
+        rows.forEach(r => {
           tbl.innerHTML += `
             <tr data-id="${r.id}">
               <td><input type="checkbox" class="selBox" value="${r.id}"></td>
