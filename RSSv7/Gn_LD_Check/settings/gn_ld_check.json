@@ -1,0 +1,24 @@
+{
+  "telegram_token": "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc",
+  "chat_id": "275483461",
+  "thread_id": null,
+  "threshold_windows": 5,
+  "gnbots_shortcut": "C:\\Users\\administrator\\Desktop\\GnBots.lnk",
+  "log_dir": "C:\\Program Files (x86)\\GnBots\\logs",
+  "days_back_scan": 1,
+  "inactivity_minutes": 20,
+  "db_path": "data/gn_ld_check.sqlite3",
+  "retention_days": 2,
+  "tail_init_bytes": 65536,
+  "live_patterns": [
+    "\\|[0-9a-f]{16}\\|",
+    "\\b(getMap|Refreshing Image|pulse)\\b",
+    "\\b(Marches:|Reached Maximum of Marches)\\b",
+    "\\b(Found world)\\b"
+  ],
+  "idle_patterns": [
+    "\\bAnySessionsBootingAsync\\b",
+    "\\bHandleErrorsAsync: Scanning for error windows\\b",
+    "\\bCurrent Error Counters:\\b"
+  ]
+}
