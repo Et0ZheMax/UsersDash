@@ -608,6 +608,8 @@ document.addEventListener("DOMContentLoaded", function () {
                 tariff: tariffResult.isValid
                     ? tariffResult.normalized
                     : tariffInput
+                next_payment_date: val('input[name="next_payment_date"]'),
+                tariff: val('input[name="tariff"]')
             });
         });
 
