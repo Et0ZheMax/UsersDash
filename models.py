@@ -1,0 +1,207 @@
+# models.py
+# Модели БД: пользователи, сервера, аккаунты, доп. данные по фермам,
+# снапшоты ресурсов и лог действий.
+
+from datetime import datetime
+
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import UserMixin
+
+db = SQLAlchemy()
+
+
+class User(UserMixin, db.Model):
+    """
+    Пользователи системы (как админы, так и клиенты).
+    """
+    __tablename__ = "users"
+
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(16), nullable=False, default="client")  # 'admin' или 'client'
+    is_active = db.Column(db.Boolean, default=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    last_login_at = db.Column(db.DateTime)
+
+    # Один пользователь -> много аккаунтов
+    accounts = db.relationship(
+        "Account",
+        back_populates="owner",
+        lazy="dynamic",
+    )
+
+    def get_id(self):
+        """
+        Flask-Login использует этот метод для идентификации пользователя.
+        """
+        return str(self.id)
+
+    def __repr__(self):
+        return f"<User {self.username} ({self.role})>"
+
+
+class Server(db.Model):
+    """
+    Серверный ПК (F99, 208, DELL и т.д.), на котором крутятся фермы.
+    """
+    __tablename__ = "servers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    host = db.Column(db.String(255), nullable=False)         # IP или DNS
+    api_base_url = db.Column(db.String(255), nullable=True)  # URL к локальному API (RssCounter)
+    description = db.Column(db.String(255), nullable=True)
+    is_active = db.Column(db.Boolean, default=True)
+
+    # Один сервер -> много аккаунтов
+    accounts = db.relationship(
+        "Account",
+        back_populates="server",
+        lazy="dynamic",
+    )
+
+    def __repr__(self):
+        return f"<Server {self.name} ({self.host})>"
+
+
+
+class Account(db.Model):
+    __tablename__ = "accounts"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), nullable=False)
+
+    server_id = db.Column(db.Integer, db.ForeignKey("servers.id"), nullable=False)
+    owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+
+    # GUID из /api/resources (поле id) — можем не заполнять, тогда маппим по имени
+    internal_id = db.Column(db.String(128), nullable=True)
+
+    # Активна ли ферма
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+
+    # Дата и сумма ближайшей оплаты по этой ферме
+    next_payment_at = db.Column(db.DateTime, nullable=True)          # дата следующей оплаты
+    next_payment_amount = db.Column(db.Integer, nullable=True)       # сумма в рублях
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Связи
+    server = db.relationship(
+        "Server",
+        back_populates="accounts",
+    )
+
+    owner = db.relationship(
+        "User",
+        back_populates="accounts",
+    )
+
+    # Если захочешь логировать ресурсы и действия по аккаунту —
+    # эти связи уже готовы и согласованы с AccountResourceSnapshot / ActionLog.
+    resource_snapshots = db.relationship(
+        "AccountResourceSnapshot",
+        back_populates="account",
+        lazy="dynamic",
+        cascade="all, delete-orphan",
+    )
+
+    action_logs = db.relationship(
+        "ActionLog",
+        back_populates="account",
+        lazy="dynamic",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<Account id={self.id} name={self.name}>"
+
+
+
+class FarmData(db.Model):
+    """
+    Дополнительные данные по ферме, которые заполняет сам клиент:
+    email / логин / пароль / IGG ID / королевство аккаунта / телеграм-контакт.
+    Эти данные используются как источник истины для RssV7 и кабинета клиента.
+    """
+    __tablename__ = "farm_data"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # Владелец этих данных (клиент в UsersDash)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+
+    # Имя фермы (должно совпадать с Account.name внутри этого пользователя)
+    farm_name = db.Column(db.String(128), nullable=False)
+
+    # Контакты и доступ
+    email = db.Column(db.String(255), nullable=True)
+    login = db.Column(db.String(255), nullable=True)
+    password = db.Column(db.String(255), nullable=True)   # TODO: при необходимости заменить на шифрование
+    igg_id = db.Column(db.String(64), nullable=True)
+
+    # Королевство аккаунта (игровой сервер), чтобы не путать с сервером бота
+    server = db.Column(db.String(64), nullable=True)
+
+    # Telegram-тег клиента / аккаунта, например "@EtoZheMax"
+    telegram_tag = db.Column(db.String(64), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    # Обратная связь на User
+    owner = db.relationship(
+        "User",
+        backref=db.backref("farm_data_entries", lazy="dynamic"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FarmData id={self.id} user_id={self.user_id} farm_name={self.farm_name}>"
+
+
+class AccountResourceSnapshot(db.Model):
+    __tablename__ = "account_resource_snapshots"
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    food = db.Column(db.BigInteger, default=0)
+    wood = db.Column(db.BigInteger, default=0)
+    stone = db.Column(db.BigInteger, default=0)
+    gold = db.Column(db.BigInteger, default=0)
+    gems = db.Column(db.BigInteger, default=0)
+
+    account = db.relationship("Account", back_populates="resource_snapshots")
+
+    def __repr__(self):
+        return f"<Snapshot acc={self.account_id} at={self.created_at}>"
+
+
+class ActionLog(db.Model):
+    __tablename__ = "action_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+
+    action_type = db.Column(db.String(64), nullable=False)
+    payload_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    ip_address = db.Column(db.String(64), nullable=True)
+
+    user = db.relationship("User", backref=db.backref("action_logs", lazy="dynamic"))
+    account = db.relationship("Account", back_populates="action_logs")
+
+    def __repr__(self):
+        return f"<ActionLog {self.action_type} by={self.user_id} acc={self.account_id}>"
+
+  

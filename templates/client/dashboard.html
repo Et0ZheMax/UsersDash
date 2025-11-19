@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Мои фермы{% endblock %}
+
+{% block content %}
+<h1>Мои фермы</h1>
+
+<div class="kpi-row">
+    <div class="kpi-card">
+        <div class="kpi-label">Ферм всего</div>
+        <div class="kpi-value">{{ total_accounts }}</div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-label">Ближайшие оплаты</div>
+
+        {% if upcoming_payments and upcoming_payments|length %}
+            <ul class="kpi-list">
+                {% for p in upcoming_payments %}
+                    <li>
+                        <strong>{{ p.account_name }}</strong>
+                        — {{ p.date_str }}
+                        {% if p.amount %}
+                            — {{ p.amount }} ₽
+                        {% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+            {% if upcoming_more > 0 %}
+                <div class="kpi-note">и ещё {{ upcoming_more }}</div>
+            {% endif %}
+        {% else %}
+            <div class="kpi-empty">Нет запланированных оплат</div>
+        {% endif %}
+    </div>
+</div>
+
+
+{% if accounts_data %}
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Имя фермы</th>
+            <th>Сервер</th>
+            <th>Активна</th>
+            <th>Ресурсы (Food / Wood / Stone / Gold)</th>
+            <th>Прирост за сегодня</th>
+            <th>Обновлено</th>
+            <th>Действия</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for item in accounts_data %}
+            {% set acc = item.account %}
+            <tr data-account-id="{{ acc.id }}">
+                <td>{{ acc.name }}</td>
+                <td>{{ acc.server.name if acc.server else "N/A" }}</td>
+                <td>{{ "Да" if acc.is_active else "Нет" }}</td>
+                <td data-role="resources">
+                    {% if item.has_data %}
+                        {{ item.resources_brief|safe }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td data-role="today-gain">
+                    {% if item.today_gain %}
+                        {{ item.today_gain }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td data-role="last-updated">
+                    {% if item.last_updated %}
+                        {{ item.last_updated }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+              
+                <td class="actions-cell">
+                    <a href="{{ url_for('client.account_settings', account_id=acc.id) }}"
+                    class="btn btn-small btn-secondary btn-icon">
+                        <span class="btn-icon-symbol">⚙</span>
+                        <span class="btn-text">Настройки</span>
+                    </a>
+
+                    <button class="btn btn-small"
+                            data-action="refresh-account"
+                            data-account-id="{{ acc.id }}">
+                        <span class="btn-text">Обновить</span>
+                        <span class="btn-spinner" hidden></span>
+                    </button>
+                </td>
+
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p>У вас пока нет привязанных ферм. Обратитесь к администратору.</p>
+{% endif %}
+{% endblock %}

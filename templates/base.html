@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}MultiDash{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- Простой минималистичный стиль -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+</head>
+<body>
+<div class="page">
+    <header class="header">
+        <div class="header-left">
+            <span class="logo">EtoZheFarm MultiDash</span>
+        </div>
+        <div class="header-right">
+            {% if current_user.is_authenticated %}
+                {% if current_user.role == "admin" %}
+                    <nav class="nav">
+                        <a href="{{ url_for('admin.admin_dashboard') }}" class="nav-link">Админ</a>
+                        <a href="{{ url_for('admin.users_list') }}" class="nav-link">Пользователи</a>
+                        <a href="{{ url_for('admin.servers_list') }}" class="nav-link">Серверы</a>
+                        <a href="{{ url_for('admin.accounts_list') }}" class="nav-link">Фермы</a>
+                        <a href="{{ url_for('admin.admin_farm_data') }}" class="nav-link">Данные ферм</a>
+                    </nav>
+                {% else %}
+                    <nav class="nav">
+                        <a href="{{ url_for('client.dashboard') }}" class="nav-link">Мои фермы</a>
+                        <a href="{{ url_for('client.farm_data') }}"
+                           class="nav-link {% if farmdata_required %}nav-link-attention{% endif %}">
+                            Данные ферм
+                        </a>
+                    </nav>
+                {% endif %}
+                <span class="user-label">{{ current_user.username }} ({{ current_user.role }})</span>
+                <a href="{{ url_for('auth.logout') }}" class="btn btn-outline">Выйти</a>
+            {% endif %}
+        </div>
+    </header>
+
+    <main class="content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-container">
+                    {% for category, message in messages %}
+                        <div class="toast toast-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>

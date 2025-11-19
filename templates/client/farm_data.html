@@ -1,0 +1,387 @@
+{% extends "base.html" %}
+
+{% block title %}Данные ферм{% endblock %}
+
+{% block content %}
+
+<style>
+    .farmdata-page-title {
+        font-size: 1.8rem;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+
+    .farmdata-subtitle {
+        font-size: 0.95rem;
+        color: #9ca3af;
+        margin-bottom: 1.25rem;
+    }
+
+    .farmdata-wrapper {
+        margin-top: 1rem;
+    }
+
+    .farmdata-card {
+        background: #141620;
+        border-radius: 16px;
+        padding: 1.5rem 1.75rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+
+    .farmdata-card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+        gap: 0.75rem;
+    }
+
+    .farmdata-card-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+    }
+
+    .farmdata-card-caption {
+        font-size: 0.85rem;
+        color: #9ca3af;
+    }
+
+    .farmdata-badge-required {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.2rem 0.6rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        background: rgba(234, 179, 8, 0.12);
+        color: #facc15;
+    }
+
+    .farmdata-badge-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: #facc15;
+    }
+
+    .farmdata-table-wrapper {
+        overflow-x: auto;
+        margin-bottom: 1rem;
+    }
+
+    table.farmdata-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.9rem;
+    }
+
+    table.farmdata-table thead tr {
+        background: #111827;
+    }
+
+    table.farmdata-table thead th {
+        padding: 0.6rem 0.5rem;
+        text-align: left;
+        font-weight: 500;
+        white-space: nowrap;
+        border-bottom: 1px solid rgba(75, 85, 99, 0.7);
+    }
+
+    table.farmdata-table tbody tr {
+        border-bottom: 1px solid rgba(31, 41, 55, 0.8);
+    }
+
+    table.farmdata-table tbody tr:last-child {
+        border-bottom: none;
+    }
+
+    table.farmdata-table tbody td {
+        padding: 0.45rem 0.5rem;
+        vertical-align: middle;
+    }
+
+    .farmdata-name-cell {
+        min-width: 150px;
+    }
+
+    .farmdata-name-main {
+        font-weight: 500;
+    }
+
+    .farmdata-name-sub {
+        font-size: 0.78rem;
+        color: #9ca3af;
+        margin-top: 0.1rem;
+    }
+
+    .farmdata-status-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.75rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        white-space: nowrap;
+    }
+
+    .farmdata-status-empty {
+        background: rgba(234, 179, 8, 0.12);
+        color: #facc15;
+    }
+
+    .farmdata-status-ok {
+        background: rgba(34, 197, 94, 0.15);
+        color: #22c55e;
+    }
+
+    .farmdata-input {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 8px;
+        border: 1px solid rgba(75, 85, 99, 0.9);
+        padding: 0.3rem 0.5rem;
+        background: #020617;
+        color: #e5e7eb;
+        font-size: 0.85rem;
+        outline: none;
+    }
+
+    .farmdata-input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+    }
+
+    .farmdata-input::placeholder {
+        color: #6b7280;
+        font-size: 0.8rem;
+    }
+
+    .farmdata-input--short {
+        max-width: 120px;
+    }
+
+    .farmdata-input--price {
+        max-width: 100px;
+        text-align: right;
+    }
+
+    .farmdata-no-accounts {
+        padding: 1rem 0;
+        text-align: center;
+        color: #9ca3af;
+    }
+
+    .farmdata-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 0.75rem;
+    }
+
+    .btn.btn-primary {
+        background: #2563eb;
+        border-radius: 999px;
+        border: none;
+        padding: 0.45rem 1.2rem;
+        font-size: 0.9rem;
+        font-weight: 500;
+        color: #fff;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+
+    .btn.btn-primary:hover {
+        background: #1d4ed8;
+    }
+
+    .btn.btn-primary:disabled {
+        opacity: 0.5;
+        cursor: default;
+    }
+
+    .btn-spinner {
+        width: 16px;
+        height: 16px;
+        border-radius: 999px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-top-color: #fff;
+        animation: farmdata-spin 0.8s linear infinite;
+    }
+
+    @keyframes farmdata-spin {
+        to { transform: rotate(360deg); }
+    }
+
+    .farmdata-alert {
+        margin-bottom: 1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        background: rgba(234, 179, 8, 0.12);
+        border: 1px solid rgba(234, 179, 8, 0.4);
+        font-size: 0.85rem;
+        color: #facc15;
+    }
+</style>
+
+<h1 class="farmdata-page-title">Данные ферм</h1>
+<p class="farmdata-subtitle">
+    Эти данные помогают быстро восстанавливать доступ к аккаунтам и упрощают поддержку.
+</p>
+
+{% if farmdata_required %}
+    <div class="farmdata-alert">
+        Пожалуйста, заполните данные по фермам. Начните хотя бы с одной —
+        это сильно поможет при восстановлении доступа.
+    </div>
+{% endif %}
+
+<div class="farmdata-wrapper">
+    <form id="farmdata-form">
+        <div class="farmdata-card">
+            <div class="farmdata-card-header">
+                <div>
+                    <div class="farmdata-card-title">Мои фермы</div>
+                    <div class="farmdata-card-caption">
+                        Имя фермы подставляется автоматически по списку аккаунтов.
+                    </div>
+                </div>
+
+                {% if farmdata_required %}
+                    <div class="farmdata-badge-required">
+                        <span class="farmdata-badge-dot"></span>
+                        Требуется заполнить
+                    </div>
+                {% endif %}
+            </div>
+
+            <div class="farmdata-table-wrapper">
+                <table class="farmdata-table" data-role="farmdata-table">
+                    <thead>
+                    <tr>
+                        <th>Ферма</th>
+                        <th>E-mail</th>
+                        <th>Логин</th>
+                        <th>Пароль</th>
+                        <th>IGG ID</th>
+                        <th>Сервер аккаунта</th>
+                        <th>Telegram</th>
+                        <th>Оплата (дд.мм.гг)</th>
+                        <th>Тариф ₽</th>
+                        <th>Статус</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% if items and items|length %}
+                        {% for item in items %}
+                            {% set acc = item.account %}
+                            {% set fd = item.farmdata %}
+                            {% set has_data = fd and (fd.email or fd.login or fd.password or fd.igg_id or fd.server) %}
+                            <tr data-account-id="{{ acc.id }}">
+                                <td class="farmdata-name-cell">
+                                    <div class="farmdata-name-main">
+                                        {{ acc.name }}
+                                    </div>
+                                    <div class="farmdata-name-sub">
+                                        Сервер: {{ acc.server.name if acc.server else "—" }}
+                                    </div>
+                                </td>
+                                <td>
+                                    <input class="farmdata-input"
+                                           type="email"
+                                           name="email"
+                                           placeholder="email@example.com"
+                                           value="{{ fd.email if fd and fd.email else '' }}">
+                                </td>
+                                <td>
+                                    <input class="farmdata-input"
+                                           type="text"
+                                           name="login"
+                                           placeholder="Логин (если отличается от e-mail)"
+                                           value="{{ fd.login if fd and fd.login else '' }}">
+                                </td>
+                                <td>
+                                    <input class="farmdata-input"
+                                           type="text"
+                                           name="password"
+                                           placeholder="Пароль"
+                                           value="{{ fd.password if fd and fd.password else '' }}">
+                                </td>
+                                <td>
+                                    <input class="farmdata-input farmdata-input--short"
+                                           type="text"
+                                           name="igg_id"
+                                           placeholder="Напр. 123456789"
+                                           value="{{ fd.igg_id if fd and fd.igg_id else '' }}">
+                                </td>
+                                <td>
+                                    <input class="farmdata-input"
+                                           type="text"
+                                           name="server"
+                                           placeholder="Например: 208 / R9 / EU-123"
+                                           value="{{ fd.server if fd and fd.server else '' }}">
+                                </td>
+                                <td>
+                                    <div class="farmdata-telegram-cell">
+                                        <input class="farmdata-input"
+                                            type="text"
+                                            name="telegram_tag"
+                                            placeholder="@telegram или ник"
+                                            value="{{ fd.telegram_tag if fd and fd.telegram_tag else '' }}">
+                                        <button type="button"
+                                                class="btn btn-ghost btn-telegram"
+                                                data-role="open-telegram-from-row"
+                                                title="Открыть в Telegram">
+                                            TG
+                                        </button>
+                                    </div>
+                                </td>
+                                <td>
+                                    <input class="farmdata-input farmdata-input--short"
+                                           type="date"
+                                           name="next_payment_date"
+                                           value="{{ acc.next_payment_at.strftime('%Y-%m-%d') if acc.next_payment_at else '' }}">
+                                </td>
+                                <td>
+                                    <input class="farmdata-input farmdata-input--price"
+                                           type="number"
+                                           min="0"
+                                           step="50"
+                                           name="tariff"
+                                           placeholder="0"
+                                           value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
+                                </td>
+                                <td>
+                                    {% if has_data %}
+                                        <span class="farmdata-status-badge farmdata-status-ok">Заполнено</span>
+                                    {% else %}
+                                        <span class="farmdata-status-badge farmdata-status-empty">Нет данных</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="9" class="farmdata-no-accounts">
+                                У вас пока нет ферм, привязанных к этому кабинету.
+                            </td>
+                        </tr>
+                    {% endif %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="farmdata-actions">
+                <button type="button"
+                        class="btn btn-primary"
+                        data-action="farmdata-save">
+                    <span class="btn-text">Сохранить изменения</span>
+                    <span class="btn-spinner" hidden></span>
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+{% endblock %}
