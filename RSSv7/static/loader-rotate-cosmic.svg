@@ -1,0 +1,42 @@
+<!-- loader-rotate-cosmic.svg -->
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="260" viewBox="0 0 220 220" role="img" aria-label="Загрузка — EtoZheFarm (космическое кольцо)">
+  <defs>
+    <linearGradient id="gradSpin" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7f00ff"/>
+      <stop offset="50%" stop-color="#ff00a8"/>
+      <stop offset="100%" stop-color="#00ddeb"/>
+      <animateTransform attributeName="gradientTransform" type="rotate" from="0 0.5 0.5" to="360 0.5 0.5" dur="3s" repeatCount="indefinite"/>
+    </linearGradient>
+    <linearGradient id="gradText" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e4f1ff"/>
+      <stop offset="100%" stop-color="#a6b1ff"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <style>
+    svg{ background: transparent; display:block; }
+    .ring { fill:none; stroke:url(#gradSpin); stroke-width:6; stroke-linecap:round;
+            stroke-dasharray:220; stroke-dashoffset:60; transform-origin:110px 110px;
+            animation: spin 1.25s linear infinite; filter:url(#glow); }
+    .logo { font:800 28px/1.1 'Segoe UI', Roboto, Arial, sans-serif; fill:url(#gradText);
+            text-anchor:middle; dominant-baseline:middle; letter-spacing:.5px; }
+    .star{ fill:#fff; opacity:.6; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes twinkle { 0%,100%{opacity:.1;} 50%{opacity:.8;} }
+    @media (prefers-reduced-motion: reduce) { .ring { animation:none; } .tw{ animation:none; } }
+  </style>
+  <g>
+    <circle class="star tw" cx="30" cy="40" r="0.9" style="animation:twinkle 2.4s ease-in-out infinite .2s"/>
+    <circle class="star tw" cx="180" cy="60" r="1.1" style="animation:twinkle 2.1s ease-in-out infinite .6s"/>
+    <circle class="star tw" cx="60" cy="170" r="0.8" style="animation:twinkle 2.7s ease-in-out infinite .9s"/>
+    <circle class="star tw" cx="200" cy="150" r="1.0" style="animation:twinkle 2.9s ease-in-out infinite .3s"/>
+    <circle class="star tw" cx="110" cy="15" r="0.8" style="animation:twinkle 2.3s ease-in-out infinite .4s"/>
+  </g>
+  <g>
+    <circle class="ring" cx="110" cy="110" r="82" />
+    <text class="logo" x="110" y="110">EtoZheFarm</text>
+  </g>
+</svg>

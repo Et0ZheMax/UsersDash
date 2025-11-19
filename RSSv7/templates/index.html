@@ -1,0 +1,2426 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>F99</title>
+  <!-- Подключение иконки через Flask (предполагается, что сервер настроен) -->
+  <link rel="icon" href="{{ url_for('static', filename='99.png') }}" type="image/png">
+
+  <!-- Подключение внешних библиотек -->
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+
+  <style>
+    /* Общие стили */
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #F5F5F7;
+      color: #1D1D1F;
+      transition: background 0.3s, color 0.3s;
+    }
+    body.dark {
+      background: #121212;
+      color: #eee;
+    }
+    .dark .total-item,
+    .dark .checkboxContainer,
+    .dark .infoBox,
+    .dark table,
+    .dark #payAlertBox,
+    .dark #watchBox,
+    .dark .serverMiniBox {
+      background: #2a2a2a;
+      color: #eee;
+    }
+    .dark th {
+      color: #ccc;
+    }
+    .dark .header {
+      background: #333;
+    }
+    .dark .btn {
+      background-color: #444 !important;
+      color: #fff !important;
+    }
+    .dark .btn:hover {
+      background-color: #666 !important;
+    }
+
+    /* PAY-ALERT widget */
+    #payAlertBox {
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0,0,0,.1);
+      border-radius: 6px;
+      padding: 8px;
+      width: 235px;
+      max-width: 250px;
+      flex: 0 0 auto;
+      /* align-self: flex-start; */
+    }
+    #payAlertBox h4 {
+      margin: 0 0 5px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    #payAlertList {
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .payRow {
+      display: flex;
+      align-items: center;
+      margin: 2px 0;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .payRow > span {
+      flex: 1 1 auto;
+    }
+    .payRow button {
+      width: 26px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      cursor: pointer;
+      border: none;
+      background: none;
+      margin-left: 6px;
+    }
+    .payRow.red {
+      background: #ffdddd;
+    }
+    .payRow.yellow {
+      background: #fff8cc;
+    }
+    .payRow.orange {
+      background: #ffe9d6;
+    }
+    .payRow button:hover {
+      opacity: 0.8;
+    }
+
+    /* Анимация для toast-сообщений */
+    @keyframes fadeInOut {
+      0% { opacity: 0; transform: translate(-50%, 20px); }
+      15% { opacity: 1; transform: translate(-50%, 0); }
+      85% { opacity: 1; transform: translate(-50%, 0); }
+      100% { opacity: 0; transform: translate(-50%, 20px); }
+    }
+
+    /* Стили для кнопок со спиннером */
+    .btn {
+      display: inline-block;
+      padding: 6px 10px;
+      margin-top: 5px;
+      font-size: 14px;
+      color: #fff;
+      background-color: #0070c9;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      text-decoration: none;
+      text-align: center;
+      position: relative;
+    }
+    .btn:hover {
+      background-color: #005999;
+    }
+    .btn.loading {
+      pointer-events: none;
+      opacity: 0.6;
+    }
+    .btn.loading:after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 14px;
+      height: 14px;
+      border: 2px solid transparent;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Заголовок */
+    .header {
+      text-align: center;
+      padding: 8px;
+      background: #FFFFFF;
+      box-shadow: 0 0 5px rgba(0,0,0,0.08);
+      margin-bottom: 10px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    /* Контейнер */
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 0 10px 20px;
+    }
+
+    /* Карточки ресурсов */
+    .totals {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .total-item {
+      flex: 1 1 80px;
+      background: #FFFFFF;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      padding: 8px;
+      text-align: center;
+    }
+    .total-item span.value {
+      display: block;
+      font-size: 1.1em;
+      font-weight: 600;
+      color: #0070c9;
+      margin-top: 5px;
+    }
+
+    /* Двухколоночный ряд фильтров */
+    .filtersRow {
+      display: flex;
+      gap: 10px;
+    }
+    .filtersRow .checkboxContainer,
+    .filtersRow .infoWatchRow {
+      flex: 1 1 0;
+    }
+
+    /* Контейнер чекбоксов */
+    .checkboxContainer {
+      width: 200px;
+      max-height: 260px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 8px;
+      background: #FFFFFF;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    }
+    #searchRow {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+    #accSearch {
+      flex: 1;
+      font-size: 12px;
+      padding: 3px;
+      width: 100px;
+    }
+
+    /* Информационный блок */
+    .infoBox {
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 12px;
+    }
+    .infoLine {
+      margin-bottom: 3px;
+      font-size: 14px;
+    }
+
+    /* Лог процессов */
+    .processLog {
+      background: #f2f2f2;
+      padding: 6px;
+      border-radius: 6px;
+      max-height: 120px;
+      overflow-y: auto;
+      font-size: 13px;
+      white-space: pre-wrap;
+      margin-top: 8px;
+    }
+
+    /* Таблица ресурсов */
+    .tableWrap {
+      overflow-x: auto;
+      width: 100%;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    thead {
+      background: #F7F7F9;
+    }
+    th, td {
+      padding: 8px;
+      border-bottom: 1px solid #ECECEC;
+      font-size: 13px;
+    }
+    th {
+      text-align: left;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+    }
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+    tbody tr:hover {
+      background-color: #EEF2FF;
+    }
+    .gainValue {
+      font-size: 11px;
+      color: #888;
+      margin-left: 3px;
+    }
+
+    /* WATCH widget (Наблюдение) */
+    /* ===== WATCH widget (Наблюдение) ===== */
+    #watchBox {
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 10px;            /* не мешает схлопываться */
+    }
+    #watchBox h4 {
+      margin: 0 0 6px;            /* как у других виджетов */
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* важное: растягиваем содержимое по ширине карточки (как у payAlertBox) */
+    #watchBox.cardEqual {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;        /* иначе строки будут «пилюлей» */
+    }
+
+    /* список заполняет карточку и скроллится при переполнении */
+    #watchList {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-y: auto;
+      width: 100%;
+    }
+
+    /* строка уведомления — как .payRow */
+    .watchRow {
+      display: block;              /* либо flex, если появятся кнопки */
+      width: 100%;
+      padding: 6px 8px;
+      border-radius: 6px;
+      box-sizing: border-box;
+      font-size: 13px;
+      margin: 2px 0;               /* небольшой зазор между строками */
+    }
+
+    /* цвета состояний */
+    .watchRow.red    { background: #ffd6d6; }
+    .watchRow.yellow { background: #fff8cc; }
+    .watchRow.blue   { background: #dbe8ff; }
+
+
+    /* Спиннер */
+    .spinner {
+      position: fixed;
+      top: 15px;
+      right: 15px;
+      width: 40px;
+      height: 40px;
+      border: 4px solid #ccc;
+      border-top-color: #0070c9;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      z-index: 9999;
+    }
+    .hidden {
+      display: none;
+    }
+
+    /* Модальные окна */
+    .modalOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.35);
+      z-index: 9999;
+      display: none;
+    }
+    .modalBox {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: #fff;
+      padding: 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.3);
+      border-radius: 6px;
+      width: 900px;
+      max-width: 95vw;
+      max-height: 80vh;
+      overflow: auto;
+      z-index: 10000;
+      display: none;
+    }
+    @media (max-width: 1000px) {
+      .modalBox {
+        width: 95vw;
+      }
+    }
+
+    /* Выделение строк с недостающими данными */
+    .missingHighlight {
+      background: #e0e0e0 !important;
+    }
+
+    /* Mini box для серверов */
+    .serverMiniBox {
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      border-radius: 6px;
+      padding: 8px;
+      min-width: 10px;
+    }
+    .serverMiniBox h4 {
+      margin: 0 0 5px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .serverLine {
+      margin: 3px 0;
+      font-size: 13px;
+    }
+    .serverLine a {
+      color: #0070c9;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .serverLine a:hover {
+      text-decoration: underline;
+    }
+    .okTag {
+      color: green;
+      margin-left: 4px;
+    }
+    .failTag {
+      color: red;
+      margin-left: 4px;
+    }
+
+    /* Двухколоночный ряд */
+    .miniRow {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .miniRow > * {
+      flex: 1 1 260px;
+      max-width: calc(50% - 10px);
+      min-width: 0;
+      box-sizing: border-box;
+    }
+
+    /* Мобильная верстка */
+    @media (max-width: 640px) {
+      .container {
+        padding: 0 6px;
+      }
+      .btn {
+        font-size: 12px;
+        padding: 5px 8px;
+      }
+      .totals {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+      }
+      .total-item {
+        min-width: 110px;
+        flex: 0 0 auto;
+      }
+      .tableWrap {
+        overflow-x: auto;
+      }
+      table {
+        min-width: 520px;
+      }
+      th, td {
+        padding: 4px 6px;
+        font-size: 12px;
+      }
+      .rightPane {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .serverMiniBox,
+      #payAlertBox,
+      .infoBox,
+      #watchBox {
+        flex: 1 1 calc(50% - 10px);
+        box-sizing: border-box;
+        min-height: 1px;
+      }
+      .miniRow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .miniRow > * {
+        flex: 1 1 260px;
+        max-width: calc(50% - 10px);
+        min-width: 0;
+      }
+      .checkboxContainer {
+        max-height: 35vh;
+        font-size: 12px;
+        display: flex;
+        flex-direction: column;
+      }
+      #searchRow {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #fff;
+        padding-bottom: 6px;
+      }
+      #checkboxesList {
+        overflow-y: auto;
+        flex: 1 1 auto;
+      }
+      .checkboxContainer input {
+        transform: scale(.9);
+      }
+    }
+
+    /* == выравниваем ширину всех виджетов в .miniRow и .filtersRow == */
+
+    /* 1) Серверы + Оплата */
+    .miniRow > * {
+      /* flex: [grow] [shrink] [basis] */
+      flex: 1 1 0;
+    }
+
+    /* 2) Поиск/чекбоксы + Наблюдение/Время */
+    .filtersRow > .checkboxContainer,
+    .filtersRow > .infoWatchRow {
+      flex: 1 1 0;
+    }
+
+    /* 3) Внутри блока infoWatchRow (он у вас содержит #watchBox и .infoBox) тоже поровну */
+    .infoWatchRow > #watchBox,
+    .infoWatchRow > .infoBox {
+      flex: 1 1 0;
+    }
+
+    /* == на мобильных (≤640px) оставляем только перестройку в колонку == */
+    @media (max-width: 640px) {
+      /* все фильтры в один столбец */
+      .filtersRow {
+        flex-wrap: nowrap;
+      }
+      /* наблюдение над временем */
+      .infoWatchRow {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      /* сам контейнер – грид 2×3 */
+      .rightPane{
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        grid-template-areas:
+          "pay watch"
+          "acc servers"
+          "acc time";
+        gap: 10px;
+        align-items: start;
+      }
+
+      /* «разворачиваем» обёртку, чтобы её дети стали элементами грида .rightPane */
+      .cardsGrid{ display: contents; }
+
+      /* привязки к областям */
+      #payAlertBox{ grid-area: pay; width:auto; max-width:none; }
+      #watchBox{ grid-area: watch; }
+      .checkboxContainer{
+        grid-area: acc;
+        min-height: 100px;  /* подгони при желании */
+        max-height: 280px;
+        display: flex; flex-direction: column;
+      }
+      .serverMiniBox{ grid-area: servers; }
+      .infoBox{ grid-area: time; }
+
+      /* шапка поиска закреплена сверху в левом столбце */
+      #searchRow{ position: sticky; top:0; z-index:1; background:#fff; padding-bottom:6px; }
+      #checkboxesList{ flex:1 1 auto; overflow:auto; min-height:0; }
+
+      /* немного компактнее элементы на мобиле */
+      .btn{ font-size:12px; padding:5px 8px; }
+      table{ min-width:520px; }
+      th,td{ padding:4px 6px; font-size:12px; }
+    }
+
+  /* Очень узкие экраны: всё в одну колонку (fallback) */
+  @media (max-width: 380px) {
+    .rightPane{
+      grid-template-columns: 1fr;
+      grid-template-areas:
+        "pay"
+        "watch"
+        "acc"
+        "servers"
+        "time";
+    }
+  }
+
+
+    /* ===== Desktop (≥641px) ===== */
+ @media (min-width: 641px) {
+      /* внутри твоего @media (min-width: 641px) */
+        :root{
+          --left-w: 230px;
+          --card-h: 140px;
+          --card-w: 250px;
+
+          /* Разделяем отступы */
+          --gap-outer: 30px;   /* между левой колонкой и правой сеткой */
+          --gap-x: 12px;       /* горизонтальные отступы между карточками справа */
+          --gap-y: 10px;       /* вертикальные отступы между карточками справа */
+
+          /* Остальное как у тебя */
+          --left-h: 279px;
+          --widgets-gap-below: 14px;
+        }
+
+        /* Отступ между "аккаунты+поиск" и правыми виджетами */
+        .rightPane{
+          display: grid;
+          grid-template-columns: var(--left-w) auto;
+          column-gap: var(--gap-outer);  /* ← регулируй это значение */
+          row-gap: var(--gap-outer);
+          align-items: start;
+        }
+
+        /* Отступы между карточками справа */
+        .cardsGrid{
+          display: grid;
+          grid-template-columns: var(--card-w) var(--card-w);
+          column-gap: var(--gap-x);      /* ← горизонтальные */
+          row-gap: var(--gap-y);         /* ← вертикальные */
+        }
+
+        /* Левый столбец вытянут по высоте (как раньше) */
+        .checkboxContainer{
+          width: 100%;
+          height: var(--left-h);
+          max-height: none;
+          display: flex;
+          flex-direction: column;
+        }
+        #checkboxesList{ flex: 1 1 auto; overflow: auto; min-height: 0; }
+
+        /* Отступ перед таблицей */
+        .tableWrap{ margin-top: var(--widgets-gap-below); }
+  }
+
+    /* == СЕРВЕРЫ: статус справа от кнопки == */
+.serverMiniBox.cardEqual{
+  /* вместо column-flex используем грид с нижней строкой под действия */
+  display: grid;
+  grid-template-rows: auto 1fr auto;   /* заголовок+список | заполнение | кнопки/статус */
+  grid-template-columns: auto 1fr;     /* [кнопка] [статус] внизу */
+  row-gap: 6px;
+  column-gap: 8px;
+}
+.serverMiniBox > #serverMiniBox{
+  grid-row: 1 / span 2;   /* контент занимает верх и середину */
+  grid-column: 1 / span 2;
+  min-height: 0;
+  overflow: auto;
+}
+.serverMiniBox .btn{
+  grid-row: 3; grid-column: 1;
+  margin-top: 0;                 /* перекрываем прежнее margin-top:auto */
+  align-self: center; justify-self: start;
+}
+#serverUpdateMsg{
+  grid-row: 3; grid-column: 2;   /* статус справа от кнопки */
+  align-self: center; justify-self: start;
+  white-space: nowrap;
+  margin-left: 0;                 /* можно убрать inline-стиль margin-left */
+  font-size: 12px;
+}
+
+/* == ВРЕМЯ: заголовок плотнее сверху и кнопки в одну строку == */
+.infoBox.cardEqual{
+  display: grid;
+  grid-template-columns: auto auto;    /* две колонки под кнопки */
+  grid-template-rows: auto auto 1fr auto; /* h4 | инфо | заполнение | кнопки */
+  row-gap: 6px;
+  column-gap: 8px;
+}
+.infoBox h4{
+  grid-column: 1 / span 2;
+  margin: 0;                            /* как у остальных виджетов */
+}
+.infoBox .infoLine{
+  grid-column: 1 / span 2;              /* обе строки инфо растянем по ширине */
+}
+.infoBox .btn:nth-of-type(1){
+  grid-row: 4; grid-column: 1;          /* "Обновить" слева */
+  margin-top: 0; align-self: center; justify-self: start;
+}
+.infoBox .btn:nth-of-type(2){
+  grid-row: 4; grid-column: 2;          /* "Перечитать логи" справа */
+  margin-top: 0; align-self: center; justify-self: start;
+}
+
+/* ===== Детали аккаунта под строкой таблицы ===== */
+/* ===== Детали аккаунта под строкой таблицы ===== */
+.accRow:hover { background: #f7f7fb; }
+.accDetails { background: #fff; border-left: 3px solid #e5e5ea; }
+.accDetails > td { padding: 16px; }
+
+.accPanel { display:flex; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+.accPanel .seg { background:#f2f2f7; border-radius:10px; padding:4px; display:inline-flex; gap:4px; }
+.accPanel .seg button { border:none; background:transparent; padding:6px 10px; border-radius:8px; cursor:pointer; }
+.accPanel .seg button.active { background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+
+/* === было: .accChartBox { ... } === */
+/* СТАЛО: */
+.accChartBox {
+  position: relative;              /* нужно для абсолютного tooltip */
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid #e5e5ea;
+  border-radius: 12px;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+/* Tooltip поверх графика */
+.chartTooltip {
+  position: absolute;
+  pointer-events: none;
+  background: rgba(255,255,255,.96);
+  border: 1px solid #e5e5ea;
+  box-shadow: 0 2px 10px rgba(0,0,0,.06);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.35;
+  z-index: 5;
+  display: none;
+  max-width: 280px;
+  white-space: nowrap;
+}
+.chartTooltip .tHead { font-weight: 600; margin-bottom: 6px; }
+.chartTooltip .row { display:flex; align-items:center; gap:8px; }
+.chartTooltip .sw { width:10px; height:10px; border-radius: 2px; }
+
+.accMeta { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px; }
+.accMeta .kv { background:#f9f9fb; border-radius:10px; padding:8px 10px; font-size:13px; }
+
+.total-item { display:block; text-indent: 1.5em; }
+
+  </style>
+  <script>
+    // Статичный список серверов
+    const SERVERS = [
+      { name: "208", url: "https://hotly-large-coral.cloudpub.ru/" },
+      { name: "F99", url: "https://tastelessly-quickened-chub.cloudpub.ru/" },
+      { name: "R9", url: "https://creakily-big-spaniel.cloudpub.ru/" },
+      { name: "RSS", url: "https://fiendishly-awake-stickleback.cloudpub.ru/" }
+    ];
+
+    // Глобальные переменные
+    let allAccounts = [];
+    let checkboxStates = {};
+    let allChecked = true;
+    let sortAsc = true;
+    let lastUpdate = "";
+    let darkMode = false;
+
+    // Инициализация при загрузке страницы
+    document.addEventListener("DOMContentLoaded", () => {
+      // Расширяем Telegram WebApp, если доступно
+      if (window.Telegram && Telegram.WebApp) {
+        Telegram.WebApp.expand();
+      }
+
+      // Восстановление тёмной темы из localStorage
+      try {
+        const savedTheme = localStorage.getItem('darkMode');
+        if (savedTheme === '1') {
+          document.body.classList.add('dark');
+          darkMode = true;
+        }
+      } catch (e) {
+        console.warn('Theme restore failed:', e);
+      }
+
+      // Начальная загрузка данных
+      loadPayAlerts();
+      loadWatchAlerts();
+      renderServerSkeleton();
+      doRefresh();
+      loadResources();
+      loadCycleInfo();
+      setInterval(updateLocalTime, 1000);
+
+      // Подключение клика для сортировки по столбцу "За сегодня"
+      // Навешиваем один раз
+      (function attachTodaySortOnce(){
+        const heads = document.querySelectorAll('thead th');
+        for(const th of heads){
+          if(th.dataset.todaySorterAttached) continue;
+          if(th.innerText && th.innerText.indexOf('За сегодня') !== -1){
+            th.addEventListener('click', toggleSortTodayGain, {once:false});
+            th.dataset.todaySorterAttached = '1';
+            break;
+          }
+        }
+      })();
+
+  
+      // Обновление статуса серверов
+      updateServerStats();
+
+      // Закрытие модалок по клику в оверлей и по ESC
+      ['paths','meta'].forEach(prefix => {
+        const ov = document.getElementById(prefix + 'Overlay');
+        if (ov) {
+          ov.addEventListener('click', () => {
+            if (prefix === 'paths') {
+              if (typeof closePaths === 'function') closePaths();
+            } else {
+              if (typeof closeMeta === 'function') closeMeta();
+            }
+          });
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (typeof closePaths === 'function') closePaths();
+          if (typeof closeMeta === 'function')  closeMeta();
+        }
+      });
+
+
+
+    });
+
+    // Показ/скрытие спиннера
+    function showSpinner() {
+      document.getElementById("spinner").classList.remove("hidden");
+    }
+    function hideSpinner() {
+      document.getElementById("spinner").classList.add("hidden");
+    }
+
+    // Переключение тёмной темы + сохранение в localStorage
+    function toggleDark() {
+      darkMode = !darkMode;
+      document.body.classList.toggle('dark', darkMode);
+      try {
+        localStorage.setItem('darkMode', darkMode ? '1' : '0');
+      } catch(e) {
+        console.warn('Theme save failed:', e);
+      }
+    }
+
+
+
+    // Показ toast-сообщений
+    function showToast(message, isError = false) {
+      const toast = document.createElement('div');
+      toast.textContent = message;
+      toast.style = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 12px 24px;
+        background: ${isError ? '#ff4444' : '#4CAF50'};
+        color: white;
+        border-radius: 25px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        z-index: 1000;
+        animation: fadeInOut 2.5s;
+      `;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 2500);
+    }
+
+    // Загрузка ресурсов
+    async function loadResources() {
+      showSpinner();
+      try {
+        const resp = await fetch("/api/resources");
+        if (!resp.ok) throw new Error("Ошибка загрузки ресурсов");
+        const data = await resp.json();
+        allAccounts = data.accounts || [];
+
+        // Обновление суммарных ресурсов
+        document.getElementById("total-food").textContent = data.totals.food;
+        document.getElementById("total-wood").textContent = data.totals.wood;
+        document.getElementById("total-stone").textContent = data.totals.stone;
+        document.getElementById("total-gold").textContent = data.totals.gold;
+        document.getElementById("accountsCount").textContent = data.account_count;
+
+        // Инициализация чекбоксов
+        allAccounts.forEach(acc => {
+          if (!(acc.id in checkboxStates)) {
+            checkboxStates[acc.id] = true;
+          }
+        });
+        renderCheckboxes();
+        updateTableAndSum();
+        await updateIncomeHeader();
+      } catch (e) {
+        console.error("Ошибка loadResources:", e);
+        showToast("Ошибка загрузки ресурсов", true);
+      } finally {
+        hideSpinner();
+      }
+    }
+
+    // Показ модального окна путей
+    async function showPaths() {
+      try {
+        const resp = await fetch("/api/paths");
+        if (!resp.ok) throw new Error("Ошибка загрузки путей");
+        const paths = await resp.json();
+
+        const form = document.getElementById("pathsForm");
+        form.innerHTML = "";
+
+        Object.entries(paths).forEach(([key, val]) => {
+          const row = document.createElement("div");
+          row.style.marginBottom = "8px";
+
+          const label = document.createElement("label");
+          label.textContent = key;
+          label.style.display = "block";
+          label.style.fontWeight = "600";
+          row.appendChild(label);
+
+          const inp = document.createElement("input");
+          inp.type = "text";
+          inp.name = key;
+          inp.value = val;
+          inp.style.width = "100%";
+          row.appendChild(inp);
+
+          form.appendChild(row);
+        });
+
+        document.getElementById("pathsOverlay").style.display = "block";
+        document.getElementById("pathsModal").style.display = "block";
+      } catch (e) {
+        showToast("Ошибка загрузки путей", true);
+      }
+    }
+
+    // Закрытие модального окна путей
+    function closePaths() {
+      document.getElementById("pathsOverlay").style.display = "none";
+      document.getElementById("pathsModal").style.display = "none";
+    }
+
+    // Сохранение путей
+    async function savePaths() {
+      const form = document.getElementById("pathsForm");
+      const data = {};
+      new FormData(form).forEach((v, k) => data[k] = v);
+
+      try {
+        const resp = await fetch("/api/paths", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data)
+        });
+        const result = await resp.json();
+        if (result.status === "ok") {
+          showToast("Пути сохранены!");
+          closePaths();
+        } else {
+          throw new Error("Ошибка сохранения путей");
+        }
+      } catch (e) {
+        showToast("Ошибка сохранения путей", true);
+      }
+    }
+
+    // Показ модального окна аккаунтов
+    async function showMeta() {
+      const metaBtn = document.getElementById('metaBtn');
+      metaBtn.classList.add('loading');
+
+      try {
+        const ids = allAccounts
+          .filter(a => passSearch(a, getSearchValue()) && checkboxStates[a.id])
+          .map(a => a.id);
+        const qs = ids.length ? ('?ids=' + ids.join(',')) : '';
+
+        const data = await fetch('/api/accounts_meta_full' + qs).then(r => {
+          if (!r.ok) throw new Error("Ошибка загрузки данных аккаунтов");
+          return r.json();
+        });
+
+        const tbl = document.getElementById('metaTable');
+        tbl.innerHTML = `
+          <tr>
+            <th style="width:28px"></th>
+            <th>Имя</th><th>E‑mail</th><th>Пароль</th>
+            <th>IGG</th><th>Оплата&nbsp;(дд.мм.гг)</th><th>Тариф&nbsp;₽</th>
+          </tr>
+        `;
+
+        data.forEach(r => {
+          tbl.innerHTML += `
+            <tr data-id="${r.id}">
+              <td><input type="checkbox" class="selBox" value="${r.id}"></td>
+              <td>${r.name}</td>
+              <td contenteditable>${r.email || ''}</td>
+              <td contenteditable>${r.passwd || ''}</td>
+              <td contenteditable>${r.igg || ''}</td>
+              <td contenteditable>${r.pay_until 
+                ? r.pay_until.split('-').reverse().join('.') : ''}</td>
+              <td contenteditable>${r.tariff_rub || 0}</td>
+            </tr>
+          `;
+        });
+
+        await refreshExpense();
+        document.getElementById('metaOverlay').style.display = 'block';
+        document.getElementById('metaModal').style.display = 'block';
+      } catch (e) {
+        showToast(`Ошибка загрузки аккаунтов: ${e.message}`, true);
+      } finally {
+        metaBtn.classList.remove('loading');
+      }
+    }
+
+    // Закрытие модального окна аккаунтов
+    function closeMeta() {
+      document.getElementById('metaOverlay').style.display = 'none';
+      document.getElementById('metaModal').style.display = 'none';
+      document.querySelectorAll('.selBox').forEach(cb => cb.checked = false);
+      document.getElementById('selAllBtn').textContent = 'Выбрать все';
+    }
+
+    // Получение выбранных строк
+    function getSelectedRows() {
+      return [...document.querySelectorAll('.selBox:checked')]
+        .map(cb => cb.closest('tr'));
+    }
+
+    // Массовая установка тарифов и дат
+    function applyMass() {
+      const rows = getSelectedRows();
+      if (!rows.length) {
+        showToast('Нет выбранных', true);
+        return;
+      }
+      const tariff = document.getElementById('massTariff').value.trim();
+      const date = document.getElementById('massDate').value.trim();
+
+      rows.forEach(r => {
+        if (tariff) r.children[6].textContent = tariff;
+        if (date) r.children[5].textContent = date;
+      });
+    }
+
+    // Переключение выбора всех строк
+    function toggleSelectAll() {
+      const boxes = document.querySelectorAll('#metaTable .selBox');
+      if (!boxes.length) return;
+
+      const allChecked = [...boxes].every(cb => cb.checked);
+      boxes.forEach(cb => cb.checked = !allChecked);
+      document.getElementById('selAllBtn').textContent =
+        allChecked ? 'Выбрать все' : 'Снять все';
+    }
+
+    // Добавление месяцев к дате
+    function addMonths(src, n) {
+      const d = new Date(src.getFullYear(), src.getMonth() + n, src.getDate());
+      if (d.getDate() !== src.getDate()) d.setDate(0);
+      return d;
+    }
+
+    // Продление оплаты для выбранных строк
+    function paidNext() {
+      const rows = getSelectedRows();
+      if (!rows.length) {
+        showToast('Нет выбранных', true);
+        return;
+      }
+      const today = new Date();
+      const next = addMonths(today, 1);
+      const fmt = d => `${String(d.getDate()).padStart(2,'0')}.` +
+                      `${String(d.getMonth()+1).padStart(2,'0')}.` +
+                      `${String(d.getFullYear()).slice(-2)}`;
+
+      rows.forEach(r => {
+        r.children[5].textContent = fmt(next);
+      });
+    }
+
+    // Нормализация формата даты
+    function normDate(str) {
+      const m = str.trim().match(/^(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{2,4})$/);
+      if (!m) return str;
+      let [, d, M, y] = m;
+      if (y.length === 2) y = (y < '50' ? '20' + y : '19' + y);
+      return `${y.padStart(4,'0')}-${M.padStart(2,'0')}-${d.padStart(2,'0')}`;
+    }
+
+    // Сохранение изменений аккаунтов
+    // Сохранение изменений аккаунтов
+    async function saveMeta(btn) {
+      // Опционально блокируем кнопку "Сохранить" на время операции
+      if (btn) {
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.dataset.prev = prev;
+        btn.textContent = '⏳';
+      }
+
+      const rows = [...document.querySelectorAll('#metaTable tr')]
+        .slice(1)
+        .filter(r => r.dataset.id && r.dataset.id.trim());
+
+      const payload = rows.map(r => {
+        const c = r.children;
+        return {
+          id: r.dataset.id,
+          email: c[2].textContent.trim(),
+          passwd: c[3].textContent.trim(),
+          igg: c[4].textContent.trim(),
+          pay_until: normDate(c[5].textContent),
+          tariff_rub: +c[6].textContent.trim() || 0
+        };
+      });
+
+      try {
+        // 1) Сохраняем в БД (дата/тариф + дублируем email/пароль/IGG)
+        const r1 = await fetch('/api/accounts_meta', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!r1.ok) {
+          const t = await r1.text().catch(() => '');
+          throw new Error(t || 'Ошибка сохранения в БД');
+        }
+
+        // 2) Сохраняем в профиль (Email/Password/IGG → PROFILE_PATH)
+        const r2 = await fetch('/api/accounts_profile', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!r2.ok) {
+          if (r2.status === 404) {
+            // Бэкенд возвращает 404, если PROFILE_PATH не найден
+            throw new Error('Файл профиля не найден. Проверьте «Пути» и доступность PROFILE_PATH.');
+          }
+          const t2 = await r2.text().catch(() => '');
+          throw new Error(t2 || 'Ошибка сохранения профиля');
+        }
+        // Backend возвращает {"status":"ok"} — читаем, но не требуем жёстко
+        await r2.json().catch(() => ({}));
+
+        closeMeta();
+        await updateIncomeHeader();
+        showToast('Аккаунты сохранены');
+        await loadPayAlerts();
+      } catch (e) {
+        console.error('saveMeta', e);
+        showToast(e && e.message ? e.message : 'Ошибка сохранения аккаунтов', true);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = btn.dataset.prev || 'Сохранить';
+          delete btn.dataset.prev;
+        }
+      }
+    }
+
+
+    // Добавление расхода
+    async function setExpense() {
+      const v = +document.getElementById('expenseInp').value;
+      if (v < 0 || isNaN(v)) {
+        showToast('Введите число ≥0', true);
+        return;
+      }
+
+      try {
+        await fetch('/api/expenses', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ amount: v })
+        });
+        await refreshExpense();
+        await updateIncomeHeader();
+        document.getElementById('expenseInp').value = '';
+        showToast('Расход добавлен');
+      } catch (e) {
+        showToast('Ошибка добавления расхода', true);
+      }
+    }
+
+    // Обновление текущих расходов
+    async function refreshExpense() {
+      try {
+        const d = await fetch('/api/expenses').then(r => {
+          if (!r.ok) throw new Error("Ошибка загрузки расходов");
+          return r.json();
+        });
+        document.getElementById('expTotal').textContent =
+          d.total.toLocaleString('ru-RU') + ' ₽';
+      } catch (e) {
+        showToast('Ошибка загрузки расходов', true);
+      }
+    }
+
+    // Обновление заголовка доходов
+    async function updateIncomeHeader() {
+      try {
+        const inc = await fetch('/api/income').then(r => {
+          if (!r.ok) throw new Error("Ошибка загрузки доходов");
+          return r.json();
+        });
+        const fmt = v => v.toLocaleString('ru-RU') + ' ₽';
+        document.getElementById('income-total').textContent = `${fmt(inc.total)} \\ ${fmt(inc.left)}`;
+      } catch (e) {
+        showToast('Ошибка загрузки доходов', true);
+      }
+    }
+
+    // Рендеринг серверов (скелетон)
+    function renderServerSkeleton() {
+      const box = document.getElementById("serverMiniBox");
+      box.innerHTML = "<h4>Серверы</h4>";
+      SERVERS.forEach(srv => {
+        box.innerHTML += `
+          <div class="serverLine">
+            <a href="${srv.url}" target="_blank" rel="noopener noreferrer">${srv.name}</a>
+
+            <span class="procCount">…</span>
+          </div>
+        `;
+      });
+    }
+
+    // Обновление статистики серверов
+    async function updateServerStats() {
+      const msgEl = document.getElementById("serverUpdateMsg");
+      msgEl.style.color = "green";
+      msgEl.textContent = "Обновляем...";
+      try {
+        const resp = await fetch("/api/serverStatus");
+        if (!resp.ok) throw new Error("Ошибка загрузки статуса серверов");
+        const data = await resp.json();
+        renderServerMiniBox(data);
+        msgEl.textContent = "OK";
+        setTimeout(() => msgEl.textContent = "", 3000);
+      } catch (e) {
+        console.error("Ошибка serverStatus:", e);
+        msgEl.style.color = "red";
+        msgEl.textContent = "Ошибка!";
+        setTimeout(() => msgEl.textContent = "", 5000);
+      }
+    }
+
+    // Рендеринг блока серверов
+    function renderServerMiniBox(data) {
+      const box = document.getElementById("serverMiniBox");
+      box.innerHTML = "<h4>Серверы</h4>";
+      SERVERS.forEach(srv => {
+        const st = data[srv.name] || {};
+        const pingTag = st.pingOk ? `<span class="okTag">ping</span>` : `<span class="failTag">ping</span>`;
+        const sshTag = st.sshOk != null ? (st.sshOk ? `<span class="okTag">ssh</span>` : `<span class="failTag">ssh</span>`) : "";
+        const wmiTag = st.wmiOk != null ? (st.wmiOk ? `<span class="okTag">wmi</span>` : `<span class="failTag">wmi</span>`) : "";
+        const gnTag = st.gnOk ? `<span class="okTag">gn</span>` : `<span class="failTag">gn</span>`;
+        const dnCnt = (st.dnCount !== undefined ? st.dnCount : (st.dnOk ? 1 : 0));
+        const dnTag = st.dnOk
+          ? `<span class="okTag">dn</span><span class="procCount">(${dnCnt})</span>`
+          : `<span class="failTag">dn</span><span class="procCount">(${dnCnt})</span>`;
+        box.innerHTML += `
+          <div class="serverLine">
+            <a href="${srv.url}" target="_blank" rel="noopener noreferrer">${srv.name}</a>
+            ${pingTag} ${sshTag} ${wmiTag} ${gnTag} ${dnTag}
+          </div>
+        `;
+      });
+    }
+
+    // Получение значения поиска
+    function getSearchValue() {
+      return (document.getElementById("accSearch")?.value || "").toLowerCase().trim();
+    }
+
+    // Фильтрация аккаунтов по поиску
+    function passSearch(acc, searchVal) {
+      if (!searchVal) return true;
+      const nm = acc.nickname.toLowerCase();
+      const inst = String(acc.instanceId || "").toLowerCase();
+      return nm.includes(searchVal) || inst.includes(searchVal);
+    }
+
+    // Рендеринг чекбоксов
+    function renderCheckboxes() {
+      const boxList = document.getElementById("checkboxesList");
+      if (!boxList) return;
+      boxList.innerHTML = "";
+
+      const searchVal = getSearchValue();
+      const filtered = allAccounts.filter(acc => passSearch(acc, searchVal));
+
+      filtered.forEach(acc => {
+        if (!(acc.id in checkboxStates)) {
+          checkboxStates[acc.id] = true;
+        }
+        const label = document.createElement("label");
+        label.style.display = "block";
+
+        const chk = document.createElement("input");
+        chk.type = "checkbox";
+        chk.value = acc.id;
+        chk.checked = checkboxStates[acc.id];
+        chk.addEventListener("change", e => {
+          checkboxStates[acc.id] = e.target.checked;
+          updateTableAndSum();
+        });
+        label.appendChild(chk);
+        label.append(` ${acc.nickname}_${acc.instanceId}`);
+        boxList.appendChild(label);
+      });
+    }
+
+    // Переключение всех чекбоксов
+    function toggleAllChecks() {
+      const searchVal = getSearchValue();
+      const filtered = allAccounts.filter(acc => passSearch(acc, searchVal));
+      if (allChecked) {
+        filtered.forEach(a => checkboxStates[a.id] = false);
+        allChecked = false;
+        document.getElementById("toggleAllBtn").textContent = "Выделить все";
+      } else {
+        filtered.forEach(a => checkboxStates[a.id] = true);
+        allChecked = true;
+        document.getElementById("toggleAllBtn").textContent = "Снять все";
+      }
+      renderCheckboxes();
+      updateTableAndSum();
+    }
+
+    // Обработка ввода в поиске
+    function onSearchInput() {
+      renderCheckboxes();
+      updateTableAndSum();
+    }
+
+    // Обновление таблицы и сумм
+    function updateTableAndSum() {
+      const searchVal = getSearchValue();
+      const tableFiltered = allAccounts.filter(acc => {
+        if (!checkboxStates[acc.id]) return false;
+        return passSearch(acc, searchVal);
+      });
+
+      let sumFood = 0, sumWood = 0, sumStone = 0, sumGold = 0;
+      tableFiltered.forEach(acc => {
+        sumFood += (acc.food_raw || 0);
+        sumWood += (acc.wood_raw || 0);
+        sumStone += (acc.stone_raw || 0);
+        sumGold += (acc.gold_raw || 0);
+      });
+
+      document.getElementById("total-food").textContent = shortenNumber(sumFood);
+      document.getElementById("total-wood").textContent = shortenNumber(sumWood);
+      document.getElementById("total-stone").textContent = shortenNumber(sumStone);
+      document.getElementById("total-gold").textContent = shortenNumber(sumGold);
+      document.getElementById('accountsCount').textContent = tableFiltered.length;
+      
+      const tb = document.getElementById("resourcesBody");
+      tb.innerHTML = "";
+      tableFiltered.forEach(acc => {
+        // создаём строку таблицы и вшиваем id/nick в data-атрибуты
+        const tr = document.createElement("tr");
+        tr.className = "accRow";
+        tr.dataset.acc = acc.id;                                    // ← уже есть в твоих данных
+        tr.dataset.nick = `${acc.nickname}_${acc.instanceId || ""}`.replace(/_$/, "");
+
+        // первая ячейка (ник) — кликабельная
+        const nickHtml = `<span class="nickLink" style="text-decoration:underline; cursor:pointer;">${acc.nickname}_${acc.instanceId || ""}</span>`;
+
+        tr.innerHTML = `
+          <td>${nickHtml}</td>
+          <td>${acc.food_view}</td>
+          <td>${acc.wood_view}</td>
+          <td>${acc.stone_view}</td>
+          <td>${acc.gold_view}</td>
+          <td>${acc.tariff_view}</td>
+          <td>${acc.today_gain}</td>
+          <td>${formatDateTime(acc.last_updated)}</td>
+        `;
+
+        // навешиваем клик именно на НИК (а не на всю строку)
+        tr.querySelector(".nickLink").addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          toggleAccDetails(tr);     // ← см. функцию ниже (п.2)
+        });
+
+        tb.appendChild(tr);
+      });
+
+    }
+
+    // Сортировка по столбцу "За сегодня"
+    function toggleSortTodayGain() {
+      sortAsc = !sortAsc;
+      allAccounts.sort((a, b) => {
+        const aNum = parseShort(a.today_gain);
+        const bNum = parseShort(b.today_gain);
+        return sortAsc ? (aNum - bNum) : (bNum - aNum);
+      });
+      renderCheckboxes();
+      updateTableAndSum();
+    }
+
+    // Обновление данных
+    async function doRefresh() {
+      showSpinner();
+      try {
+        const resp = await fetch("/api/refresh", { method: "POST" });
+        if (!resp.ok) throw new Error("Ошибка обновления данных");
+        const data = await resp.json();
+        lastUpdate = data.last_update;
+        await loadResources();
+        await loadCycleInfo();
+        await updateIncomeHeader();
+        updateLastUpdateDisplay();
+        showToast("Данные обновлены");
+      } catch (e) {
+        console.error("Ошибка doRefresh:", e);
+        showToast("Ошибка обновления данных", true);
+      } finally {
+        hideSpinner();
+      }
+      await loadPayAlerts();
+      await loadWatchAlerts();
+      await loadCycleInfo();
+    }
+
+    // Обновление отображения времени последнего обновления
+    function updateLastUpdateDisplay() {
+      const el = document.getElementById("lastUpdate");
+      if (!lastUpdate) {
+        el.textContent = "—";
+        return;
+      }
+      const d = new Date(lastUpdate);
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const mon = String(d.getMonth() + 1).padStart(2, "0");
+      el.textContent = `${hh}:${mm}:${ss} ${day}.${mon}`;
+    }
+
+    // Обновление локального времени
+    function updateLocalTime() {
+      const now = new Date();
+      const hh = String(now.getHours()).padStart(2, "0");
+      const mm = String(now.getMinutes()).padStart(2, "0");
+      const ss = String(now.getSeconds()).padStart(2, "0");
+      const day = String(now.getDate()).padStart(2, "0");
+      const mon = String(now.getMonth() + 1).padStart(2, "0");
+      document.getElementById("currentTime").textContent = `${hh}:${mm}:${ss} ${day}.${mon}`;
+    }
+
+    // RU-компакт: 1 234 → 1,2к; 284 300 000 → 284,3М; 1 900 000 000 → 1,9Млрд
+    function shortenNumberRu(n) {
+      const v = Math.abs(n);
+      const sign = n < 0 ? "-" : "";
+      const fmt = (num, suf) => sign + (num).toLocaleString("ru-RU", {maximumFractionDigits: 1}).replace(/\s/g,'\u00A0') + suf;
+      if (v >= 1_000_000_000) return fmt(n/1_000_000_000, "Млрд");
+      if (v >= 1_000_000)     return fmt(n/1_000_000, "М");
+      if (v >= 1_000)         return fmt(n/1_000, "к");
+      return (sign + Math.round(v).toLocaleString("ru-RU")).replace(/\s/g,'\u00A0');
+    }
+
+    // Парсинг сокращенных чисел
+    function parseShort(txt) {
+      if (!txt) return 0;
+      const lower = txt.toLowerCase().trim();
+      if (lower.endsWith("k")) return parseInt(lower) * 1000 || 0;
+      if (lower.endsWith("m")) return parseInt(lower) * 1000000 || 0;
+      if (lower.endsWith("b")) return parseFloat(lower) * 1000000000 || 0;
+      return parseInt(lower) || 0;
+    }
+
+    // Форматирование чисел
+    function shortenNumber(num) {
+      if (num < 1000) return String(num);
+      else if (num < 1000000) return Math.floor(num / 1000) + "k";
+      else if (num < 1000000000) return Math.floor(num / 1000000) + "m";
+      else return (num / 1000000000).toFixed(1) + "b";
+    }
+
+    // Форматирование даты и времени
+    function formatDateTime(str) {
+      if (!str) return "—";
+      const d = new Date(str);
+      if (isNaN(d.getTime())) return str;
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      const mon = String(d.getMonth() + 1).padStart(2, "0");
+      return `${hh}:${mm} ${day}.${mon}`;
+    }
+
+    // Остановка процессов
+    async function doStop() {
+      const box = document.getElementById("processLog");
+      box.textContent = "Останавливаем процессы...\n";
+      showSpinner();
+      try {
+        const resp = await fetch("/api/stop", { method: "POST" });
+        if (!resp.ok) throw new Error("Ошибка остановки процессов");
+        const data = await resp.json();
+        if (data.logs) data.logs.forEach(line => box.textContent += line + "\n");
+        showToast("Процессы остановлены");
+      } catch (e) {
+        box.textContent += `Ошибка STOP: ${e}\n`;
+        showToast("Ошибка остановки процессов", true);
+      } finally {
+        hideSpinner();
+      }
+    }
+
+    // Перечитывание логов
+    async function forceRefreshToday() {
+      const btn = document.getElementById('reparseLogsBtn');
+      btn.classList.add('loading');
+      try {
+        const response = await fetch("/api/forceRefreshToday", { method: "POST" });
+        if (!response.ok) throw new Error("Ошибка перечитывания логов");
+        const result = await response.json();
+        if (result.status === 'ok') {
+          await loadResources();
+          await updateServerStats();
+          await loadCycleInfo();
+          await doRefresh();
+          showToast('Логи успешно перечитаны!');
+          document.getElementById('lastUpdate').textContent =
+            new Date(result.timestamp).toLocaleString('ru-RU');
+        } else {
+          throw new Error(result.message);
+        }
+      } catch (error) {
+        showToast(`Ошибка: ${error.message}`, true);
+      } finally {
+        btn.classList.remove('loading');
+      }
+    }
+
+    // Перезапуск
+    async function doReboot() {
+      const box = document.getElementById("processLog");
+      box.textContent = "Перезапуск...\n";
+      showSpinner();
+      try {
+        const resp = await fetch("/api/reboot", { method: "POST" });
+        if (!resp.ok) throw new Error("Ошибка перезапуска");
+        const data = await resp.json();
+        if (data.logs) data.logs.forEach(line => box.textContent += line + "\n");
+        showToast("Перезапуск выполнен");
+      } catch (e) {
+        box.textContent += `Ошибка REBOOT: ${e}\n`;
+        showToast("Ошибка перезапуска", true);
+      } finally {
+        hideSpinner();
+      }
+    }
+
+    // Экспорт таблицы в массив
+    function tableToArray() {
+      const rows = [...document.querySelectorAll('#metaTable tr')].slice(1);
+      return rows.map(r => {
+        const c = r.children;
+        return [
+          c[1].textContent.trim(),
+          c[2].textContent.trim(),
+          c[3].textContent.trim(),
+          c[4].textContent.trim(),
+          c[5].textContent.trim(),
+          c[6].textContent.trim()
+        ];
+      });
+    }
+
+    // Экспорт в CSV
+    function exportCSV() {
+      const arr = tableToArray();
+      const csv = ["Имя;E‑mail;Пароль;IGG;Оплата;Тариф",
+                   ...arr.map(r => r.join(";"))].join("\r\n");
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const link = Object.assign(document.createElement('a'), {
+        href: URL.createObjectURL(blob),
+        download: 'accounts.csv'
+      });
+      link.click();
+      URL.revokeObjectURL(link.href);
+      showToast("Экспорт в CSV завершен");
+    }
+
+    // Экспорт в XLSX
+    function exportXLSX() {
+      const ws = XLSX.utils.aoa_to_sheet([
+        ["Имя", "E‑mail", "Пароль", "IGG", "Оплата", "Тариф"],
+        ...tableToArray()
+      ]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Аккаунты");
+      XLSX.writeFile(wb, "accounts.xlsx");
+      showToast("Экспорт в XLSX завершен");
+    }
+
+    // Импорт файла
+    async function importFile(file) {
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async e => {
+        let arr;
+        if (file.name.endsWith('.csv')) {
+          const txt = e.target.result;
+          arr = txt.trim().split(/\r?\n/)
+            .slice(1)
+            .map(l => l.split(';'));
+        } else {
+          const wb = XLSX.read(e.target.result, { type: 'binary' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          arr = XLSX.utils.sheet_to_json(ws, { header: 1 }).slice(1);
+        }
+
+        applyImport(arr);
+        await saveMeta();
+        showToast('Импорт завершен и сохранен');
+      };
+
+      if (file.name.endsWith('.csv')) reader.readAsText(file, 'utf-8');
+      else reader.readAsBinaryString(file);
+    }
+
+    // Применение импортированных данных
+    function applyImport(arr) {
+      const tblRows = [...document.querySelectorAll('#metaTable tr[data-id]')];
+      const rowByName = Object.fromEntries(
+        tblRows.map(r => [r.children[1].textContent.trim().toLowerCase(), r])
+      );
+
+      arr.forEach(r => {
+        const name = (r[0] || '').trim();
+        if (!name) return;
+        const tr = rowByName[name.toLowerCase()];
+        if (!tr) return;
+        tr.children[2].textContent = r[1] || '';
+        tr.children[3].textContent = r[2] || '';
+        tr.children[4].textContent = r[3] || '';
+        tr.children[5].textContent = r[4] || '';
+        tr.children[6].textContent = r[5] || 0;
+      });
+    }
+
+    // Показ страницы исправления
+    function showFixPage() {
+      window.location.href = "/fix";
+    }
+
+    // Показ страницы логов
+    function showLogsPage() {
+      window.location.href = "/logs";
+    }
+
+    // Показ страницы управления
+    function showManagePage() {
+      window.location.href = "/manage";
+    }
+
+    // Загрузка уведомлений об оплате
+    async function loadPayAlerts() {
+      try {
+        const data = await fetch('/api/payalert').then(r => {
+          if (!r.ok) throw new Error("Ошибка загрузки уведомлений");
+          return r.json();
+        });
+        const list = document.getElementById('payAlertList');
+        if (!list) return;
+        list.innerHTML = '';
+
+        data.forEach(rec => {
+          const row = document.createElement('div');
+          row.className = 'payRow ' +
+            (rec.status === 'overdue' ? 'red' :
+             rec.status === 'soon' ? 'yellow' : 'orange');
+
+          let txt = rec.name;
+          if (rec.pay) txt += ` – ${rec.pay}`;
+          if (rec.tariff) txt += ` – ${rec.tariff}₽`;
+          if (rec.missing.length) txt += ` – N/A ${rec.missing.join(', ')}`;
+
+          let btns = '';
+          if (rec.status === 'missing') {
+            btns += `<button onclick="editAcc('${rec.id}')" title="Заполнить">✏️</button>`;
+            btns += `<button onclick="deactivateAcc('${rec.id}',this)">❌</button>`;
+          } else {
+            btns += `<button onclick="extendPay('${rec.id}',this)">✅</button>`;
+            btns += `<button onclick="deactivateAcc('${rec.id}',this)">❌</button>`;
+          }
+
+          row.innerHTML = `<span>${txt}</span>${btns}`;
+          list.appendChild(row);
+        });
+
+        list.style.maxHeight = (list.children.length > 5 ? '140px' : 'none');
+      } catch (e) {
+        console.error('payalert', e);
+        showToast('Ошибка загрузки уведомлений', true);
+      }
+    }
+
+    // Открытие модального окна с фокусом на строке
+    function editAcc(id) {
+      showMeta();
+      const modal = document.getElementById('metaModal');
+      const wait = setInterval(() => {
+        const chk = document.querySelector(`#metaTable input.selBox[value="${id}"]`);
+        if (!chk) return;
+        clearInterval(wait);
+        const row = chk.closest('tr');
+        row.classList.add('missingHighlight');
+        chk.checked = true;
+        const rowRect = row.getBoundingClientRect();
+        const modalRect = modal.getBoundingClientRect();
+        const offsetTop = rowRect.top - modalRect.top + modal.scrollTop;
+        const targetTop = offsetTop - modal.clientHeight / 2 + rowRect.height / 2;
+        modal.scrollTo({ top: targetTop, behavior: 'smooth' });
+      }, 100);
+      setTimeout(() => clearInterval(wait), 10000);
+    }
+
+    // Продление оплаты
+    async function extendPay(id, btn) {
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = '⏳';
+      try {
+        await fetch(`/api/payalert/extend/${id}`, { method: 'POST' });
+        await loadPayAlerts();
+        showToast('Дата оплаты продлена на 30 дней');
+      } catch (e) {
+        showToast('Ошибка продления', true);
+        btn.disabled = false;
+        btn.textContent = old;
+      }
+    }
+
+    // Деактивация аккаунта
+    async function deactivateAcc(id, btn) {
+      btn.disabled = true;
+      const old = btn.textContent;
+      btn.textContent = '⏳';
+      try {
+        const r = await fetch(`/api/manage/account/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ Active: false })
+        });
+        if (!r.ok) throw new Error(await r.text());
+        await loadPayAlerts();
+        showToast('Аккаунт отключен');
+      } catch (e) {
+        console.error('deactivateAcc', e);
+        showToast('Ошибка отключения', true);
+        btn.disabled = false;
+        btn.textContent = old;
+      }
+    }
+
+    // Загрузка уведомлений наблюдения
+    // ─── loadWatchAlerts (v2) ───────────────────────────────────────
+    async function loadWatchAlerts() {
+      try {
+        const [st, inactive] = await Promise.all([
+          fetch('/api/logstatus').then(r => r.ok ? r.json() : {}),
+          fetch('/api/inactive15').then(r => r.ok ? r.json() : [])
+        ]);
+
+        const list = document.getElementById('watchList');
+        if (!list) return;
+        list.innerHTML = '';
+
+        const added = new Set();
+
+        // helper
+        const pushRow = ({nick, cls, extra = ''}) => {
+          if (added.has(nick)) return;
+          added.add(nick);
+          const row = document.createElement('div');
+          row.className = `watchRow ${cls}`;        // red / yellow / blue
+          row.textContent = `${nick}${extra}`;
+          row.style.cursor = 'pointer';
+          row.onclick = () => window.location.href = '/logs';
+          list.appendChild(row);
+        };
+
+        // 1) данные логов (без изменений)
+        Object.values(st).forEach(rec => {
+          const noMarch = !rec.hasNoMoreMarches;
+          const zero    =  rec.zeroGain;
+          const upd     =  rec.hasUpdateGame;
+          if (noMarch)      pushRow({nick: rec.nickname, cls: 'red'});
+          else if (zero)    pushRow({nick: rec.nickname, cls: 'yellow'});
+          else if (upd)     pushRow({nick: rec.nickname, cls: 'blue'});
+        });
+
+        // 2) «>15 ч без прироста» – жёлтый + ❗ + часы
+        inactive.forEach(obj => {
+          const h = obj.hours.toFixed(1).replace('.0','');  // 17.4 → 17.4, 17.0 → 17
+          pushRow({nick: obj.nickname, cls: 'yellow', extra: ` ❗ ${h}ч`});
+        });
+
+        // max-height
+        list.style.maxHeight = (list.children.length > 5 ? '140px' : 'none');
+      } catch (e) {
+        console.error('watchalert', e);
+        showToast('Ошибка загрузки уведомлений наблюдения', true);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────
+
+    // ===== КРУГ АККАУНТОВ (среднее) =====
+
+    // форматируем секунды (HH:MM:SS)
+    function fmtHMS(sec) {
+      if (sec == null || isNaN(sec)) return "—";
+      const s = Math.max(0, Math.floor(sec));
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const ss = s % 60;
+      return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+    }
+
+    // Загружаем оценку среднего времени круга
+    async function loadCycleInfo() {
+      try {
+        // Окно 24 часа, игнорим интервалы <5 минут, отсекаем >6 часов
+        const resp = await fetch("/api/cycle_time?window_hours=24&min_gap_minutes=5&max_gap_hours=6");
+        if (!resp.ok) throw new Error("Не удалось получить время круга");
+        const data = await resp.json();
+
+        const avgHMS = data.avg_cycle_hms || "—";
+        const basedStr = (data.accounts_used || 0) > 0
+          ? `${data.accounts_used} акка / ${data.intervals_used} цикл, за ${data.window_hours}ч`
+          : "недостаточно данных";
+
+        document.getElementById("cycleAvg").textContent   = avgHMS;
+        document.getElementById("cycleBased").textContent = basedStr;
+      } catch (e) {
+        console.error("loadCycleInfo:", e);
+        document.getElementById("cycleAvg").textContent   = "—";
+        document.getElementById("cycleBased").textContent = "ошибка";
+        showToast("Ошибка расчёта времени круга", true);
+      }
+    }
+
+    // ===== Детали аккаунта =====
+
+    // ====== Детальная карточка аккаунта под строкой ======
+    let openAccRow = null;
+    // Небольшой отрисовщик мульти-линейного графика (SVG)
+    // keys — массив ключей ['food','wood','stone','gold']
+    // Небольшой отрисовщик линейного графика (SVG) для нескольких метрик
+    // svgEl  — сам <svg>
+    // series — массив точек [{ts, food, wood, stone, gold}]
+    // keys   — Set выбранных ключей ("food"|"wood"|"stone"|"gold")
+   
+    // Интерактивный SVG-график: несколько линий + легенда + оси + hover-точки и tooltip
+    function renderMiniChart(svgEl, series, keys) {
+      const w = svgEl.clientWidth || 800;
+      const h = 260;
+      const padL = 46, padR = 14, padT = 18, padB = 28;
+
+      svgEl.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      svgEl.innerHTML = "";
+
+      const COLORS = { food:"#2ca02c", wood:"#1f77b4", stone:"#8c564b", gold:"#d62728" };
+      const LABELS = { food:"Еда", wood:"Дерево", stone:"Камень", gold:"Золото" };
+      const ks = [...keys];
+      if (ks.length === 0) {
+        const t = document.createElementNS("http://www.w3.org/2000/svg","text");
+        t.setAttribute("x", 12); t.setAttribute("y", 22);
+        t.textContent = "Выберите хотя бы одну метрику";
+        svgEl.appendChild(t);
+        return;
+      }
+
+      // Y-диапазон по всем выбранным сериям
+      let yMax = 0;
+      series.forEach(p => ks.forEach(k => { yMax = Math.max(yMax, p[k] || 0); }));
+      const yMin = 0;
+      if (yMax <= 0) yMax = 1;
+
+      const plotW = w - padL - padR;
+      const plotH = h - padT - padB;
+
+      // Сетка Y + подписи
+      for (let i = 0; i <= 4; i++){
+        const y = padT + i * (plotH/4);
+        const ln = document.createElementNS("http://www.w3.org/2000/svg","line");
+        ln.setAttribute("x1", padL); ln.setAttribute("x2", w - padR);
+        ln.setAttribute("y1", y);    ln.setAttribute("y2", y);
+        ln.setAttribute("stroke", "#eee");
+        svgEl.appendChild(ln);
+
+        const val = yMax - (yMax - yMin) * (i/4);
+        const tx = document.createElementNS("http://www.w3.org/2000/svg","text");
+        tx.setAttribute("x", 6);
+        tx.setAttribute("y", y + 4);
+        tx.setAttribute("font-size", "11");
+        tx.textContent = (typeof shortenNumberRu === "function") ? shortenNumberRu(val) : val.toFixed(0);
+        svgEl.appendChild(tx);
+      }
+
+      // Ось X — 6 подписей
+      const n = Math.max(1, series.length);
+      const xStep = plotW / Math.max(1, n - 1);
+      const yScale = val => padT + (plotH * (1 - (val - yMin) / (yMax - yMin)));
+
+      const ticks = Math.min(6, Math.max(2, n)); // до 6 подписей
+      for (let i=0; i<ticks; i++){
+        const idx = Math.round((i*(n-1))/(ticks-1));
+        const x = padL + idx*xStep;
+        const ln = document.createElementNS("http://www.w3.org/2000/svg","line");
+        ln.setAttribute("x1", x); ln.setAttribute("x2", x);
+        ln.setAttribute("y1", padT+plotH); ln.setAttribute("y2", padT+plotH+4);
+        ln.setAttribute("stroke", "#999");
+        svgEl.appendChild(ln);
+
+        const lab = document.createElementNS("http://www.w3.org/2000/svg","text");
+        lab.setAttribute("x", x);
+        lab.setAttribute("y", padT+plotH+18);
+        lab.setAttribute("font-size", "11");
+        lab.setAttribute("text-anchor", "middle");
+        lab.textContent = series[idx]?.ts?.slice(5) || "";
+        svgEl.appendChild(lab);
+      }
+
+      // Легенда
+      const legendX = w - padR - 130, legendY = padT + 4;
+      let ly = legendY;
+      ks.forEach(k=>{
+        const sw = document.createElementNS("http://www.w3.org/2000/svg","line");
+        sw.setAttribute("x1", legendX);
+        sw.setAttribute("x2", legendX+22);
+        sw.setAttribute("y1", ly);
+        sw.setAttribute("y2", ly);
+        sw.setAttribute("stroke", COLORS[k] || "#333");
+        sw.setAttribute("stroke-width","3");
+        svgEl.appendChild(sw);
+
+        const tt = document.createElementNS("http://www.w3.org/2000/svg","text");
+        tt.setAttribute("x", legendX+28);
+        tt.setAttribute("y", ly+4);
+        tt.setAttribute("font-size","12");
+        tt.textContent = LABELS[k];
+        svgEl.appendChild(tt);
+
+        ly += 16;
+      });
+
+      // Линии
+      const xAt = i => padL + i*xStep;
+      ks.forEach(k=>{
+        let d = "";
+        series.forEach((p, i)=>{
+          const x = xAt(i);
+          const y = yScale(p[k] || 0);
+          d += (i === 0 ? `M ${x} ${y}` : ` L ${x} ${y}`);
+        });
+        const path = document.createElementNS("http://www.w3.org/2000/svg","path");
+        path.setAttribute("d", d);
+        path.setAttribute("fill","none");
+        path.setAttribute("stroke", COLORS[k] || "#333");
+        path.setAttribute("stroke-width","2");
+        svgEl.appendChild(path);
+      });
+
+      // === Hover-интерактив: вертикальная линия + маркеры точек ===
+      const gHover = document.createElementNS("http://www.w3.org/2000/svg","g");
+      svgEl.appendChild(gHover);
+
+      // Вертикальный курсор
+      const vline = document.createElementNS("http://www.w3.org/2000/svg","line");
+      vline.setAttribute("y1", padT);
+      vline.setAttribute("y2", padT + plotH);
+      vline.setAttribute("x1", padL);
+      vline.setAttribute("x2", padL);
+      vline.setAttribute("stroke", "#999");
+      vline.setAttribute("stroke-dasharray", "4 3");
+      vline.style.opacity = 0;
+      gHover.appendChild(vline);
+
+      // Маркеры на каждую метрику (1 круг на серию)
+      const circles = {};
+      ks.forEach(k=>{
+        const c = document.createElementNS("http://www.w3.org/2000/svg","circle");
+        c.setAttribute("r", 3.5);
+        c.setAttribute("fill", COLORS[k] || "#333");
+        c.style.opacity = 0;
+        gHover.appendChild(c);
+        circles[k] = c;
+      });
+
+      // Прозрачный overlay для приёма событий
+      const overlay = document.createElementNS("http://www.w3.org/2000/svg","rect");
+      overlay.setAttribute("x", padL);
+      overlay.setAttribute("y", padT);
+      overlay.setAttribute("width", plotW);
+      overlay.setAttribute("height", plotH);
+      overlay.setAttribute("fill", "transparent");
+      overlay.style.cursor = "crosshair";
+      svgEl.appendChild(overlay);
+
+      // Tooltip (HTML) — один на коробку
+      const box = svgEl.closest(".accChartBox");
+      let tip = box.querySelector(".chartTooltip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.className = "chartTooltip";
+        box.appendChild(tip);
+      }
+
+      // быстрые хелперы
+      const fmt = (v) => (typeof shortenNumberRu === "function" ? shortenNumberRu(v) : v.toLocaleString("ru-RU"));
+
+      function showAt(index, clientX, clientY) {
+        if (index < 0 || index >= series.length) return;
+        // позиция вертикальной линии
+        const x = xAt(index);
+        vline.setAttribute("x1", x);
+        vline.setAttribute("x2", x);
+        vline.style.opacity = 1;
+
+        // маркеры и сбор значений
+        const vals = [];
+        ks.forEach(k=>{
+          const y = yScale(series[index][k] || 0);
+          const c = circles[k];
+          c.setAttribute("cx", x);
+          c.setAttribute("cy", y);
+          c.style.opacity = 1;
+          vals.push({k, label: LABELS[k], color: COLORS[k], v: series[index][k] || 0});
+        });
+
+        // Tooltip HTML
+        const tsLabel = series[index].ts;
+        tip.innerHTML = `
+          <div class="tHead">${tsLabel}</div>
+          ${vals.map(v => `
+            <div class="row">
+              <span class="sw" style="background:${v.color}"></span>
+              <span>${v.label}: <strong>${fmt(v.v)}</strong></span>
+            </div>
+          `).join("")}
+        `;
+        tip.style.display = "block";
+
+        // позиционируем рядом с курсором, но внутри блока
+        const rect = box.getBoundingClientRect();
+        const left = Math.min(clientX - rect.left + 12, rect.width - tip.offsetWidth - 8);
+        const top  = Math.max(6, Math.min(clientY - rect.top - tip.offsetHeight - 8, rect.height - tip.offsetHeight - 6));
+        tip.style.left = left + "px";
+        tip.style.top  = top + "px";
+      }
+
+      function hideHover() {
+        vline.style.opacity = 0;
+        Object.values(circles).forEach(c => c.style.opacity = 0);
+        tip.style.display = "none";
+      }
+
+      // Наведение мыши: ищем ближайший индекс по X
+      overlay.addEventListener("mousemove", (ev) => {
+        const rect = svgEl.getBoundingClientRect();
+        const relX = ev.clientX - rect.left;
+        let idx = Math.round((relX - padL) / xStep);
+        idx = Math.max(0, Math.min(series.length - 1, idx));
+        showAt(idx, ev.clientX, ev.clientY);
+      });
+      overlay.addEventListener("mouseleave", hideHover);
+    }
+
+
+
+
+    async function toggleAccDetails(trEl) {
+      // клик по той же строке — свернуть
+      if (openAccRow === trEl) {
+        const next = trEl.nextElementSibling;
+        if (next && next.classList.contains("accDetails")) next.remove();
+        openAccRow = null;
+        return;
+      }
+      // закрыть предыдущую открытую
+      if (openAccRow) {
+        const prev = openAccRow.nextElementSibling;
+        if (prev && prev.classList.contains("accDetails")) prev.remove();
+        openAccRow = null;
+      }
+
+      const accId = trEl.dataset.acc;
+      const nick  = trEl.dataset.nick || accId;
+
+      // создаём вставку-детали сразу под строкой
+      const detailsTr = document.createElement("tr");
+      detailsTr.className = "accDetails";
+      const colSpan = trEl.children.length;
+      detailsTr.innerHTML = `
+        <td colspan="${colSpan}">
+          <div class="accPanel">
+            <strong>${nick}</strong>
+            <div class="seg" id="seg-range">
+              <button data-r="day">Сутки</button>
+              <button data-r="week" class="active">Неделя</button>
+              <button data-r="month">Месяц</button>
+            </div>
+            <div class="seg" id="seg-mode">
+              <button data-m="normal" class="active">Обычный</button>
+              <button data-m="losses">Минусы</button>
+            </div>
+            <div class="seg" id="seg-res" style="gap:8px">
+              <label><input type="checkbox" class="resChk" value="food"  checked> Еда</label>
+              <label><input type="checkbox" class="resChk" value="wood"  checked> Дерево</label>
+              <label><input type="checkbox" class="resChk" value="stone" checked> Камень</label>
+              <label><input type="checkbox" class="resChk" value="gold"  checked> Золото</label>
+            </div>
+          </div>
+
+          <div class="accChartBox">
+            <svg id="accChart" width="100%" height="260"></svg>
+          </div>
+
+          <div class="accMeta" id="accMeta">
+            <div class="kv" id="kvAvail">Доступно данных: —</div>
+            <div class="kv" id="kvDay">Собрано за сутки: —</div>
+            <div class="kv" id="kvWeek">Собрано за неделю: —</div>
+            <div class="kv" id="kvMonth">Собрано за месяц: —</div>
+            <div class="kv" id="kvForecast">Прогноз на месяц: —</div>
+            <div class="kv" id="kvLastNext">Последний вход: — | Следующий: —</div>
+          </div>
+        </td>
+      `;
+      trEl.after(detailsTr);
+      openAccRow = trEl;
+
+      let currentRange = "week";     // стартуем с «Неделя»
+      let currentMode  = "normal";
+      let currentKeys  = new Set(["food","wood","stone","gold"]);  // все линии
+      let lastData     = null;
+
+
+      async function loadAndRender(){
+        const tzoff = new Date().getTimezoneOffset(); // минуты (MSK: -180)
+        const url = `/api/account_stats?acc_id=${encodeURIComponent(accId)}&range=${currentRange}&mode=${currentMode}&tz_offset=${tzoff}`;
+
+        try{
+          const resp = await fetch(url);
+          if(!resp.ok) throw new Error("Не удалось получить данные аккаунта");
+          const data = await resp.json();
+          lastData = data;
+
+          // График (все отмеченные линии)
+          renderMiniChart(detailsTr.querySelector("#accChart"), data.points, currentKeys);
+
+          // Удобное короткое форматирование: 674,4к / 239,9М / 1,9 Млрд
+          function fmtShort(n){
+            if (n == null) return "0";
+            const abs = Math.abs(n);
+            const sign = n < 0 ? "-" : "";
+            if (abs >= 1_000_000_000) return sign + (abs/1_000_000_000).toFixed(1).replace(".", ",") + " Млрд";
+            if (abs >= 1_000_000)     return sign + (abs/1_000_000).toFixed(1).replace(".", ",") + "М";
+            if (abs >= 1_000)         return sign + (abs/1_000).toFixed(1).replace(".", ",") + "к";
+            return sign + abs.toString();
+          }
+          
+          
+          
+          function fmtTotalsLines(t){
+            return [
+              `Еда — ${fmtShort(t.food)}`,
+              `Дерево — ${fmtShort(t.wood)}`,
+              `Камень — ${fmtShort(t.stone)}`,
+              `Золото — ${fmtShort(t.gold)}`
+            ].join('<br>');
+          }
+
+
+          // Плашка «Доступно данных ~N суток»
+          const days = (typeof data.available_days === "number" ? data.available_days : 0);
+          detailsTr.querySelector("#kvAvail").textContent =
+            `Доступно данных: ~${days} сут.` + (data.range === "week" && days < 7 ? " (мало данных для точного прогноза)" : "");
+
+          // Суммы
+          const tDay   = data.totals.day;
+          const tWeek  = data.totals.week;
+          const tMonth = data.totals.month;
+          detailsTr.querySelector("#kvDay").innerHTML   = `Собрано за сутки:<br>${fmtTotalsLines(tDay)}`;
+          detailsTr.querySelector("#kvWeek").innerHTML  = `Собрано за неделю:<br>${fmtTotalsLines(tWeek)}`;
+          detailsTr.querySelector("#kvMonth").innerHTML = `Собрано за месяц:<br>${fmtTotalsLines(tMonth)}`;
+
+
+          // Прогноз
+          if (data.forecast_month && data.forecast_month.ok){
+            detailsTr.querySelector("#kvForecast").innerHTML =
+              `Прогноз на месяц:<br>${fmtTotalsLines(data.forecast_month)}`;
+
+          } else {
+            detailsTr.querySelector("#kvForecast").textContent =
+              "Прогноз на месяц: недостаточно данных (сбор ведётся, прогноз появится через неделю).";
+          }
+
+          // Последний/следующий заход — локальное время пользователя
+          const toLocal = (s) => {
+            if(!s) return "—";
+            const d = new Date(s);
+            return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+          };
+          detailsTr.querySelector("#kvLastNext").innerHTML =
+            `Крайний вход: ${toLocal(data.last_done_iso)}<br>` + `Следующий: ${toLocal(data.next_eta_iso)}`;
+
+        } catch(e){
+          console.error(e);
+          showToast("Не удалось загрузить детали аккаунта", true);
+        }
+      }
+
+      // сегменты-переключатели
+      function bindSeg(segSel, attr, setFn, needReload=true){
+        const seg = detailsTr.querySelector(segSel);
+        seg.addEventListener("click", (ev) => {
+          const btn = ev.target.closest("button");
+          if(!btn) return;
+          seg.querySelectorAll("button").forEach(b=>b.classList.remove("active"));
+          btn.classList.add("active");
+          setFn(btn.getAttribute(attr));
+          if (needReload) loadAndRender();
+          else if (lastData) renderMiniChart(detailsTr.querySelector("#accChart"), lastData.points, currentKeys);
+        });
+      }
+      // Период и режим — как раньше
+      bindSeg("#seg-range", "data-r", v => currentRange = v, true);
+      bindSeg("#seg-mode",  "data-m", v => currentMode  = v, true);
+
+      // Метрики — чекбоксы с классом .resChk и value=...
+      detailsTr.querySelector("#seg-res").addEventListener("change", (ev)=>{
+        if (ev.target && ev.target.classList.contains("resChk")){
+          const k = ev.target.value;
+          if (ev.target.checked) currentKeys.add(k);
+          else currentKeys.delete(k);
+          if (lastData) renderMiniChart(detailsTr.querySelector("#accChart"), lastData.points, currentKeys);
+        }
+      });
+
+
+
+      // первая загрузка
+      loadAndRender();
+    }
+
+
+
+
+    // Обработчик вставки текста
+    document.addEventListener('paste', e => {
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) {
+        e.preventDefault();
+        const txt = e.clipboardData.getData('text/plain');
+        if (document.queryCommandSupported('insertText')) {
+          document.execCommand('insertText', false, txt);
+        } else {
+          el.textContent = txt;
+        }
+      }
+    });
+  </script>
+</head>
+<body>
+  <!-- Спиннер -->
+  <div id="spinner" class="spinner hidden"></div>
+
+  <!-- Кнопка переключения темы -->
+  <div style="text-align:right; margin:6px;">
+    <button class="btn" onclick="toggleDark()">DarkMode</button>
+  </div>
+
+  <!-- Заголовок -->
+  <div class="header">
+    <h1>Статус Ферм F99</h1>
+  </div>
+
+  <div class="container">
+    <!-- Суммарные ресурсы -->
+    <div class="totals">
+      <div class="total-item">Еда<br><span class="value" id="total-food">0</span></div>
+      <div class="total-item">Дерево<br><span class="value" id="total-wood">0</span></div>
+      <div class="total-item">Камень<br><span class="value" id="total-stone">0</span></div>
+      <div class="total-item">Золото<br><span class="value" id="total-gold">0</span></div>
+      <div class="total-item">Доход<br><span class="value" id="income-total">0 ₽</span></div>
+    </div>
+    <p>Аккаунтов: <span id="accountsCount">0</span></p>
+
+    <!-- Основные кнопки -->
+    <div style="margin-bottom:10px;">
+      <button class="btn" onclick="doStop()">STOP</button>
+      <button class="btn" onclick="doReboot()">REBOOT</button>
+      <button class="btn" onclick="showPaths()">Пути</button>
+      <button class="btn" id="metaBtn" onclick="showMeta()">Аккаунты / Данные</button>
+    </div>
+    <div style="margin-bottom:10px;">
+      <button class="btn" onclick="showLogsPage()">Показать логи</button>
+      <button class="btn" onclick="showFixPage()">FIX</button>
+      <button class="btn" onclick="showManagePage()">Manage</button>
+      <div class="processLog" id="processLog"></div>
+    </div>
+
+    <div class="rightPane">
+      <!-- Левая колонка -->
+      <div class="checkboxContainer">
+        <div id="searchRow">
+          <button class="btn" id="toggleAllBtn" onclick="toggleAllChecks()">Снять все</button>
+          <input type="text" id="accSearch" placeholder="Поиск…" oninput="onSearchInput()">
+        </div>
+        <div id="checkboxesList"></div>
+      </div>
+
+      <!-- Правая 2×2 сетка карточек -->
+      <div class="cardsGrid">
+        <div id="payAlertBox" class="cardEqual">
+          <h4>Оплата</h4>
+          <div id="payAlertList"></div>
+        </div>
+
+        <div class="serverMiniBox cardEqual">
+          <div id="serverMiniBox"></div>
+          <button class="btn" onclick="updateServerStats()">Обновить</button>
+          <span id="serverUpdateMsg" style="margin-left:8px;font-size:12px"></span>
+        </div>
+
+        <div id="watchBox" class="cardEqual">
+          <h4>Наблюдение</h4>
+          <div id="watchList"></div>
+        </div>
+
+      
+        <div class="infoBox cardEqual">
+          <h4>Время</h4>
+          <div class="infoLine">Круг (среднее): <span id="cycleAvg">—</span></div>
+          <div class="infoLine">Info: <span id="cycleBased">—</span></div>
+          <div class="infoLine">Обновление: <span id="lastUpdate">—</span></div>
+          <!-- Оставляем "Обновление" как есть — это метка последнего parse_logs -->
+          <button class="btn" onclick="doRefresh()">Обновить</button>
+          <button class="btn" id="reparseLogsBtn" onclick="forceRefreshToday()">Перечитать логи</button>
+        </div>
+      </div>
+    </div>
+
+
+
+    <!-- Таблица ресурсов -->
+    <div class="tableWrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Ник</th><th>Еда</th><th>Дерево</th><th>Камень</th>
+            <th>Золото</th><th>Тариф (₽)</th><th>За сегодня</th><th>Обновлено</th>
+          </tr>
+        </thead>
+        <tbody id="resourcesBody"></tbody>
+      </table>
+    </div>
+
+    <!-- Модальное окно путей -->
+    <div id="pathsOverlay" class="modalOverlay"></div>
+    <div id="pathsModal" class="modalBox">
+      <h2>Настройка путей</h2>
+      <form id="pathsForm"></form>
+      <div style="margin-top:10px;">
+        <button class="btn" onclick="savePaths()">Сохранить</button>
+        <button class="btn" onclick="closePaths()">Закрыть</button>
+      </div>
+    </div>
+
+    <!-- Модальное окно аккаунтов -->
+    <div id="metaOverlay" class="modalOverlay"></div>
+    <div id="metaModal" class="modalBox">
+      <h2>Аккаунты / Данные</h2>
+      <div style="margin-bottom:10px;">
+        <button class="btn" id="selAllBtn" onclick="toggleSelectAll()">Выбрать все</button>
+        <button class="btn" onclick="exportCSV()">Экспорт CSV</button>
+        <button class="btn" onclick="exportXLSX()">Экспорт XLSX</button>
+        <input type="file" id="importFile" accept=".csv,.xlsx" onchange="importFile(this.files[0])" style="display:none;">
+        <button class="btn" onclick="document.getElementById('importFile').click()">Импорт</button>
+      </div>
+      <div style="margin-bottom:10px;">
+        <input type="text" id="massTariff" placeholder="Тариф (₽)">
+        <input type="text" id="massDate" placeholder="Оплата (дд.мм.гг)">
+        <button class="btn" onclick="applyMass()">Применить</button>
+        <button class="btn" onclick="paidNext()">Продлить на месяц</button>
+      </div>
+      <div style="margin-bottom:10px;">
+        <span>Расход: </span>
+        <input type="number" id="expenseInp" placeholder="Сумма">
+        <button class="btn" onclick="setExpense()">Добавить</button>
+        <span id="expTotal">0 ₽</span>
+      </div>
+      <table id="metaTable"></table>
+      <div style="margin-top:10px;">
+        <button class="btn" onclick="saveMeta()">Сохранить</button>
+        <button class="btn" onclick="closeMeta()">Закрыть</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

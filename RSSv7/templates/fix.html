@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>FIX F99</title>
+  <link rel="icon" href="{{ url_for('static', filename='99.png') }}" type="image/png">
+  <style>
+    /* Базовые стили */
+    body { margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#F5F5F7; color:#1D1D1F; height:100vh; display:flex; flex-direction:column; }
+    .header { padding:16px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,0.1); text-align:center; }
+    .header h1 { margin:0; font-size:20px; font-weight:600; }
+    .main { flex:1; display:flex; overflow:hidden; }
+    .panel { background:#fff; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.1); display:flex; flex-direction:column; overflow:hidden; }
+    .left-panel, .right-panel { flex:1 1 0; padding:16px; display:flex; flex-direction:column; overflow:hidden; }
+    .splitter { width:4px; cursor:col-resize; background:rgba(0,0,0,0.1); }
+    .btn { background:#0070c9; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-size:14px; cursor:pointer; transition:background .2s; margin-bottom:8px; }
+    .btn:hover { background:#005999; }
+    /*.btn--fix        { background:#2ecc71; }      /* основа */
+    .btn--fix:hover  { background:#27b55b; }
+    /* СТАЛО */
+    .btn--fix{background:#2ecc71;}
+
+    /* NEW — кнопка «Пути» тёмно-розовый градиент */
+    .btn-path{
+      background:linear-gradient(45deg,#ff3d83 0%,#b4005a 100%);
+      color:#fff;font-size:12px;font-weight:600;padding:4px 10px;
+      border:none;border-radius:8px;cursor:pointer;margin-right:12px;
+    }
+
+    .btn-emergency{
+      background:linear-gradient(45deg,#ff6161 0%,#b60000 100%);
+      color:#fff; font-size:12px; font-weight:700; padding:4px 10px;
+      border:none; border-radius:8px; cursor:pointer; margin-right:8px;
+    }
+
+    /* панель со списком резервных папок */
+    .paths-panel{
+      position:absolute;top:54px;left:12px;z-index:200;
+      background:#2b2b2b;color:#fff;border:1px solid #555;
+      border-radius:10px;padding:12px;min-width:180px;box-shadow:0 4px 12px rgba(0,0,0,.4);
+    }
+    .paths-panel label{display:block;margin:4px 0;}
+    .hidden{display:none;}
+    .btn:disabled { opacity:.6; cursor:default; }
+    .sort-controls { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+    #accList { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; padding:0; margin:0; list-style:none; flex:1; overflow-y:auto; }
+    #accList li { display:flex; align-items:center; }
+    #accList li input[type="checkbox"] { margin-right:6px; }
+    .accBtn { flex:1; background:#3498db; color:#fff; border:none; border-radius:8px; padding:10px; font-size:14px; cursor:pointer; transition:background .2s; text-align:center; }
+    .accBtn:hover { background:#2980b9; }
+    .accBtn--failed { background:#c0392b; }
+    .accBtn:disabled { opacity:.6; cursor:default; }
+    .section { display:flex; flex-direction:column; flex:1; margin-bottom:16px; overflow:hidden; }
+    .section:last-child { margin-bottom:0; }
+    .panel-title { margin:0 0 8px; font-size:16px; font-weight:600; }
+    .logArea { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:8px; padding:12px; font-size:13px; font-family:Menlo,Monaco,Consolas,"Courier New",monospace; flex:1; overflow-y:auto; line-height:1.4; white-space:pre-wrap; }
+    .spinner { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:40px; height:40px; border:4px solid rgba(0,0,0,0.1); border-top-color:#0070c9; border-radius:50%; animation:spin 1s linear infinite; z-index:1000; }
+    @keyframes spin { to { transform:translate(-50%,-50%) rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="spinner" id="spinner"></div>
+  <!-- СТАЛО -->
+  <div class="header">
+    <button class="btn-path"      id="btnPaths">Пути</button>
+    <!-- NEW emergency -->
+    <button class="btn-emergency" id="btnReplaceAll" title="Полная замена конфигов (экстренно)">
+      Замена&nbsp;конфигов
+    </button>
+    <h1 style="display:inline-block;margin:0">FIX аккаунтов</h1>
+  </div>
+
+  <!-- СРАЗУ ПОСЛЕ header добавляем панель -->
+  <div id="pathsPanel" class="paths-panel hidden">
+    <label>
+      <input type="radio" name="backupPath" value="" checked>
+      Стандартный путь
+    </label>
+    <div id="backupList"></div> <!-- заполняется через JS -->
+  </div>
+  <div class="main">
+    <div class="panel left-panel" id="leftPanel">
+      <div class="sort-controls">
+        <button class="btn" id="btnRefresh">Обновить</button>
+        <button class="btn" id="btnStop">Stop GnBots</button>
+        <button class="btn" id="btnStart">Start GnBots</button>
+        <button class="btn" id="sortFix">Требуют фикса</button>
+        <button class="btn" id="sortAlpha">По алфавиту</button>
+        <button class="btn" id="btnCheck">Check Emus</button>
+        <button class="btn btn--fix" id="btnFixCfgSelected">Fix_Config selected</button>
+        <button class="btn btn--fix" id="btnFixSelected">Fix Selected</button>
+        <!-- NEW: чинит все слетевшие аккаунты без выбора -->
+        <button class="btn btn--fix" id="btnFixAll">Починить всё</button>
+      </div>
+      <ul id="accList"></ul>
+    </div>
+    <div class="splitter" id="splitter"></div>
+    <div class="panel right-panel" id="rightPanel">
+      <div class="section">
+        <h2 class="panel-title">Лог обновления</h2>
+        <div id="refreshLog" class="logArea"></div>
+      </div>
+      <div class="section">
+        <h2 class="panel-title">Лог FIX и управления</h2>
+        <div id="fixLog" class="logArea"></div>
+      </div>
+      <div class="section">
+        <h2 class="panel-title">Лог Check Emus</h2>
+        <div id="checkLog" class="logArea"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    const spinner = document.getElementById('spinner');
+    const btnRefresh = document.getElementById('btnRefresh');
+    const btnPaths      = document.getElementById('btnPaths');   // ← NEW
+    const btnReplaceAll = document.getElementById('btnReplaceAll');   // ← NEW
+    const pathsPanel    = document.getElementById('pathsPanel'); // ← NEW
+    const backupListDiv = document.getElementById('backupList'); // ← NEW
+    let   selectedBackupDir = "";  // "" → дефолт, иначе «ДД__ММ__ГГГГ»
+    const btnStop = document.getElementById('btnStop');
+    const btnStart = document.getElementById('btnStart');
+    const btnCheck = document.getElementById('btnCheck');
+    const btnFixSelected = document.getElementById('btnFixSelected');
+    const btnFixCfgSelected = document.getElementById('btnFixCfgSelected');   // ← NEW
+    const btnFixAll = document.getElementById('btnFixAll');           // ← NEW
+    const sortFixBtn = document.getElementById('sortFix');
+    const sortAlphaBtn = document.getElementById('sortAlpha');
+    const refreshLog = document.getElementById('refreshLog');
+    const fixLog = document.getElementById('fixLog');
+    const checkLog = document.getElementById('checkLog');
+    const accList = document.getElementById('accList');
+    const leftPanel = document.getElementById('leftPanel');
+    const splitter = document.getElementById('splitter');
+    let crashedList = [], currentAccounts = [], sortMode = 'fix';
+
+
+    // СТАВИМ где-нибудь выше остальных функций (сразу после const-ов)
+
+    // Универсальный вызов API с таймаутом и JSON-ответом
+    async function api(url, {method='GET', headers={}, body, timeout=30000} = {}){
+      const ctrl = new AbortController();
+      const t = setTimeout(()=>ctrl.abort(), timeout);
+      try{
+        const res = await fetch(url, {method, headers, body, signal: ctrl.signal});
+        if(!res.ok){
+          const txt = await res.text().catch(()=> '');
+          throw new Error(`${res.status} ${res.statusText}${txt?`: ${txt}`:''}`);
+        }
+        // Пытаемся JSON, иначе текст
+        const ct = res.headers.get('content-type') || '';
+        return ct.includes('application/json') ? res.json() : res.text();
+      } finally{
+        clearTimeout(t);
+      }
+    }
+
+
+
+    // открытие/закрытие панели
+    btnPaths.onclick = ()=> pathsPanel.classList.toggle('hidden');
+    // Закрытие по клику вне и по ESC
+    document.addEventListener('click', (e)=>{
+      if(pathsPanel.classList.contains('hidden')) return;
+      if(!pathsPanel.contains(e.target) && e.target !== btnPaths){
+        pathsPanel.classList.add('hidden');
+      }
+    });
+    document.addEventListener('keydown', (e)=>{
+      if(e.key === 'Escape'){ pathsPanel.classList.add('hidden'); }
+    });
+
+
+    // загрузка последних 5 папок из /api/backup_dirs
+    async function loadBackupDirs(){
+      try{
+        const res  = await fetch('/api/backup_dirs');
+        const dirs = await res.json();          // ["31__05__2025", ...]
+        backupListDiv.innerHTML = "";
+        dirs.forEach(dir=>{
+          const id = 'bp_'+dir.replace(/[^a-zA-Z0-9_]/g,'');
+          backupListDiv.insertAdjacentHTML('beforeend',
+            `<label><input type="radio" name="backupPath" value="${dir}"> ${dir}</label>`);
+        });
+        document.querySelectorAll('input[name="backupPath"]').forEach(el=>{
+          el.addEventListener('change',e=>{
+            selectedBackupDir = e.target.value; // пустая строка ⇒ дефолт
+          });
+        });
+      }catch(e){
+        console.error("backup_dirs:",e);
+      }
+    }
+    loadBackupDirs();   // вызываем при загрузке страницы
+
+
+    function showSpinner(){ spinner.style.display='block'; }
+    function hideSpinner(){ spinner.style.display='none'; }
+    function disableButtons(flag){ document.querySelectorAll('button').forEach(b=>b.disabled=flag); }
+
+
+    // Лёгкий toast
+    function showToast(msg, isError=false){
+      const el = document.createElement('div');
+      el.textContent = msg;
+      el.style = `
+        position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+        background:${isError?'#e74c3c':'#2ECC71'};color:#fff;border-radius:20px;
+        padding:10px 16px;box-shadow:0 2px 10px rgba(0,0,0,.2);z-index:2000;opacity:.95;
+      `;
+      document.body.appendChild(el);
+      setTimeout(()=>{ el.style.transition='opacity .4s'; el.style.opacity='0'; }, 1800);
+      setTimeout(()=> el.remove(), 2200);
+    }
+
+    // Автопрокрутка вниз для логов при изменении
+    function autoStick(el){
+      const obs = new MutationObserver(()=> el.scrollTop = el.scrollHeight);
+      obs.observe(el, {childList:true, characterData:true, subtree:true});
+    }
+    autoStick(refreshLog); autoStick(fixLog); autoStick(checkLog);
+
+
+
+    function renderAccList(){
+      accList.innerHTML = '';
+      let arr = [...currentAccounts];
+      if (sortMode==='alpha') arr.sort((a,b)=>a.nickname.localeCompare(b.nickname));
+      else arr.sort((a,b)=>{
+        const aC=crashedList.includes(`leidian${a.instanceId}.config`);
+        const bC=crashedList.includes(`leidian${b.instanceId}.config`);
+        return (aC===bC?0:(aC?-1:1));
+      });
+      arr.forEach(acc=>{
+        const li=document.createElement('li');
+        const chk=document.createElement('input'); chk.type='checkbox'; chk.value=acc.id;
+        const btn=document.createElement('button');
+        const crashed=crashedList.includes(`leidian${acc.instanceId}.config`);
+        btn.className='accBtn'+(crashed?' accBtn--failed':'');
+        btn.textContent=`${acc.nickname}_${acc.instanceId}`;
+        btn.onclick=()=>doFix(acc.id,acc.nickname);
+        li.appendChild(chk);
+        li.appendChild(btn);
+        accList.appendChild(li);
+      });
+    }
+
+    async function doRefresh(){
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 45000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      disableButtons(true);
+      showSpinner();
+      refreshLog.textContent = '1) parse_logs...\n';
+
+      try{
+        // 1) попросим бэк пересчитать кэш логов/ресурсов
+        await call('/api/refresh', { method:'POST' });
+        refreshLog.textContent += '2) загрузка списков...\n';
+
+        // 2) параллельно тянем упавшие конфиги и ресурсы
+        const [crashed, resources] = await Promise.all([
+          call('/api/crashedEmus'),        // ожидаем массив имён файлов/идентификаторов
+          call('/api/resources')           // ожидаем { accounts:[], account_count:n, ... }
+        ]);
+
+        // 3) применяем данные к UI
+        crashedList     = Array.isArray(crashed) ? crashed : (crashed?.list || []);
+        const accData   = (resources && typeof resources==='object') ? resources : {};
+        currentAccounts = Array.isArray(accData.accounts) ? accData.accounts : [];
+        const count     = typeof accData.account_count === 'number' ? accData.account_count : currentAccounts.length;
+
+        refreshLog.textContent += `3) crashed: ${crashedList.length}\n`;
+        refreshLog.textContent += `4) accounts: ${count}\n`;
+
+        // 4) перерисовать список аккаунтов
+        renderAccList();
+
+        if (typeof showToast==='function') showToast('Данные обновлены');
+      }catch(e){
+        refreshLog.textContent += 'Err: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка обновления', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+      }
+    }
+
+
+    // Точечный FIX конфигов выбранного аккаунта — безопасный POST с JSON.
+    async function doFix(id, nick){
+      // локальный фолбэк, если общий api() ещё не подключен
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 45000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += `-- FIX-CFG ${nick} --\n`;
+
+      try{
+        const payload = {
+          acc_id: id,
+          config_only: 1,
+          ...(selectedBackupDir ? {backup_dir: selectedBackupDir} : {})
+        };
+        const data = await call('/api/fix/do', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast(`FIX-CFG для ${nick} выполнен`);
+      } catch(e){
+        fixLog.textContent += 'Err FIX-CFG: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка FIX-CFG', true);
+      } finally {
+        hideSpinner();
+        disableButtons(false);
+        await finishFixCycle(); // ldcheck + refresh
+      }
+    }
+
+
+    async function doStop(){
+      // локальный безопасный вызов API: сначала пробуем глобальный api(), иначе — надёжный fetch с JSON/текст распознаванием
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 30000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += '-- Stop --\n';
+
+      try{
+        // POST на /api/stop: останавливаем эмуляторы/службы (как реализовано на бэке)
+        const data = await call('/api/stop', { method:'POST' });
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast('Остановлено успешно');
+      }catch(e){
+        fixLog.textContent += 'Err Stop: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка остановки', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+      }
+    }
+
+
+    async function doStart(){
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 30000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += '-- Start --\n';
+
+      try{
+        // POST на /api/reboot: перезапуск сервиса/эмуляторов (как реализовано на бэке)
+        const data = await call('/api/reboot', { method:'POST' });
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast('Перезапуск выполнен');
+      }catch(e){
+        fixLog.textContent += 'Err Start: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка перезапуска', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+      }
+    }
+
+
+    async function doCheck(){
+      disableButtons(true); showSpinner(); checkLog.textContent='Checking emus...\n';
+      try{
+        const data = await api('/api/check_ld', {method:'POST'});
+        (data.logs || []).forEach(l=> checkLog.textContent+=l+'\n');
+        checkLog.textContent+='-- done --\n';
+        showToast('Проверка эмуляторов завершена');
+      } catch(e){
+        checkLog.textContent+='Err Check: '+e+'\n';
+        console.error(e);
+        showToast('Ошибка проверки эмуляторов', true);
+      } finally{
+        hideSpinner(); disableButtons(false);
+      }
+    }
+
+
+
+    // Завершение цикла фикса: сперва ldcheck, затем обновление UI.
+    // ВАЖНО: функция должна быть async, т.к. внутри await.
+    async function finishFixCycle(){
+      try{
+        await doCheck();     // ldcheck – убеждаемся, что FIX помог
+      } finally{
+        await doRefresh();   // перерисовываем список и цвета в любом случае
+      }
+    }
+
+
+
+    // Пакетный FIX конфигов выделенных аккаунтов
+    async function doBatchFixCfg(){
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 90000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      const ids = Array.from(accList.querySelectorAll('input:checked')).map(c=>c.value);
+      if (!ids.length){
+        if (typeof showToast==='function') showToast('Ни один аккаунт не выбран', true);
+        return;
+      }
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += `-- Batch FIX-CFG: ${ids.join(', ')} --\n`;
+
+      try{
+        const payload = { acc_ids: ids, ...(selectedBackupDir? {backup_dir:selectedBackupDir}: {}) };
+        const data = await call('/api/fix/config_batch', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast('Batch FIX-CFG завершён');
+      }catch(e){
+        fixLog.textContent += 'Err Batch FIX-CFG: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка Batch FIX-CFG', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+        await finishFixCycle(); // ldcheck + refresh
+      }
+    }
+
+
+    async function doBatchFix(){
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 60000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      // собираем отмеченные чекбоксы аккаунтов
+      const selected = Array
+        .from(accList.querySelectorAll('input[type="checkbox"]:checked'))
+        .map(c => c.value);
+
+      if (!selected.length){
+        if (typeof showToast==='function') showToast('Ни один аккаунт не выбран', true);
+        return;
+      }
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += `-- Batch FIX: ${selected.join(', ')} --\n`;
+
+      try{
+        // для бэка формируем JSON-пейлоад
+        const payload = { acc_ids: selected };
+        if (selectedBackupDir) payload.backup_dir = selectedBackupDir;
+
+        const data = await call('/api/fix/batch', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast('Batch FIX завершён');
+      }catch(e){
+        fixLog.textContent += 'Err batch FIX: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка batch FIX', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+        // прогоняем ldcheck + обновление UI (как у вас сделано внутри finishFixCycle)
+        await finishFixCycle();
+      }
+    }
+
+
+    // СТАВИМ СРАЗУ ПОД doBatchFix()
+    async function doFixAll(){
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 90000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      // набираем ID всех аккаунтов, чьи конфиги попали в crashedList
+      const ids = currentAccounts
+        .filter(acc => crashedList.includes(`leidian${acc.instanceId}.config`))
+        .map(acc => acc.id);
+
+      if (!ids.length){
+        fixLog.textContent += '-- Нет упавших аккаунтов --\n';
+        if (typeof showToast==='function') showToast('Нет упавших аккаунтов', true);
+        return;
+      }
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += `-- FIX ALL: ${ids.join(', ')} --\n`;
+
+      try{
+        const payload = { acc_ids: ids };
+        if (selectedBackupDir) payload.backup_dir = selectedBackupDir;
+
+        // на бэке реализован /api/fix/config_batch — починка конфигов пачкой
+        const data = await call('/api/fix/config_batch', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast('FIX ALL завершён');
+      }catch(e){
+        fixLog.textContent += 'Err FIX ALL: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка FIX ALL', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+        await finishFixCycle(); // ldcheck + refresh
+      }
+    }
+
+
+
+    // СТАВИМ ниже других FIX-функций
+    async function doReplaceAll(){
+      const call = (url, opts={}) => {
+        if (typeof api === 'function') return api(url, opts);
+        const ctrl = new AbortController();
+        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 120000);
+        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
+          clearTimeout(t);
+          if(!r.ok){
+            const txt = await r.text().catch(()=> '');
+            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
+          }
+          const ct = r.headers.get('content-type') || '';
+          return ct.includes('application/json') ? r.json() : r.text();
+        });
+      };
+
+      // жёсткая операция — подтверждение обязательно
+      if (!confirm("⚠ Полная замена ВСЕХ config-файлов.\nПродолжить?")) return;
+
+      disableButtons(true);
+      showSpinner();
+      fixLog.textContent += "-- EMERGENCY REPLACE CONFIGS --\n";
+
+      try{
+        const payload = {};
+        if (selectedBackupDir) payload.backup_dir = selectedBackupDir;
+
+        // на бэке реализован /api/fix/replace_configs — полная замена конфигов на копии из backup_dir/дефолтного бэкапа
+        const data = await call('/api/fix/replace_configs', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+
+        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
+        fixLog.textContent += '-- done --\n';
+        if (typeof showToast==='function') showToast('Замена конфигов выполнена');
+      }catch(e){
+        fixLog.textContent += 'Err replace: ' + e + '\n';
+        console.error(e);
+        if (typeof showToast==='function') showToast('Ошибка замены конфигов', true);
+      }finally{
+        hideSpinner();
+        disableButtons(false);
+        await finishFixCycle(); // ldcheck + refresh
+      }
+    }
+
+
+
+    // Restore or center splitter and init
+    document.addEventListener('DOMContentLoaded', ()=>{
+      const parentRect = leftPanel.parentElement.getBoundingClientRect();
+      const saved = localStorage.getItem('splitPos');
+      const width = saved ? parseInt(saved) : (parentRect.width/2);
+      leftPanel.style.flex = `0 0 ${width}px`;
+      doRefresh();
+    });
+
+    // Drag splitter
+    let isDragging = false;
+
+    function onMove(clientX){
+      const rect = leftPanel.parentElement.getBoundingClientRect();
+      let newW = clientX - rect.left;
+      newW = Math.max(200, Math.min(newW, rect.width-200));
+      leftPanel.style.flex = `0 0 ${newW}px`;
+      localStorage.setItem('splitPos', newW);
+    }
+
+    splitter.addEventListener('pointerdown', (e)=>{
+      isDragging = true;
+      splitter.setPointerCapture(e.pointerId);
+    });
+    document.addEventListener('pointerup', ()=> isDragging=false);
+    document.addEventListener('pointermove', (e)=>{
+      if(!isDragging) return;
+      onMove(e.clientX);
+    });
+
+
+    // Bind events
+    btnRefresh.onclick = doRefresh;
+    btnStop.onclick = doStop;
+    btnStart.onclick = doStart;
+    btnCheck.onclick = doCheck;
+    btnFixSelected.onclick = doBatchFix;
+    btnFixCfgSelected.onclick = doBatchFixCfg;
+    btnFixAll.onclick         = doFixAll;              // ← NEW
+    btnReplaceAll.onclick = doReplaceAll;    // ← NEW
+    sortFixBtn.onclick = ()=>{ sortMode='fix'; renderAccList(); };
+    sortAlphaBtn.onclick = ()=>{ sortMode='alpha'; renderAccList(); };
+  </script>
+</body>
+</html>

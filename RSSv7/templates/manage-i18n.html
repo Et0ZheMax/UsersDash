@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>I18N & Order Editor</title>
+  <style>
+    body{margin:0;background:#F5F5F7;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial;color:#1D1D1F}
+    .header{padding:14px;background:#fff;border-bottom:1px solid #E5E5E9;text-align:center;font-size:18px;font-weight:600}
+    .toolbar{padding:8px 12px;background:#fff;border-bottom:1px solid #E5E5E9;display:flex;gap:8px;flex-wrap:wrap}
+    .btn{position:relative;background:#0070C9;color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px}
+    .btn.secondary{background:#6B7280}
+    .btn.danger{background:#D32F2F}
+    .btn .spinner{position:absolute;right:8px;top:50%;transform:translateY(-50%);width:14px;height:14px;border:2px solid rgba(255,255,255,.35);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;display:none}
+    .btn.loading .spinner{display:block}
+    @keyframes spin{0%{transform:translateY(-50%) rotate(0)}100%{transform:translateY(-50%) rotate(360deg)}}
+    .container{display:flex;height:calc(100vh - 102px)}
+    .col{flex:1;min-width:0;display:flex;flex-direction:column}
+    .pane{flex:1;overflow:auto;padding:12px}
+    .card{background:#fff;border:1px solid #E5E5E9;border-radius:10px;padding:12px;margin-bottom:12px}
+    .card h3{margin:0 0 8px;font-size:16px}
+    .row{display:flex;gap:8px;align-items:center}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .field{display:flex;gap:8px;align-items:center;margin:4px 0}
+    .field input[type=text]{flex:1;border:1px solid #D1D5DB;border-radius:6px;padding:6px}
+    .field small{opacity:.65}
+    .list{border:1px solid #E5E5E9;border-radius:8px;overflow:hidden}
+    .list-item{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid #F0F0F0;background:#fff}
+    .list-item:last-child{border-bottom:none}
+    .list-item .left{display:flex;gap:8px;align-items:center;min-width:0}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#F3F4F6;border:1px solid #E5E7EB;border-radius:6px;padding:2px 6px}
+    .pill{background:#EEF2FF;color:#3730A3;border-radius:999px;padding:2px 8px;font-size:12px}
+    .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.85);color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;opacity:0;animation:fadeIn .25s forwards}
+    @keyframes fadeIn{to{opacity:1}} @keyframes fadeOut{to{opacity:0}}
+    .health{background:#111;color:#9EF89E;font-family:ui-monospace,monospace;padding:10px;border-radius:8px;white-space:pre-wrap;max-height:180px;overflow:auto}
+    .split{display:grid;grid-template-columns:360px 1fr;gap:12px}
+    .muted{opacity:.6}
+    @media (max-width:900px){.container{display:block;height:auto}.split{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="header">Редактор локализации & порядка</div>
+  <div class="toolbar">
+    <button class="btn" onclick="goBack()">Назад</button>
+    <button class="btn" id="btnSave" onclick="saveAll(this)">Сохранить<div class="spinner"></div></button>
+    <button class="btn secondary" onclick="exportJSON()">Экспорт JSON</button>
+    <label class="btn secondary" style="cursor:pointer">
+      Импорт JSON<input id="importFile" type="file" accept="application/json" style="display:none">
+    </label>
+    <button class="btn danger" onclick="resetLocalOverrides()">Сброс локальных правок</button>
+  </div>
+
+  <div class="container">
+    <div class="col">
+      <div class="pane">
+        <div class="card">
+          <h3>Health-check</h3>
+          <div id="health" class="health">…</div>
+        </div>
+
+        <div class="card">
+          <h3>Обзор аккаунтов → скрипты → ключи Config</h3>
+          <div class="split">
+            <div>
+              <div class="field">
+                <select id="accSel"></select>
+                <button class="btn secondary" onclick="loadAccount()">Загрузить</button>
+              </div>
+              <div id="scriptList" class="list" style="margin-top:6px"></div>
+            </div>
+            <div>
+              <div class="muted" style="margin-bottom:6px">Ключи Config для выбранного скрипта:</div>
+              <div id="cfgKeys" class="list"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Словарь названий скриптов (script_labels)</h3>
+          <div id="scriptLabels" class="list"></div>
+          <div class="field">
+            <input type="text" id="newScriptId" placeholder="Новый ScriptId (например, vikingbot.base.new)"/>
+            <input type="text" id="newScriptTitle" placeholder="Отображаемое имя (рус)"/>
+            <button class="btn secondary" onclick="addScriptLabel()">Добавить</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Словарь названий полей Config (config_labels)</h3>
+          <div id="configLabels" class="list"></div>
+          <div class="field">
+            <input type="text" id="newCfgKey" placeholder="Ключ (например, RallyTime)"/>
+            <input type="text" id="newCfgTitle" placeholder="Отображаемое имя (рус)"/>
+            <button class="btn secondary" onclick="addConfigLabel()">Добавить</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>Переводы значений Select (option_labels)</h3>
+          <div class="grid">
+            <div>
+              <div class="muted">Ключ select-поля</div>
+              <input type="text" id="optKey" class="mono" placeholder="например, RallyTime / worker / *" style="width:100%"/>
+            </div>
+            <div class="row" style="justify-content:flex-end">
+              <button class="btn secondary" onclick="addOptionPair()">Добавить пару</button>
+            </div>
+          </div>
+          <div id="optionPairs" class="list" style="margin-top:8px"></div>
+        </div>
+
+        <div class="card">
+          <h3>Порядок полей для скриптов (order_map)</h3>
+          <div class="field">
+            <select id="orderScript"></select>
+            <button class="btn secondary" onclick="fillOrderFromSelected()">Автозаполнение из ключей выбранного скрипта</button>
+          </div>
+          <div id="orderList" class="list" style="margin-top:6px"></div>
+          <div class="field">
+            <input type="text" id="orderNewKey" placeholder="Добавить ключ в порядок (точное имя)"/>
+            <button class="btn secondary" onclick="orderAddKey()">Добавить</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" style="display:none"></div>
+
+  <script>
+    /* ====== state ====== */
+    let ACCOUNTS = [];
+    let SETTINGS_CACHE = new Map(); // accId -> {Data: [...]}
+    let I18N = { script_labels:{}, config_labels:{}, option_labels:{}, order_map:{} };
+
+    /* ====== utils ====== */
+    const H = document.getElementById('health');
+    function logh(s){ H.textContent += (H.textContent ? '\\n' : '') + s; }
+    function toast(msg, err=false){
+      const t = document.getElementById('toast');
+      t.textContent = msg;
+      t.style.background = err ? '#FF3B30' : 'rgba(0,0,0,.85)';
+      t.style.display = 'block';
+      t.style.animation = 'fadeIn .2s forwards';
+      setTimeout(()=>{ t.style.animation='fadeOut .25s forwards'; }, 1800);
+      setTimeout(()=>{ t.style.display='none'; }, 2100);
+    }
+    const Q = sel => document.querySelector(sel);
+
+    /* ====== load ====== */
+    document.addEventListener('DOMContentLoaded', async () => {
+      try{
+        logh('Старт health-check…');
+        // 1) i18n (api → fallback static → пусто)
+        const i18n = await tryFetchI18N();
+        I18N = i18n || {script_labels:{},config_labels:{},option_labels:{},order_map:{}};
+        logh('i18n загружен: ' + (i18n ? 'OK' : 'нет (используем пустой)'));
+
+        // 2) accounts
+        const r = await fetch('/api/manage/accounts');
+        if(!r.ok) throw new Error('accounts HTTP ' + r.status);
+        ACCOUNTS = await r.json();
+        logh('accounts: OK (' + ACCOUNTS.length + ')');
+        fillAccounts();
+        fillScriptLabels();
+        fillConfigLabels();
+        fillOptionPairs();
+        fillOrderSelect();
+        toast('Готово');
+      }catch(e){
+        console.error(e); logh('Ошибка: '+ e.message); toast('Ошибка загрузки', true);
+      }
+      // импорт JSON
+      document.getElementById('importFile').addEventListener('change', onImportFile);
+    });
+
+    async function tryFetchI18N(){
+      try{
+        let r = await fetch('/api/manage/i18n?lang=ru');
+        if(r.ok) return await r.json();
+      }catch{}
+      try{
+        let r = await fetch('/static/i18n/ru.json');
+        if(r.ok) return await r.json();
+      }catch{}
+      return null;
+    }
+
+    /* ====== Accounts/Scripts explorer ====== */
+    function fillAccounts(){
+      const sel = document.getElementById('accSel');
+      sel.innerHTML = ACCOUNTS.map(a=>`<option value="${a.Id}">${a.Name}</option>`).join('');
+      if(ACCOUNTS[0]) loadAccount();
+    }
+    async function loadAccount(){
+      const id = document.getElementById('accSel').value;
+      if(SETTINGS_CACHE.has(id)){ renderScripts(id); return; }
+      logh('Загружаю настройки для аккаунта ' + id);
+      const r = await fetch(`/api/manage/account/${id}/settings`);
+      if(!r.ok){ toast('Ошибка загрузки настроек', true); return; }
+      const js = await r.json();
+      SETTINGS_CACHE.set(id, js);
+      renderScripts(id);
+    }
+    function renderScripts(accId){
+      const box = document.getElementById('scriptList'); box.innerHTML = '';
+      const data = SETTINGS_CACHE.get(accId)?.Data || [];
+      data.forEach((step, idx)=>{
+        const it = document.createElement('div'); it.className='list-item';
+        it.onclick = ()=> renderConfigKeys(step);
+        it.innerHTML = `
+          <div class="left">
+            <span class="pill">${step.IsActive?'on':'off'}</span>
+            <span class="mono" title="${step.ScriptId}">${I18N.script_labels[step.ScriptId] || titleize(step.ScriptId)}</span>
+          </div>
+          <span class="muted">${Object.keys(step.Config||{}).length} ключей</span>
+        `;
+        box.appendChild(it);
+      });
+      // auto-select first
+      if(data[0]) renderConfigKeys(data[0]);
+    }
+    function renderConfigKeys(step){
+      const box = document.getElementById('cfgKeys'); box.innerHTML='';
+      const keys = Object.keys(step.Config||{});
+      keys.forEach(k=>{
+        const it = document.createElement('div'); it.className='list-item';
+        it.innerHTML = `
+          <div class="left">
+            <span class="mono" title="${k}">${I18N.config_labels[k] || titleize(k)}</span>
+          </div>
+          <span class="muted">${typeof step.Config[k]==='object' && Array.isArray(step.Config[k]?.options) ? 'select' : typeof step.Config[k]}</span>
+        `;
+        box.appendChild(it);
+      });
+      // для секции порядка — запомним текущий скрипт
+      const os = document.getElementById('orderScript');
+      if(os.value !== step.ScriptId){ os.value = step.ScriptId; renderOrderList(); }
+    }
+
+    /* ====== Editors ====== */
+
+    // Script labels
+    function fillScriptLabels(){
+      const box = document.getElementById('scriptLabels'); box.innerHTML='';
+      const entries = Object.entries(I18N.script_labels).sort((a,b)=>a[0].localeCompare(b[0],'ru'));
+      entries.forEach(([id,title])=>{
+        const it = document.createElement('div'); it.className='list-item';
+        it.innerHTML = `
+          <div class="left">
+            <span class="mono">${id}</span>
+            <input type="text" value="${title}" style="min-width:260px"/>
+          </div>
+          <button class="btn danger" onclick="delScriptLabel('${id}')">Удалить</button>
+        `;
+        it.querySelector('input').oninput = (e)=> I18N.script_labels[id] = e.target.value;
+        box.appendChild(it);
+      });
+    }
+    function addScriptLabel(){
+      const id = Q('#newScriptId').value.trim(), t = Q('#newScriptTitle').value.trim();
+      if(!id || !t) return toast('Заполни оба поля', true);
+      I18N.script_labels[id]=t; Q('#newScriptId').value=''; Q('#newScriptTitle').value='';
+      fillScriptLabels(); fillOrderSelect();
+    }
+    function delScriptLabel(id){ delete I18N.script_labels[id]; fillScriptLabels(); fillOrderSelect(); }
+
+    // Config labels
+    function fillConfigLabels(){
+      const box = document.getElementById('configLabels'); box.innerHTML='';
+      const entries = Object.entries(I18N.config_labels).sort((a,b)=>a[0].localeCompare(b[0],'ru'));
+      entries.forEach(([k,title])=>{
+        const it = document.createElement('div'); it.className='list-item';
+        it.innerHTML = `
+          <div class="left">
+            <span class="mono">${k}</span>
+            <input type="text" value="${title}" style="min-width:260px"/>
+          </div>
+          <button class="btn danger" onclick="delConfigLabel('${k}')">Удалить</button>
+        `;
+        it.querySelector('input').oninput = (e)=> I18N.config_labels[k] = e.target.value;
+        box.appendChild(it);
+      });
+    }
+    function addConfigLabel(){
+      const k = Q('#newCfgKey').value.trim(), t = Q('#newCfgTitle').value.trim();
+      if(!k || !t) return toast('Заполни оба поля', true);
+      I18N.config_labels[k]=t; Q('#newCfgKey').value=''; Q('#newCfgTitle').value='';
+      fillConfigLabels();
+    }
+    function delConfigLabel(k){ delete I18N.config_labels[k]; fillConfigLabels(); }
+
+    // Option labels
+    function fillOptionPairs(){
+      const box = document.getElementById('optionPairs'); box.innerHTML='';
+      const allKeys = Object.keys(I18N.option_labels||{}).sort((a,b)=>a.localeCompare(b,'ru'));
+      allKeys.forEach(key=>{
+        const kv = I18N.option_labels[key];
+        Object.entries(kv).forEach(([val,ru])=>{
+          const it = document.createElement('div'); it.className='list-item';
+          it.innerHTML = `
+            <div class="left" style="gap:6px">
+              <span class="mono">${key}</span>
+              <span>→</span>
+              <span class="mono">${val}</span>
+              <input type="text" value="${ru}" placeholder="перевод…" style="min-width:240px"/>
+            </div>
+            <button class="btn danger" onclick="delOptionPair('${key}','${val}')">Удалить</button>
+          `;
+          it.querySelector('input').oninput = (e)=>{ (I18N.option_labels[key] ||= {})[val] = e.target.value; };
+          box.appendChild(it);
+        });
+      });
+    }
+    function addOptionPair(){
+      const key = Q('#optKey').value.trim() || '*';
+      const val = prompt('Исходное значение (как приходит с бэка):'); if(!val) return;
+      const ru  = prompt('Перевод:'); if(ru===null) return;
+      (I18N.option_labels[key] ||= {})[val] = ru;
+      fillOptionPairs();
+    }
+    function delOptionPair(key,val){
+      if(!I18N.option_labels[key]) return;
+      delete I18N.option_labels[key][val];
+      if(Object.keys(I18N.option_labels[key]).length===0) delete I18N.option_labels[key];
+      fillOptionPairs();
+    }
+
+    // Order map
+    function fillOrderSelect(){
+      const sel = document.getElementById('orderScript');
+      // список скриптов = из словаря + из найденных в аккаунтах
+      const ids = new Set(Object.keys(I18N.script_labels||{}));
+      for(const js of SETTINGS_CACHE.values()){
+        (js?.Data||[]).forEach(s => ids.add(s.ScriptId));
+      }
+      const arr = Array.from(ids).sort((a,b)=>a.localeCompare(b,'ru'));
+      sel.innerHTML = arr.map(id=>`<option value="${id}">${I18N.script_labels[id]||titleize(id)}</option>`).join('');
+      renderOrderList();
+    }
+    function renderOrderList(){
+      const id = document.getElementById('orderScript').value;
+      const list = document.getElementById('orderList'); list.innerHTML='';
+      const seq = (I18N.order_map[id] ||= []);
+      seq.forEach((k, idx)=>{
+        const it = document.createElement('div'); it.className='list-item';
+        it.innerHTML = `
+          <div class="left">
+            <span class="mono">${k}</span>
+            <span class="muted">${I18N.config_labels[k] || titleize(k)}</span>
+          </div>
+          <div class="row">
+            <button class="btn secondary" onclick="orderUp(${idx})">▲</button>
+            <button class="btn secondary" onclick="orderDown(${idx})">▼</button>
+            <button class="btn danger" onclick="orderDel(${idx})">Удалить</button>
+          </div>
+        `;
+        list.appendChild(it);
+      });
+    }
+    function orderAddKey(){
+      const id = document.getElementById('orderScript').value;
+      const key = document.getElementById('orderNewKey').value.trim();
+      if(!key) return;
+      (I18N.order_map[id] ||= []).push(key);
+      document.getElementById('orderNewKey').value='';
+      renderOrderList();
+    }
+    function orderUp(i){
+      const id = document.getElementById('orderScript').value;
+      const a = I18N.order_map[id]; if(i<=0) return;
+      [a[i-1],a[i]]=[a[i],a[i-1]]; renderOrderList();
+    }
+    function orderDown(i){
+      const id = document.getElementById('orderScript').value;
+      const a = I18N.order_map[id]; if(i>=a.length-1) return;
+      [a[i+1],a[i]]=[a[i],a[i+1]]; renderOrderList();
+    }
+    function orderDel(i){
+      const id = document.getElementById('orderScript').value;
+      I18N.order_map[id].splice(i,1); renderOrderList();
+    }
+    function fillOrderFromSelected(){
+      const id = document.getElementById('orderScript').value;
+      // берём первый аккаунт, где есть этот скрипт, и строим порядок из его ключей
+      for(const js of SETTINGS_CACHE.values()){
+        const step = (js?.Data||[]).find(s=>s.ScriptId===id);
+        if(step){
+          I18N.order_map[id] = Object.keys(step.Config||{});
+          renderOrderList();
+          toast('Порядок заполнен из текущего конфига');
+          return;
+        }
+      }
+      toast('Не найден такой скрипт в загруженных аккаунтах', true);
+    }
+
+    /* ====== Save / Export / Import ====== */
+    async function saveAll(btn){
+      btn.classList.add('loading'); btn.disabled = true;
+      try{
+        const r = await fetch('/api/manage/i18n?lang=ru',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(I18N)});
+        if(!r.ok) throw new Error(await r.text());
+        toast('Сохранено');
+      }catch(e){ console.error(e); toast('Ошибка сохранения', true); }
+      finally{ btn.classList.remove('loading'); btn.disabled=false; }
+    }
+
+    function exportJSON(){
+      const blob = new Blob([JSON.stringify(I18N,null,2)],{type:'application/json'});
+      const a = document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='i18n-ru.json'; a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function onImportFile(ev){
+      const f = ev.target.files[0]; if(!f) return;
+      const rd = new FileReader();
+      rd.onload = ()=>{
+        try{
+          const js = JSON.parse(rd.result);
+          // простое слияние
+          I18N.script_labels = {...(I18N.script_labels||{}), ...(js.script_labels||{})};
+          I18N.config_labels = {...(I18N.config_labels||{}), ...(js.config_labels||{})};
+          I18N.option_labels = {...(I18N.option_labels||{}), ...(js.option_labels||{})};
+          I18N.order_map     = {...(I18N.order_map||{}),     ...(js.order_map||{})};
+          fillScriptLabels(); fillConfigLabels(); fillOptionPairs(); fillOrderSelect();
+          toast('Импортировано (локально). Не забудь «Сохранить».');
+        }catch(e){ toast('Неверный JSON', true); }
+      };
+      rd.readAsText(f);
+      ev.target.value='';
+    }
+
+    function resetLocalOverrides(){
+      localStorage.removeItem('manage_i18n_overrides');
+      toast('Локальные оверрайды сброшены');
+    }
+
+    function titleize(str){
+      if(!str) return str;
+      str = String(str).split('.').pop();
+      str = str.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/[_\-]+/g,' ');
+      return str.replace(/\s+/g,' ').trim().replace(/\b\w/g,c=>c.toUpperCase());
+    }
+    function goBack(){ location.href = '/manage.html'; }
+  </script>
+</body>
+</html>
