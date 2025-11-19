@@ -86,6 +86,10 @@ class Account(db.Model):
     next_payment_at = db.Column(db.DateTime, nullable=True)          # дата следующей оплаты
     next_payment_amount = db.Column(db.Integer, nullable=True)       # сумма в рублях
 
+    # Дополнительные поля описания фермы
+    game_world = db.Column(db.String(128), nullable=True)            # мир / сервер игры
+    notes = db.Column(db.Text, nullable=True)                        # произвольные заметки
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
