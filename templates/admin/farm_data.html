@@ -290,6 +290,9 @@
                         <th>E-mail</th>
                         <th>Пароль</th>
                         <th>IGG ID</th>
+                        <th>E-mail</th>
+                        <th>Пароль</th>
+                        <th>IGG ID</th>
                         <th>Королевство</th>
                         <th>Telegram</th>
                         <th>След. оплата</th>
@@ -298,6 +301,13 @@
                     </thead>
                     <tbody>
                     {% if items and items|length %}
+                        {% for item in items %}
+                            {% set acc = item.account %}
+                            {% set owner = item.owner %}
+                            {% set fd = item.farmdata %}
+                            <tr data-account-id="{{ acc.id }}"
+                                data-owner-name="{{ owner.username }}"
+                                data-farm-name="{{ acc.name }}">
                         {% for item in items %}
                             {% set acc = item.account %}
                             {% set owner = item.owner %}
@@ -325,6 +335,9 @@
                                            placeholder="email@example.com"
                                            value="{{ fd.email if fd and fd.email else '' }}">
                                 </td>
+                                <td>
+                                    <input class="farmdata-input"
+                                           type="text"
                                 <td>
                                     <input class="farmdata-input"
                                            type="text"
@@ -608,6 +621,408 @@ document.addEventListener("DOMContentLoaded", function () {
                 tariff: tariffResult.isValid
                     ? tariffResult.normalized
                     : tariffInput
+            });
+        });
+
+        if (!items.length) {
+            showToast("Нет данных для сохранения.", "info");
+            return;
+        }
+
+        let pendingFormatMessage = null;
+        if (formatWarnings.length) {
+            const summary = formatWarnings.slice(0, 3).join("; ");
+            pendingFormatMessage =
+                "Сохраняем в том виде, как введено: " + summary +
+                (formatWarnings.length > 3 ? " ..." : "");
+        }
+
+        setBtnLoading(btn, true);
+        try {
+            const resp = await fetch("/admin/farm-data/save", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ items })
+            });
+            const data = await resp.json().catch(() => ({}));
+
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Ошибка при сохранении данных.");
+            }
+
+            showToast("Данные ферм сохранены.", "success");
+            if (pendingFormatMessage) {
+                showToast(pendingFormatMessage, "info");
+            }
+            if (Array.isArray(data.warnings) && data.warnings.length) {
+                showToast(data.warnings.join(" | "), "info");
+            }
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Ошибка при сохранении данных.", "error");
+        } finally {
+            setBtnLoading(btn, false);
+        }
+    });
+
+    document.addEventListener("click", function (e) {
+        const btn = e.target.closest('[data-role="open-telegram-from-row"]');
+        if (!btn) return;
+
+        const row = btn.closest("tr");
+        if (!row) return;
+
+        const input = row.querySelector('input[name="telegram_tag"]');
+        if (!input) return;
+
+        const raw = (input.value || "").trim();
+        if (!raw) {
+            showToast("Telegram-тег пустой.", "info");
+            return;
+        }
+
+        const tag = raw.replace(/^@+/, "");
+        const url = "https://t.me/" + encodeURIComponent(tag);
+        window.open(url, "_blank");
+    });
+
+    const syncModal = document.querySelector('[data-role="sync-modal"]');
+    const syncTableBody = document.querySelector('[data-role="sync-table"] tbody');
+    const syncErrors = document.querySelector('[data-role="sync-errors"]');
+    const checkAll = document.querySelector('[data-role="sync-check-all"]');
+
+    function openSyncModal() {
+        if (!syncModal) return;
+        syncModal.hidden = false;
+    }
+
+    function closeSyncModal() {
+        if (!syncModal) return;
+        syncModal.hidden = true;
+    }
+
+    document.querySelectorAll('[data-role="sync-modal-close"]').forEach(function (el) {
+        el.addEventListener("click", closeSyncModal);
+    });
+
+    if (checkAll) {
+        checkAll.addEventListener("change", function () {
+            const checked = this.checked;
+            syncTableBody.querySelectorAll('input[type="checkbox"][data-role="sync-row-check"]').forEach(function (cb) {
+                cb.checked = checked;
+            });
+        });
+    }
+
+    const syncBtn = document.querySelector('[data-role="farmdata-sync"]');
+    const syncSpinner = document.querySelector('[data-role="farmdata-sync-spinner"]');
+
+    if (syncBtn) {
+        syncBtn.addEventListener("click", async function () {
+            setBtnLoading(syncBtn, true, syncSpinner);
+            syncTableBody.innerHTML = "";
+            if (syncErrors) {
+                syncErrors.style.display = "none";
+                syncErrors.textContent = "";
+            }
+
+            try {
+                const resp = await fetch("/admin/farm-data/sync-preview", {
+                    method: "GET",
+                    headers: { "Accept": "application/json" }
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка запроса синхронизации.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка при получении diff.", "error");
+                    return;
+                }
+
+                const changes = data.changes || [];
+                const errors = data.errors || [];
+
+                if (errors.length && syncErrors) {
+                    syncErrors.textContent = errors.join(" | ");
+                    syncErrors.style.display = "block";
+                }
+
+                if (!changes.length) {
+                    showToast("Различий с RssV7 не найдено.", "success");
+                    return;
+                }
+
+                changes.forEach(function (ch, idx) {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td>
+                          <input type="checkbox"
+                                 data-role="sync-row-check"
+                                 data-index="${idx}"
+                                 checked>
+                        </td>
+                        <td>${ch.server_name || ""}</td>
+                        <td>${ch.farm_name || ""}</td>
+                        <td>${formatFieldName(ch.field)}</td>
+                        <td>${escapeHtml(ch.local || "")}</td>
+                        <td>${escapeHtml(ch.remote || "")}</td>
+                    `;
+                    tr.dataset.change = JSON.stringify(ch);
+                    syncTableBody.appendChild(tr);
+                });
+
+                openSyncModal();
+            } catch (e) {
+                console.error("sync-preview error:", e);
+                showToast("Ошибка синхронизации (см. консоль).", "error");
+            } finally {
+                setBtnLoading(syncBtn, false, syncSpinner);
+            }
+        });
+    }
+
+    function formatFieldName(field) {
+        switch (field) {
+            case "email": return "E-mail";
+            case "password": return "Пароль";
+            case "igg_id": return "IGG ID";
+            case "server": return "Сервер аккаунта";
+            case "telegram": return "Telegram";
+            case "next_payment_at": return "След. оплата";
+            case "tariff": return "Тариф, ₽";
+            default: return field;
+        }
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement("div");
+        div.innerText = text;
+        return div.innerHTML;
+    }
+
+    const applyBtn = document.querySelector('[data-role="sync-apply"]');
+    if (applyBtn) {
+        applyBtn.addEventListener("click", async function () {
+            const rows = Array.from(syncTableBody.querySelectorAll("tr"));
+
+            const changesToApply = [];
+
+            rows.forEach(function (tr) {
+                const cb = tr.querySelector('input[type="checkbox"][data-role="sync-row-check"]');
+                if (!cb || !cb.checked) return;
+
+                const raw = tr.dataset.change;
+                if (!raw) return;
+
+                try {
+                    const ch = JSON.parse(raw);
+                    changesToApply.push({
+                        account_id: ch.account_id,
+                        field: ch.field,
+                        remote: ch.remote
+                    });
+                } catch (e) {
+                    console.warn("Bad change data:", e);
+                }
+            });
+
+            if (!changesToApply.length) {
+                showToast("Не выбрано ни одного изменения.", "info");
+                return;
+            }
+
+            applyBtn.disabled = true;
+            try {
+                const resp = await fetch("/admin/farm-data/sync-apply", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify({ changes: changesToApply })
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка применения изменений.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка применения.", "error");
+                    return;
+                }
+
+                showToast("Изменения успешно применены.", "success");
+                closeSyncModal();
+                window.location.reload();
+            } catch (e) {
+                console.error("sync-apply error:", e);
+                showToast("Ошибка применения (см. консоль).", "error");
+            } finally {
+                applyBtn.disabled = false;
+            }
+        });
+    }
+});
+</script>
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+    function setBtnLoading(btn, isLoading, spinnerEl) {
+        if (!btn) return;
+        if (!spinnerEl) spinnerEl = btn.querySelector(".btn-spinner");
+        if (isLoading) {
+            btn.disabled = true;
+            if (spinnerEl) spinnerEl.hidden = false;
+        } else {
+            btn.disabled = false;
+            if (spinnerEl) spinnerEl.hidden = true;
+        }
+    }
+
+    if (typeof window.showToast !== "function") {
+        window.showToast = function (message, type) {
+            alert((type ? "[" + type + "] " : "") + message);
+        };
+    }
+
+    function formatFarmLabel(tr) {
+        if (!tr) return "ферма";
+        const owner = tr.dataset.ownerName || "";
+        const farm = tr.dataset.farmName || "";
+        if (owner && farm) {
+            return owner + " / " + farm;
+        }
+        return farm || owner || "ферма";
+    }
+
+    function normalizeDateInput(rawValue) {
+        const trimmed = (rawValue || "").trim();
+        if (!trimmed) {
+            return { normalized: "", isValid: true };
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+            return { normalized: trimmed, isValid: true };
+        }
+        const match = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+        if (match) {
+            let [, day, month, year] = match;
+            day = day.padStart(2, "0");
+            month = month.padStart(2, "0");
+            if (year.length === 2) {
+                const yearNum = parseInt(year, 10);
+                year = (yearNum >= 70 ? 1900 + yearNum : 2000 + yearNum).toString();
+            } else if (year.length === 3) {
+                year = year.padStart(4, "0");
+            }
+            return { normalized: `${year}-${month}-${day}`, isValid: true };
+        }
+        return { normalized: "", isValid: false };
+    }
+
+    function normalizeTariffInput(rawValue) {
+        if (rawValue === null || rawValue === undefined) {
+            return { normalized: "", isValid: true };
+        }
+        const trimmed = rawValue.toString().trim();
+        if (!trimmed) {
+            return { normalized: "", isValid: true };
+        }
+        const noSpaces = trimmed.replace(/\s+/g, "");
+        let cleaned = noSpaces;
+        if (/[.,]/.test(noSpaces)) {
+            if (!/^\d{1,3}([.,]\d{3})+$/.test(noSpaces)) {
+                return { normalized: "", isValid: false };
+            }
+            cleaned = noSpaces.replace(/[.,]/g, "");
+        }
+        if (/^\d+$/.test(cleaned)) {
+            const normalized = cleaned.replace(/^0+(?=\d)/, "") || "0";
+            return { normalized, isValid: true };
+        }
+        return { normalized: "", isValid: false };
+    }
+
+    document.addEventListener("input", function (e) {
+        const target = e.target;
+        if (target.matches('input[name="igg_id"]')) {
+            const digits = target.value.replace(/\\D+/g, "");
+            if (target.value !== digits) {
+                target.value = digits;
+            }
+        }
+    });
+
+    document.addEventListener("input", function (e) {
+        const searchInput = e.target.closest('[data-role="admin-farmdata-search"]');
+        if (!searchInput) return;
+
+        const query = searchInput.value.trim().toLowerCase();
+        const table = document.querySelector('[data-role="admin-farmdata-table"]');
+        if (!table) return;
+
+        const rows = table.querySelectorAll("tbody tr[data-account-id]");
+        rows.forEach(function (tr) {
+            const text = tr.textContent.toLowerCase();
+            tr.style.display = text.includes(query) ? "" : "none";
+        });
+    });
+
+    document.addEventListener("click", async function (e) {
+        const btn = e.target.closest('[data-role="farmdata-save"]');
+        if (!btn) return;
+
+        const table = document.querySelector('[data-role="admin-farmdata-table"]');
+        if (!table) {
+            showToast("Таблица не найдена.", "error");
+            return;
+        }
+
+        const rows = table.querySelectorAll("tbody tr[data-account-id]");
+        const items = [];
+        const formatWarnings = [];
+
+        rows.forEach(function (tr) {
+            const accountId = tr.dataset.accountId;
+            if (!accountId) return;
+            const farmLabel = formatFarmLabel(tr);
+
+            function val(selector) {
+                const el = tr.querySelector(selector);
+                return el && el.value ? el.value.trim() : "";
+            }
+
+            const nextPaymentInput = val('input[name="next_payment_date"]');
+            const nextPaymentResult = normalizeDateInput(nextPaymentInput);
+            if (!nextPaymentResult.isValid && nextPaymentInput) {
+                formatWarnings.push(`«След. оплата» — ${farmLabel}`);
+            }
+
+            const tariffInput = val('input[name="tariff"]');
+            const tariffResult = normalizeTariffInput(tariffInput);
+            if (!tariffResult.isValid && tariffInput) {
+                formatWarnings.push(`«Тариф» — ${farmLabel}`);
+            }
+
+            items.push({
+                account_id: accountId,
+                email: val('input[name="email"]'),
+                password: val('input[name="password"]'),
+                igg_id: val('input[name="igg_id"]'),
+                server: val('input[name="server"]'),
+                telegram_tag: val('input[name="telegram_tag"]'),
+                next_payment_date: nextPaymentResult.isValid
+                    ? nextPaymentResult.normalized
+                    : nextPaymentInput,
+                tariff: tariffResult.isValid
+                    ? tariffResult.normalized
+                    : tariffInput
+                next_payment_date: val('input[name="next_payment_date"]'),
+                tariff: val('input[name="tariff"]')
             });
         });
 

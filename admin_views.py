@@ -20,6 +20,24 @@ from werkzeug.security import generate_password_hash
 
 from models import Account, FarmData, Server, User, db
 from services.remote_api import fetch_rssv7_accounts_meta
+import re
+from datetime import datetime
+
+from flask import (
+    Blueprint,
+    abort,
+    flash,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
+from flask_login import current_user, login_required
+from werkzeug.security import generate_password_hash
+
+from models import Account, FarmData, Server, User, db
+from services.remote_api import fetch_rssv7_accounts_meta
 
 
 
@@ -498,6 +516,53 @@ def admin_farm_data_save():
         for row in items:
             acc_id = int(row.get("account_id", 0))
             acc = Account.query.filter_by(id=acc_id).first()
+    data = request.get_json(silent=True) or {}
+    items = data.get("items") or []
+
+    def parse_next_payment(raw_value):
+        if not raw_value:
+            return None
+        value = raw_value.strip()
+        if not value:
+            return None
+        formats = (
+            "%Y-%m-%d",
+            "%d.%m.%Y",
+            "%d.%m.%y",
+            "%d/%m/%Y",
+            "%d/%m/%y",
+            "%d-%m-%Y",
+            "%d-%m-%y",
+        )
+        for fmt in formats:
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def parse_tariff(raw_value):
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, (int, float)):
+            return int(raw_value)
+        value = str(raw_value).strip()
+        if not value:
+            return None
+        no_spaces = value.replace(" ", "")
+        cleaned = no_spaces
+        if "," in no_spaces or "." in no_spaces:
+            if not re.fullmatch(r"\d{1,3}([.,]\d{3})+", no_spaces):
+                return None
+            cleaned = no_spaces.replace(",", "").replace(".", "")
+        return int(cleaned) if cleaned.isdigit() else None
+
+    warnings: list[str] = []
+
+    try:
+        for row in items:
+            acc_id = int(row.get("account_id", 0))
+            acc = Account.query.filter_by(id=acc_id).first()
             if not acc:
                 continue
 
@@ -511,10 +576,38 @@ def admin_farm_data_save():
 
             fd.email = (row.get("email") or "").strip() or None
             fd.password = (row.get("password") or "").strip() or None
+            fd.password = (row.get("password") or "").strip() or None
             fd.igg_id = (row.get("igg_id") or "").strip() or None
             fd.server = (row.get("server") or "").strip() or None
             fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
 
+            # обновим тариф и оплату
+            next_payment_raw = row.get("next_payment_date")
+            if next_payment_raw:
+                parsed_dt = parse_next_payment(next_payment_raw)
+                if parsed_dt:
+                    acc.next_payment_at = parsed_dt
+                else:
+                    warnings.append(
+                        f"{acc.name}: не удалось распознать дату '{next_payment_raw}'"
+                    )
+            else:
+                acc.next_payment_at = None
+
+            tariff_raw = row.get("tariff")
+            if tariff_raw is None or str(tariff_raw).strip() == "":
+                acc.next_payment_amount = None
+            else:
+                parsed_tariff = parse_tariff(tariff_raw)
+                if parsed_tariff is not None:
+                    acc.next_payment_amount = parsed_tariff
+                else:
+                    warnings.append(
+                        f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
+                    )
+
+        db.session.commit()
+        return jsonify({"ok": True, "warnings": warnings})
             # обновим тариф и оплату
             next_payment_raw = row.get("next_payment_date")
             if next_payment_raw:
