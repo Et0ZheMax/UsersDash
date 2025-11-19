@@ -302,7 +302,9 @@
                             {% set acc = item.account %}
                             {% set owner = item.owner %}
                             {% set fd = item.farmdata %}
-                            <tr data-account-id="{{ acc.id }}">
+                            <tr data-account-id="{{ acc.id }}"
+                                data-owner-name="{{ owner.username }}"
+                                data-farm-name="{{ acc.name }}">
                                 <td>
                                     <div class="farmdata-name-main">
                                         {{ owner.username }}
@@ -475,6 +477,63 @@ document.addEventListener("DOMContentLoaded", function () {
         };
     }
 
+    function formatFarmLabel(tr) {
+        if (!tr) return "ферма";
+        const owner = tr.dataset.ownerName || "";
+        const farm = tr.dataset.farmName || "";
+        if (owner && farm) {
+            return owner + " / " + farm;
+        }
+        return farm || owner || "ферма";
+    }
+
+    function normalizeDateInput(rawValue) {
+        const trimmed = (rawValue || "").trim();
+        if (!trimmed) {
+            return { normalized: "", isValid: true };
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+            return { normalized: trimmed, isValid: true };
+        }
+        const match = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+        if (match) {
+            let [, day, month, year] = match;
+            day = day.padStart(2, "0");
+            month = month.padStart(2, "0");
+            if (year.length === 2) {
+                const yearNum = parseInt(year, 10);
+                year = (yearNum >= 70 ? 1900 + yearNum : 2000 + yearNum).toString();
+            } else if (year.length === 3) {
+                year = year.padStart(4, "0");
+            }
+            return { normalized: `${year}-${month}-${day}`, isValid: true };
+        }
+        return { normalized: "", isValid: false };
+    }
+
+    function normalizeTariffInput(rawValue) {
+        if (rawValue === null || rawValue === undefined) {
+            return { normalized: "", isValid: true };
+        }
+        const trimmed = rawValue.toString().trim();
+        if (!trimmed) {
+            return { normalized: "", isValid: true };
+        }
+        const noSpaces = trimmed.replace(/\s+/g, "");
+        let cleaned = noSpaces;
+        if (/[.,]/.test(noSpaces)) {
+            if (!/^\d{1,3}([.,]\d{3})+$/.test(noSpaces)) {
+                return { normalized: "", isValid: false };
+            }
+            cleaned = noSpaces.replace(/[.,]/g, "");
+        }
+        if (/^\d+$/.test(cleaned)) {
+            const normalized = cleaned.replace(/^0+(?=\d)/, "") || "0";
+            return { normalized, isValid: true };
+        }
+        return { normalized: "", isValid: false };
+    }
+
     document.addEventListener("input", function (e) {
         const target = e.target;
         if (target.matches('input[name="igg_id"]')) {
@@ -512,14 +571,28 @@ document.addEventListener("DOMContentLoaded", function () {
 
         const rows = table.querySelectorAll("tbody tr[data-account-id]");
         const items = [];
+        const formatWarnings = [];
 
         rows.forEach(function (tr) {
             const accountId = tr.dataset.accountId;
             if (!accountId) return;
+            const farmLabel = formatFarmLabel(tr);
 
             function val(selector) {
                 const el = tr.querySelector(selector);
                 return el && el.value ? el.value.trim() : "";
+            }
+
+            const nextPaymentInput = val('input[name="next_payment_date"]');
+            const nextPaymentResult = normalizeDateInput(nextPaymentInput);
+            if (!nextPaymentResult.isValid && nextPaymentInput) {
+                formatWarnings.push(`«След. оплата» — ${farmLabel}`);
+            }
+
+            const tariffInput = val('input[name="tariff"]');
+            const tariffResult = normalizeTariffInput(tariffInput);
+            if (!tariffResult.isValid && tariffInput) {
+                formatWarnings.push(`«Тариф» — ${farmLabel}`);
             }
 
             items.push({
@@ -529,6 +602,12 @@ document.addEventListener("DOMContentLoaded", function () {
                 igg_id: val('input[name="igg_id"]'),
                 server: val('input[name="server"]'),
                 telegram_tag: val('input[name="telegram_tag"]'),
+                next_payment_date: nextPaymentResult.isValid
+                    ? nextPaymentResult.normalized
+                    : nextPaymentInput,
+                tariff: tariffResult.isValid
+                    ? tariffResult.normalized
+                    : tariffInput
                 next_payment_date: val('input[name="next_payment_date"]'),
                 tariff: val('input[name="tariff"]')
             });
@@ -537,6 +616,14 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!items.length) {
             showToast("Нет данных для сохранения.", "info");
             return;
+        }
+
+        let pendingFormatMessage = null;
+        if (formatWarnings.length) {
+            const summary = formatWarnings.slice(0, 3).join("; ");
+            pendingFormatMessage =
+                "Сохраняем в том виде, как введено: " + summary +
+                (formatWarnings.length > 3 ? " ..." : "");
         }
 
         setBtnLoading(btn, true);
@@ -553,6 +640,12 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             showToast("Данные ферм сохранены.", "success");
+            if (pendingFormatMessage) {
+                showToast(pendingFormatMessage, "info");
+            }
+            if (Array.isArray(data.warnings) && data.warnings.length) {
+                showToast(data.warnings.join(" | "), "info");
+            }
         } catch (err) {
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
