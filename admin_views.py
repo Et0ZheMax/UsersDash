@@ -2,25 +2,22 @@
 # Маршруты админ-панели: общий дашборд, пользователи, сервера, фермы.
 # Здесь только админская логика, доступная пользователям с role='admin'.
 
+from datetime import datetime
+
 from flask import (
     Blueprint,
-    render_template,
     abort,
-    redirect,
-    url_for,
-    request,
     flash,
-    jsonify,  # <-- добавили jsonify
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
 )
-from flask_login import login_required, current_user
+from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
-from flask import Blueprint, render_template, request, jsonify, abort
-from models import db, User, Account, Server, FarmData
-from datetime import datetime
-from flask import Blueprint, render_template, jsonify, request
-from flask_login import login_required, current_user
 
-from models import db, Account, FarmData, Server
+from models import Account, FarmData, Server, User, db
 from services.remote_api import fetch_rssv7_accounts_meta
 
 
