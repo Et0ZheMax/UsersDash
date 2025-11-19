@@ -4,13 +4,22 @@
 # - /api/serverStatus     — health-check (для админского лога)
 # - /api/manage/account/... — настройки шагов (manage)
 
-from typing import Dict, Any, List, Tuple, Optional
+from __future__ import annotations
+
+import logging
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
+from requests import RequestException
+
+from models import Server
 
 
 # Таймауты для HTTP-запросов (в секундах)
 DEFAULT_TIMEOUT = 15
+
+log = logging.getLogger(__name__)
 
 
 def _get_effective_api_base(server) -> Optional[str]:
@@ -355,16 +364,6 @@ def update_account_step_settings(account, step_idx: int, payload: Dict[str, Any]
     except Exception as exc:
         print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
         return False, str(exc)
-
-import logging
-from typing import List, Dict, Tuple
-
-import requests
-from requests import RequestException
-
-from models import Server
-
-log = logging.getLogger(__name__)
 
 
 def _build_server_base_url(server: Server) -> str:
