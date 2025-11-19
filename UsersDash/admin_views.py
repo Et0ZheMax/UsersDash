@@ -492,60 +492,61 @@ def admin_farm_data_save():
             cleaned = no_spaces.replace(",", "").replace(".", "")
         return int(cleaned) if cleaned.isdigit() else None
 
-    warnings: list[str] = []
+    warnings = []
+
+    for row in items:
+        acc_id = int(row.get("account_id", 0))
+        acc = Account.query.filter_by(id=acc_id).first()
+        if not acc:
+            continue
+
+        fd = FarmData.query.filter_by(
+            user_id=acc.owner_id, farm_name=acc.name
+        ).first()
+
+        if not fd:
+            fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
+            db.session.add(fd)
+
+        fd.email = (row.get("email") or "").strip() or None
+        fd.password = (row.get("password") or "").strip() or None
+        fd.igg_id = (row.get("igg_id") or "").strip() or None
+        fd.server = (row.get("server") or "").strip() or None
+        fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
+
+        # обновим тариф и оплату
+        next_payment_raw = row.get("next_payment_date")
+        if next_payment_raw:
+            parsed_dt = parse_next_payment(next_payment_raw)
+            if parsed_dt:
+                acc.next_payment_at = parsed_dt
+            else:
+                warnings.append(
+                    f"{acc.name}: не удалось распознать дату '{next_payment_raw}'"
+                )
+        else:
+            acc.next_payment_at = None
+
+        tariff_raw = row.get("tariff")
+        if tariff_raw is None or str(tariff_raw).strip() == "":
+            acc.next_payment_amount = None
+        else:
+            parsed_tariff = parse_tariff(tariff_raw)
+            if parsed_tariff is not None:
+                acc.next_payment_amount = parsed_tariff
+            else:
+                warnings.append(
+                    f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
+                )
 
     try:
-        for row in items:
-            acc_id = int(row.get("account_id", 0))
-            acc = Account.query.filter_by(id=acc_id).first()
-            if not acc:
-                continue
-
-            fd = FarmData.query.filter_by(
-                user_id=acc.owner_id, farm_name=acc.name
-            ).first()
-
-            if not fd:
-                fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
-                db.session.add(fd)
-
-            fd.email = (row.get("email") or "").strip() or None
-            fd.password = (row.get("password") or "").strip() or None
-            fd.igg_id = (row.get("igg_id") or "").strip() or None
-            fd.server = (row.get("server") or "").strip() or None
-            fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
-
-            # обновим тариф и оплату
-            next_payment_raw = row.get("next_payment_date")
-            if next_payment_raw:
-                parsed_dt = parse_next_payment(next_payment_raw)
-                if parsed_dt:
-                    acc.next_payment_at = parsed_dt
-                else:
-                    warnings.append(
-                        f"{acc.name}: не удалось распознать дату '{next_payment_raw}'"
-                    )
-            else:
-                acc.next_payment_at = None
-
-            tariff_raw = row.get("tariff")
-            if tariff_raw is None or str(tariff_raw).strip() == "":
-                acc.next_payment_amount = None
-            else:
-                parsed_tariff = parse_tariff(tariff_raw)
-                if parsed_tariff is not None:
-                    acc.next_payment_amount = parsed_tariff
-                else:
-                    warnings.append(
-                        f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
-                    )
-
         db.session.commit()
-        return jsonify({"ok": True, "warnings": warnings})
     except Exception as e:
         db.session.rollback()
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
+
+    return jsonify({"ok": True, "warnings": warnings})
 
 @admin_bp.route("/farm-data/sync-preview", methods=["GET"])
 @login_required
