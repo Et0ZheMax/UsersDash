@@ -471,7 +471,6 @@ def admin_farm_data_save():
                 db.session.add(fd)
 
             fd.email = (row.get("email") or "").strip() or None
-            fd.login = (row.get("login") or "").strip() or None
             fd.password = (row.get("password") or "").strip() or None
             fd.igg_id = (row.get("igg_id") or "").strip() or None
             fd.server = (row.get("server") or "").strip() or None

@@ -288,7 +288,6 @@
                         <th>Клиент</th>
                         <th>Ферма</th>
                         <th>E-mail</th>
-                        <th>Логин</th>
                         <th>Пароль</th>
                         <th>IGG ID</th>
                         <th>Королевство</th>
@@ -323,13 +322,6 @@
                                            name="email"
                                            placeholder="email@example.com"
                                            value="{{ fd.email if fd and fd.email else '' }}">
-                                </td>
-                                <td>
-                                    <input class="farmdata-input"
-                                           type="text"
-                                           name="login"
-                                           placeholder="Логин"
-                                           value="{{ fd.login if fd and fd.login else '' }}">
                                 </td>
                                 <td>
                                     <input class="farmdata-input"
@@ -464,7 +456,25 @@
 </div>
 
 <script>
-    // IGG ID — только цифры
+document.addEventListener("DOMContentLoaded", function () {
+    function setBtnLoading(btn, isLoading, spinnerEl) {
+        if (!btn) return;
+        if (!spinnerEl) spinnerEl = btn.querySelector(".btn-spinner");
+        if (isLoading) {
+            btn.disabled = true;
+            if (spinnerEl) spinnerEl.hidden = false;
+        } else {
+            btn.disabled = false;
+            if (spinnerEl) spinnerEl.hidden = true;
+        }
+    }
+
+    if (typeof window.showToast !== "function") {
+        window.showToast = function (message, type) {
+            alert((type ? "[" + type + "] " : "") + message);
+        };
+    }
+
     document.addEventListener("input", function (e) {
         const target = e.target;
         if (target.matches('input[name="igg_id"]')) {
@@ -475,7 +485,6 @@
         }
     });
 
-    // Живой поиск по таблице (клиент, ферма, сервер, email, igg и т.д.)
     document.addEventListener("input", function (e) {
         const searchInput = e.target.closest('[data-role="admin-farmdata-search"]');
         if (!searchInput) return;
@@ -491,9 +500,8 @@
         });
     });
 
-    // Сохранение таблицы (использует /admin/farm-data/save, который мы уже сделали)
     document.addEventListener("click", async function (e) {
-        const btn = e.target.closest('[data-action="admin-farmdata-save"]');
+        const btn = e.target.closest('[data-role="farmdata-save"]');
         if (!btn) return;
 
         const table = document.querySelector('[data-role="admin-farmdata-table"]');
@@ -506,10 +514,6 @@
         const items = [];
 
         rows.forEach(function (tr) {
-            if (tr.style.display === "none") {
-                // Скрытые строки тоже можно сохранять,
-                // но логичнее сохранить всё — не фильтруем тут.
-            }
             const accountId = tr.dataset.accountId;
             if (!accountId) return;
 
@@ -521,7 +525,6 @@
             items.push({
                 account_id: accountId,
                 email: val('input[name="email"]'),
-                login: val('input[name="login"]'),
                 password: val('input[name="password"]'),
                 igg_id: val('input[name="igg_id"]'),
                 server: val('input[name="server"]'),
@@ -529,7 +532,6 @@
                 next_payment_date: val('input[name="next_payment_date"]'),
                 tariff: val('input[name="tariff"]')
             });
-
         });
 
         if (!items.length) {
@@ -537,12 +539,12 @@
             return;
         }
 
-        setButtonLoading(btn, true);
+        setBtnLoading(btn, true);
         try {
             const resp = await fetch("/admin/farm-data/save", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ items: items })
+                body: JSON.stringify({ items })
             });
             const data = await resp.json().catch(() => ({}));
 
@@ -555,11 +557,10 @@
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
         } finally {
-            setButtonLoading(btn, false);
+            setBtnLoading(btn, false);
         }
     });
 
-    // Кнопка "TG" в админской таблице: открывает https://t.me/<ник>
     document.addEventListener("click", function (e) {
         const btn = e.target.closest('[data-role="open-telegram-from-row"]');
         if (!btn) return;
@@ -576,36 +577,11 @@
             return;
         }
 
-        const tag = raw.replace(/^@+/, "");  // убираем лишние @
+        const tag = raw.replace(/^@+/, "");
         const url = "https://t.me/" + encodeURIComponent(tag);
         window.open(url, "_blank");
     });
 
-
-    <script>
-document.addEventListener("DOMContentLoaded", function () {
-    // --- Утилиты -------------------------------------------------------------
-    function setBtnLoading(btn, isLoading, spinnerEl) {
-        if (!btn) return;
-        if (!spinnerEl) spinnerEl = btn.querySelector(".btn-spinner");
-
-        if (isLoading) {
-            btn.disabled = true;
-            if (spinnerEl) spinnerEl.hidden = false;
-        } else {
-            btn.disabled = false;
-            if (spinnerEl) spinnerEl.hidden = true;
-        }
-    }
-
-    // Если showToast уже есть глобально - не переопределяем
-    if (typeof window.showToast !== "function") {
-        window.showToast = function (message, type) {
-            alert((type ? "[" + type + "] " : "") + message);
-        };
-    }
-
-    // --- Открытие/закрытие модалки ------------------------------------------
     const syncModal = document.querySelector('[data-role="sync-modal"]');
     const syncTableBody = document.querySelector('[data-role="sync-table"] tbody');
     const syncErrors = document.querySelector('[data-role="sync-errors"]');
@@ -634,7 +610,6 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
-    // --- Превью синхронизации -----------------------------------------------
     const syncBtn = document.querySelector('[data-role="farmdata-sync"]');
     const syncSpinner = document.querySelector('[data-role="farmdata-sync-spinner"]');
 
@@ -677,7 +652,6 @@ document.addEventListener("DOMContentLoaded", function () {
                     return;
                 }
 
-                // Строим строки diff
                 changes.forEach(function (ch, idx) {
                     const tr = document.createElement("tr");
                     tr.innerHTML = `
@@ -693,7 +667,6 @@ document.addEventListener("DOMContentLoaded", function () {
                         <td>${escapeHtml(ch.local || "")}</td>
                         <td>${escapeHtml(ch.remote || "")}</td>
                     `;
-                    // сохраняем оригинальный объект diff на строку
                     tr.dataset.change = JSON.stringify(ch);
                     syncTableBody.appendChild(tr);
                 });
@@ -727,13 +700,10 @@ document.addEventListener("DOMContentLoaded", function () {
         return div.innerHTML;
     }
 
-    // --- Применение выбранных изменений -------------------------------------
     const applyBtn = document.querySelector('[data-role="sync-apply"]');
     if (applyBtn) {
         applyBtn.addEventListener("click", async function () {
-            const rows = Array.from(
-                syncTableBody.querySelectorAll("tr")
-            );
+            const rows = Array.from(syncTableBody.querySelectorAll("tr"));
 
             const changesToApply = [];
 
@@ -746,7 +716,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
                 try {
                     const ch = JSON.parse(raw);
-                    // Для применения нам достаточно account_id, field и remote
                     changesToApply.push({
                         account_id: ch.account_id,
                         field: ch.field,
@@ -786,7 +755,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
                 showToast("Изменения успешно применены.", "success");
                 closeSyncModal();
-                // После применения обновим страницу, чтобы увидеть обновлённые значения
                 window.location.reload();
             } catch (e) {
                 console.error("sync-apply error:", e);
@@ -797,11 +765,6 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 });
-</script>
-
-
-
-
 </script>
 
 {% endblock %}
