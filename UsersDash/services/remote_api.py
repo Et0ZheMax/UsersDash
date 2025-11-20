@@ -246,7 +246,7 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
 
     result: Dict[int, Dict[str, Any]] = {}
 
-    from models import Server  # локальный импорт, чтобы избежать циклов
+    from UsersDash.models import Server  # локальный импорт, чтобы избежать циклов
 
     for server_id, acc_list in by_server.items():
         server = Server.query.get(server_id)
@@ -362,7 +362,7 @@ from typing import List, Dict, Tuple
 import requests
 from requests import RequestException
 
-from models import Server
+from UsersDash.models import Server
 
 log = logging.getLogger(__name__)
 

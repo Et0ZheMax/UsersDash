@@ -15,13 +15,13 @@ from flask import Flask, redirect, url_for
 from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
 
-from config import Config
-from models import db, User, Server, Account, FarmData
-from auth import auth_bp
-from admin_views import admin_bp
-from client_views import client_bp
-from api_views import api_bp
-from services.db_backup import backup_database, ensure_backup_dir
+from UsersDash.config import Config
+from UsersDash.models import db, User, Server, Account, FarmData
+from UsersDash.auth import auth_bp
+from UsersDash.admin_views import admin_bp
+from UsersDash.client_views import client_bp
+from UsersDash.api_views import api_bp
+from UsersDash.services.db_backup import backup_database, ensure_backup_dir
 
 
 # -------------------------------------------------
@@ -294,6 +294,9 @@ if __name__ == "__main__":
     relaunch_as_admin_if_needed()
 
     # Создаём и запускаем Flask-приложение
-    application = create_app()
+    app = create_app()
     # Для разработки — debug=True. В проде лучше выключить.
-    application.run(host="0.0.0.0", port=5555, debug=True)
+    app.run(host="0.0.0.0", port=5555, debug=True)
+else:
+    # Экземпляр для WSGI/CLI-запуска (gunicorn, flask run --app UsersDash.app и т.п.)
+    app = create_app()
