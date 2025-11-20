@@ -4,6 +4,7 @@
 
 import re
 from datetime import datetime
+import traceback
 
 from flask import (
     Blueprint,
@@ -19,6 +20,7 @@ from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
 
 from models import Account, FarmData, Server, User, db
+from services.db_backup import backup_database
 from services.remote_api import fetch_rssv7_accounts_meta
 
 
@@ -33,6 +35,27 @@ def admin_required():
     """
     if not current_user.is_authenticated or current_user.role != "admin":
         abort(403)
+
+
+def _get_unassigned_user():
+    """
+    Возвращает "служебного" пользователя для новых импортированных ферм,
+    у которых пока не выбран клиент. Если его нет — создаёт неактивного
+    клиента с предсказуемым логином и паролем.
+    """
+    placeholder = User.query.filter_by(username="unassigned").first()
+    if placeholder:
+        return placeholder
+
+    placeholder = User(
+        username="unassigned",
+        role="client",
+        is_active=False,
+        password_hash=generate_password_hash("changeme"),
+    )
+    db.session.add(placeholder)
+    db.session.commit()
+    return placeholder
 
 
 # -------------------- Общий дашборд админа --------------------
@@ -768,3 +791,246 @@ def admin_farm_data_sync_apply():
         return jsonify({"ok": False, "error": "Ошибка при применении изменений"}), 500
 
     return jsonify({"ok": True})
+
+
+@admin_bp.route("/farm-data/pull-preview", methods=["GET"])
+@login_required
+def admin_farm_data_pull_preview():
+    """
+    Запрашивает все аккаунты со всех активных серверов RssV7 и возвращает
+    плоский список для предпросмотра импорта в UsersDash.
+
+    Формат ответа:
+    {
+      "ok": true,
+      "items": [
+        {
+          "server_id": 1,
+          "server_name": "F99",
+          "account_id": 123,               # None, если не нашли локально
+          "owner_name": "client1",
+          "farm_name": "FarmA",
+          "internal_id": "GUID",
+          "remote": {...},                # email/password/igg/server/telegram/next_payment_at/tariff
+          "local": {...},                 # те же поля, но из UsersDash
+          "can_apply": true/false
+        }, ...
+      ],
+      "errors": ["..."]
+    }
+    """
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    servers = (
+        Server.query.filter(Server.is_active.is_(True)).order_by(Server.name).all()
+    )
+
+    items: list[dict] = []
+    errors: list[str] = []
+
+    for srv in servers:
+        remote_items, err = fetch_rssv7_accounts_meta(srv)
+        if err:
+            errors.append(f"{srv.name}: {err}")
+            continue
+
+        accounts = Account.query.filter_by(server_id=srv.id).all()
+        acc_by_internal = {acc.internal_id: acc for acc in accounts if acc.internal_id}
+        acc_by_name = {acc.name: acc for acc in accounts}
+
+        farm_names = {acc.name for acc in accounts}
+        fd_entries = (
+            FarmData.query.filter(
+                FarmData.farm_name.in_(farm_names)
+            ).all()
+        )
+        fd_by_key = {(fd.user_id, fd.farm_name): fd for fd in fd_entries}
+
+        for item in remote_items:
+            internal_id = item.get("id") or item.get("internal_id")
+            name = item.get("name")
+
+            acc = None
+            if internal_id and internal_id in acc_by_internal:
+                acc = acc_by_internal[internal_id]
+            elif name and name in acc_by_name:
+                acc = acc_by_name[name]
+
+            fd = None
+            owner_name = ""
+            if acc:
+                fd = fd_by_key.get((acc.owner_id, acc.name))
+                owner_name = acc.owner.username if acc.owner else ""
+
+            local_data = {
+                "email": (fd.email if fd and fd.email else ""),
+                "password": (fd.password if fd and fd.password else ""),
+                "igg_id": (fd.igg_id if fd and fd.igg_id else ""),
+                "server": (fd.server if fd and fd.server else ""),
+                "telegram": (fd.telegram_tag if fd and fd.telegram_tag else ""),
+                "next_payment_at": acc.next_payment_at.strftime("%Y-%m-%d")
+                if acc and acc.next_payment_at
+                else "",
+                "tariff": acc.next_payment_amount
+                if acc and acc.next_payment_amount is not None
+                else "",
+            }
+
+            remote_data = {
+                "email": item.get("email") or "",
+                "password": item.get("passwd") or "",
+                "igg_id": item.get("igg") or "",
+                "server": item.get("server") or "",
+                "telegram": item.get("tg_tag") or "",
+                "next_payment_at": item.get("pay_until") or "",
+                "tariff": item.get("tariff_rub") if item.get("tariff_rub") is not None else "",
+            }
+
+            items.append(
+                {
+                    "server_id": srv.id,
+                    "server_name": srv.name,
+                    "account_id": acc.id if acc else None,
+                    "owner_name": owner_name,
+                    "farm_name": name or "",
+                    "internal_id": internal_id or "",
+                    "remote": remote_data,
+                    "local": local_data,
+                    "can_apply": True,  # даём выбрать и существующие, и новые
+                    "is_new": acc is None,
+                }
+            )
+
+    return jsonify({"ok": True, "items": items, "errors": errors})
+
+
+@admin_bp.route("/farm-data/pull-apply", methods=["POST"])
+@login_required
+def admin_farm_data_pull_apply():
+    """
+    Применяет данные, полученные через pull-preview.
+
+    Ожидает JSON:
+    {
+      "items": [
+        {
+          "account_id": 123,
+          "email": "...",
+          "password": "...",
+          "igg_id": "...",
+          "server": "...",
+          "telegram": "...",
+          "next_payment_at": "YYYY-MM-DD",
+          "tariff": 900
+        },
+        ...
+      ]
+    }
+    """
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    rows = payload.get("items") or []
+    if not isinstance(rows, list) or not rows:
+        return jsonify({"ok": False, "error": "Нет данных для применения"}), 400
+
+    updated = 0
+    warnings: list[str] = []
+
+    try:
+        try:
+            backup_path = backup_database("before_pull_apply")
+            print(f"[farm-data pull-apply] Backup created: {backup_path}")
+        except Exception:
+            warnings.append("Не удалось создать бэкап перед применением.")
+            traceback.print_exc()
+
+        placeholder_user = _get_unassigned_user()
+
+        for row in rows:
+            acc_id = row.get("account_id")
+            acc: Account | None = None
+
+            if acc_id is not None:
+                try:
+                    acc_id_int = int(acc_id)
+                except (TypeError, ValueError):
+                    acc_id_int = None
+
+                if acc_id_int is not None:
+                    acc = Account.query.filter_by(id=acc_id_int).first()
+
+            # Если не нашли аккаунт — создаём новый на указанном сервере
+            if acc is None:
+                srv_id = row.get("server_id")
+                try:
+                    srv_id_int = int(srv_id)
+                except (TypeError, ValueError):
+                    srv_id_int = None
+
+                farm_name = (row.get("farm_name") or "").strip()
+                if not farm_name or srv_id_int is None:
+                    warnings.append("Пропущена строка без сервера или имени фермы")
+                    continue
+
+                server_obj = Server.query.filter_by(id=srv_id_int).first()
+                if not server_obj:
+                    warnings.append(f"Сервер id={srv_id_int} не найден — строка пропущена")
+                    continue
+
+                acc = Account(
+                    name=farm_name,
+                    server_id=server_obj.id,
+                    owner_id=placeholder_user.id,
+                    internal_id=(row.get("internal_id") or "").strip() or None,
+                    is_active=True,
+                )
+                db.session.add(acc)
+
+            fd = FarmData.query.filter_by(
+                user_id=acc.owner_id,
+                farm_name=acc.name
+            ).first()
+            if not fd:
+                fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
+                db.session.add(fd)
+
+            fd.email = (row.get("email") or "").strip() or None
+            fd.password = (row.get("password") or "").strip() or None
+            fd.igg_id = (row.get("igg_id") or "").strip() or None
+            fd.server = (row.get("server") or "").strip() or None
+            fd.telegram_tag = (row.get("telegram") or "").strip() or None
+
+            pay_until_raw = (row.get("next_payment_at") or "").strip()
+            if pay_until_raw:
+                try:
+                    acc.next_payment_at = datetime.strptime(pay_until_raw, "%Y-%m-%d").date()
+                except ValueError:
+                    warnings.append(
+                        f"{acc.name}: не удалось разобрать дату '{pay_until_raw}'"
+                    )
+            else:
+                acc.next_payment_at = None
+
+            tariff_raw = row.get("tariff")
+            if tariff_raw in ("", None):
+                acc.next_payment_amount = None
+            else:
+                try:
+                    acc.next_payment_amount = int(tariff_raw)
+                except (TypeError, ValueError):
+                    warnings.append(
+                        f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
+                    )
+
+            updated += 1
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        print("[farm-data pull-apply] ERROR:", exc)
+        return jsonify({"ok": False, "error": "Ошибка при применении данных"}), 500
+
+    return jsonify({"ok": True, "updated": updated, "warnings": warnings})

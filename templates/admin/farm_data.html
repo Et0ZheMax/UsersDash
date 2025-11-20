@@ -208,6 +208,8 @@
         display: flex;
         justify-content: flex-end;
         margin-top: 0.75rem;
+        gap: 0.5rem;
+        flex-wrap: wrap;
     }
 
     .btn.btn-primary {
@@ -434,12 +436,68 @@
                         </div>
                     </div>
 
+                    <div class="modal" data-role="pull-modal" hidden>
+                        <div class="modal-backdrop" data-role="pull-modal-close"></div>
+                        <div class="modal-dialog">
+                            <div class="modal-header">
+                                <h3>Запрос данных с серверов</h3>
+                                <button type="button"
+                                        class="modal-close-btn"
+                                        data-role="pull-modal-close">&times;</button>
+                            </div>
+                            <div class="modal-body">
+                                <p class="sync-errors" data-role="pull-errors" style="display:none;"></p>
+
+                                <div class="sync-table-wrapper">
+                                    <table class="sync-table" data-role="pull-table">
+                                        <thead>
+                                        <tr>
+                                            <th><input type="checkbox" data-role="pull-check-all" checked></th>
+                                            <th>Статус</th>
+                                            <th>Сервер</th>
+                                            <th>Клиент</th>
+                                            <th>Ферма</th>
+                                            <th>Email</th>
+                                            <th>Пароль</th>
+                                            <th>IGG ID</th>
+                                            <th>След. оплата</th>
+                                            <th>Тариф, ₽</th>
+                                        </tr>
+                                        </thead>
+                                        <tbody data-role="pull-table-body">
+                                        <!-- строки будут подставляться JS -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button"
+                                        class="btn"
+                                        data-role="pull-modal-close">
+                                    Отмена
+                                </button>
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        data-role="pull-apply">
+                                    Добавить выбранные
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
 
 
                     </tbody>
                 </table>
             </div>
             <div class="farmdata-actions">
+                <button type="button"
+                        class="btn btn-secondary"
+                        data-role="farmdata-pull">
+                    Запрос данных
+                    <span class="btn-spinner" data-role="farmdata-pull-spinner" hidden></span>
+                </button>
+
                 <button type="button"
                         class="btn btn-secondary"
                         data-role="farmdata-sync">
@@ -678,6 +736,11 @@ document.addEventListener("DOMContentLoaded", function () {
     const syncErrors = document.querySelector('[data-role="sync-errors"]');
     const checkAll = document.querySelector('[data-role="sync-check-all"]');
 
+    const pullModal = document.querySelector('[data-role="pull-modal"]');
+    const pullTableBody = document.querySelector('[data-role="pull-table-body"]');
+    const pullErrors = document.querySelector('[data-role="pull-errors"]');
+    const pullCheckAll = document.querySelector('[data-role="pull-check-all"]');
+
     function openSyncModal() {
         if (!syncModal) return;
         syncModal.hidden = false;
@@ -692,6 +755,20 @@ document.addEventListener("DOMContentLoaded", function () {
         el.addEventListener("click", closeSyncModal);
     });
 
+    function openPullModal() {
+        if (!pullModal) return;
+        pullModal.hidden = false;
+    }
+
+    function closePullModal() {
+        if (!pullModal) return;
+        pullModal.hidden = true;
+    }
+
+    document.querySelectorAll('[data-role="pull-modal-close"]').forEach(function (el) {
+        el.addEventListener("click", closePullModal);
+    });
+
     if (checkAll) {
         checkAll.addEventListener("change", function () {
             const checked = this.checked;
@@ -701,8 +778,22 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    if (pullCheckAll) {
+        pullCheckAll.addEventListener("change", function () {
+            const checked = this.checked;
+            pullTableBody.querySelectorAll('input[type="checkbox"][data-role="pull-row-check"]').forEach(function (cb) {
+                if (cb.disabled) return;
+                cb.checked = checked;
+            });
+        });
+    }
+
     const syncBtn = document.querySelector('[data-role="farmdata-sync"]');
     const syncSpinner = document.querySelector('[data-role="farmdata-sync-spinner"]');
+
+    const pullBtn = document.querySelector('[data-role="farmdata-pull"]');
+    const pullSpinner = document.querySelector('[data-role="farmdata-pull-spinner"]');
+    const pullApplyBtn = document.querySelector('[data-role="pull-apply"]');
 
     if (syncBtn) {
         syncBtn.addEventListener("click", async function () {
@@ -738,6 +829,11 @@ document.addEventListener("DOMContentLoaded", function () {
                     syncErrors.style.display = "block";
                 }
 
+                if (errors.length && !changes.length) {
+                    showToast("RssV7 вернул ошибки (см. ниже).", "error");
+                    return;
+                }
+
                 if (!changes.length) {
                     showToast("Различий с RssV7 не найдено.", "success");
                     return;
@@ -768,6 +864,106 @@ document.addEventListener("DOMContentLoaded", function () {
                 showToast("Ошибка синхронизации (см. консоль).", "error");
             } finally {
                 setBtnLoading(syncBtn, false, syncSpinner);
+            }
+        });
+    }
+
+    if (pullBtn) {
+        pullBtn.addEventListener("click", async function () {
+            setBtnLoading(pullBtn, true, pullSpinner);
+
+            if (pullErrors) {
+                pullErrors.style.display = "none";
+                pullErrors.textContent = "";
+            }
+            if (pullTableBody) {
+                pullTableBody.innerHTML = "";
+            }
+
+            try {
+                const resp = await fetch("/admin/farm-data/pull-preview", {
+                    method: "GET",
+                    headers: { "Accept": "application/json" }
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка запроса данных.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка при получении данных.", "error");
+                    return;
+                }
+
+                const errors = data.errors || [];
+                const items = data.items || [];
+
+                if (errors.length && pullErrors) {
+                    pullErrors.textContent = errors.join(" | ");
+                    pullErrors.style.display = "block";
+                }
+
+                if (!items.length) {
+                    showToast("Удалённых данных не найдено.", "info");
+                    return;
+                }
+
+                items.forEach(function (item, idx) {
+                    const tr = document.createElement("tr");
+                    tr.dataset.item = JSON.stringify(item);
+
+                    const remote = item.remote || {};
+                    const local = item.local || {};
+                    const isNew = !!item.is_new;
+                    const statusText = isNew ? "Будет создан новый" : "Найден в UsersDash";
+
+                    const localSummary = [
+                        local.email ? `Email: ${local.email}` : "",
+                        local.password ? `Пароль: ${local.password}` : "",
+                        local.igg_id ? `IGG: ${local.igg_id}` : "",
+                        local.next_payment_at ? `Оплата: ${local.next_payment_at}` : "",
+                        local.tariff !== undefined && local.tariff !== null && local.tariff !== ""
+                            ? `Тариф: ${local.tariff}`
+                            : ""
+                    ].filter(Boolean).join(" | ");
+
+                    if (localSummary) {
+                        tr.title = "UsersDash: " + localSummary;
+                    }
+
+                    tr.innerHTML = `
+                        <td>
+                          <input type="checkbox"
+                                 data-role="pull-row-check"
+                                 data-index="${idx}"
+                                 checked>
+                        </td>
+                        <td>${statusText}</td>
+                        <td>${escapeHtml(item.server_name || "")}</td>
+                        <td>${escapeHtml(item.owner_name || "")}</td>
+                        <td>${escapeHtml(item.farm_name || "")}</td>
+                        <td>${escapeHtml(remote.email || "")}</td>
+                        <td>${escapeHtml(remote.password || "")}</td>
+                        <td>${escapeHtml(remote.igg_id || "")}</td>
+                        <td>${escapeHtml(remote.next_payment_at || "")}</td>
+                        <td>${escapeHtml(
+                            remote.tariff === 0 || remote.tariff
+                                ? remote.tariff
+                                : ""
+                        )}</td>
+                    `;
+
+                    pullTableBody.appendChild(tr);
+                });
+
+                openPullModal();
+            } catch (err) {
+                console.error("pull-preview error:", err);
+                showToast("Ошибка запроса данных (см. консоль).", "error");
+            } finally {
+                setBtnLoading(pullBtn, false, pullSpinner);
             }
         });
     }
@@ -852,6 +1048,87 @@ document.addEventListener("DOMContentLoaded", function () {
                 showToast("Ошибка применения (см. консоль).", "error");
             } finally {
                 applyBtn.disabled = false;
+            }
+        });
+    }
+
+    if (pullApplyBtn) {
+        pullApplyBtn.addEventListener("click", async function () {
+            if (!pullTableBody) {
+                showToast("Нет данных для применения.", "info");
+                return;
+            }
+
+            const rows = Array.from(pullTableBody.querySelectorAll("tr"));
+            const itemsToApply = [];
+
+            rows.forEach(function (tr) {
+                const cb = tr.querySelector('input[type="checkbox"][data-role="pull-row-check"]');
+                if (!cb || cb.disabled || !cb.checked) return;
+
+                const raw = tr.dataset.item;
+                if (!raw) return;
+
+                    try {
+                        const item = JSON.parse(raw);
+                        const remote = item.remote || {};
+
+                        itemsToApply.push({
+                            account_id: item.account_id,
+                            server_id: item.server_id,
+                            farm_name: item.farm_name,
+                            internal_id: item.internal_id,
+                            email: remote.email || "",
+                            password: remote.password || "",
+                            igg_id: remote.igg_id || "",
+                            server: remote.server || "",
+                            telegram: remote.telegram || "",
+                        next_payment_at: remote.next_payment_at || "",
+                        tariff: remote.tariff,
+                    });
+                } catch (e) {
+                    console.warn("Bad pull item:", e);
+                }
+            });
+
+            if (!itemsToApply.length) {
+                showToast("Не выбрано ни одной строки для обновления.", "info");
+                return;
+            }
+
+            pullApplyBtn.disabled = true;
+            try {
+                const resp = await fetch("/admin/farm-data/pull-apply", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    },
+                    body: JSON.stringify({ items: itemsToApply })
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка применения данных.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка применения данных.", "error");
+                    return;
+                }
+
+                showToast("Данные добавлены/обновлены.", "success");
+                if (Array.isArray(data.warnings) && data.warnings.length) {
+                    showToast(data.warnings.join(" | "), "info");
+                }
+                closePullModal();
+                window.location.reload();
+            } catch (err) {
+                console.error("pull-apply error:", err);
+                showToast("Ошибка применения (см. консоль).", "error");
+            } finally {
+                pullApplyBtn.disabled = false;
             }
         });
     }
