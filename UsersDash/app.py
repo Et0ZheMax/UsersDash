@@ -5,6 +5,10 @@
 import os
 import sys
 import ctypes
+import traceback
+import threading
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, redirect, url_for
@@ -17,6 +21,7 @@ from auth import auth_bp
 from admin_views import admin_bp
 from client_views import client_bp
 from api_views import api_bp
+from services.db_backup import backup_database, ensure_backup_dir
 
 
 # -------------------------------------------------
@@ -196,6 +201,29 @@ def ensure_default_admin():
     print("[INFO] Создан дефолтный администратор: логин 'admin', пароль 'admin'.")
 
 
+def _run_midnight_backup(app: Flask):
+    """Фоновая задача: ежедневный бэкап БД в 00:00."""
+
+    def worker():
+        while True:
+            now = datetime.now()
+            next_run = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            sleep_seconds = max(60, (next_run - now).total_seconds())
+            time.sleep(sleep_seconds)
+
+            try:
+                with app.app_context():
+                    path = backup_database("daily")
+                    print(f"[backup] Ежедневный бэкап сохранён: {path}")
+            except Exception as exc:
+                print(f"[backup] Не удалось сделать ежедневный бэкап: {exc}")
+                traceback.print_exc()
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return thread
+
+
 # -------------------------------------------------
 # Фабрика приложения
 # -------------------------------------------------
@@ -208,8 +236,9 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
 
-    # Убедимся, что папка для БД существует
+    # Убедимся, что папки для БД и бэкапов существуют
     ensure_data_dir()
+    ensure_backup_dir()
 
     # Инициализируем расширения
     db.init_app(app)
@@ -248,6 +277,9 @@ def create_app() -> Flask:
 
     # Выполняем health-check после инициализации
     run_health_check(app)
+
+    # Фоновый бэкап БД каждый день в 00:00
+    _run_midnight_backup(app)
 
     return app
 

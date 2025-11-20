@@ -479,7 +479,7 @@
                                 <button type="button"
                                         class="btn btn-primary"
                                         data-role="pull-apply">
-                                    Обновить выбранные
+                                    Добавить выбранные
                                 </button>
                             </div>
                         </div>
@@ -1115,7 +1115,7 @@ document.addEventListener("DOMContentLoaded", function () {
                     return;
                 }
 
-                showToast("Данные обновлены.", "success");
+                showToast("Данные добавлены/обновлены.", "success");
                 if (Array.isArray(data.warnings) && data.warnings.length) {
                     showToast(data.warnings.join(" | "), "info");
                 }

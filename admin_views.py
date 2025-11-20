@@ -4,6 +4,7 @@
 
 import re
 from datetime import datetime
+import traceback
 
 from flask import (
     Blueprint,
@@ -19,6 +20,7 @@ from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
 
 from models import Account, FarmData, Server, User, db
+from services.db_backup import backup_database
 from services.remote_api import fetch_rssv7_accounts_meta
 
 
@@ -874,7 +876,8 @@ def admin_farm_data_pull_preview():
                     "internal_id": internal_id or "",
                     "remote": remote_data,
                     "local": local_data,
-                    "can_apply": bool(acc),
+                    "can_apply": True,  # даём выбрать и существующие, и новые
+                    "is_new": acc is None,
                 }
             )
 
@@ -916,16 +919,53 @@ def admin_farm_data_pull_apply():
     warnings: list[str] = []
 
     try:
+        try:
+            backup_path = backup_database("before_pull_apply")
+            print(f"[farm-data pull-apply] Backup created: {backup_path}")
+        except Exception:
+            warnings.append("Не удалось создать бэкап перед применением.")
+            traceback.print_exc()
+
+        placeholder_user = _get_unassigned_user()
+
         for row in rows:
             acc_id = row.get("account_id")
-            try:
-                acc_id_int = int(acc_id)
-            except (TypeError, ValueError):
-                continue
+            acc: Account | None = None
 
-            acc = Account.query.filter_by(id=acc_id_int).first()
-            if not acc:
-                continue
+            if acc_id is not None:
+                try:
+                    acc_id_int = int(acc_id)
+                except (TypeError, ValueError):
+                    acc_id_int = None
+
+                if acc_id_int is not None:
+                    acc = Account.query.filter_by(id=acc_id_int).first()
+
+            if acc is None:
+                srv_id = row.get("server_id")
+                try:
+                    srv_id_int = int(srv_id)
+                except (TypeError, ValueError):
+                    srv_id_int = None
+
+                farm_name = (row.get("farm_name") or "").strip()
+                if not farm_name or srv_id_int is None:
+                    warnings.append("Пропущена строка без сервера или имени фермы")
+                    continue
+
+                server_obj = Server.query.filter_by(id=srv_id_int).first()
+                if not server_obj:
+                    warnings.append(f"Сервер id={srv_id_int} не найден — строка пропущена")
+                    continue
+
+                acc = Account(
+                    name=farm_name,
+                    server_id=server_obj.id,
+                    owner_id=placeholder_user.id,
+                    internal_id=(row.get("internal_id") or "").strip() or None,
+                    is_active=True,
+                )
+                db.session.add(acc)
 
             fd = FarmData.query.filter_by(
                 user_id=acc.owner_id,

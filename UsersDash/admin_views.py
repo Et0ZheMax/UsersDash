@@ -4,6 +4,7 @@
 
 import re
 from datetime import datetime
+import traceback
 
 from flask import (
     Blueprint,
@@ -19,6 +20,7 @@ from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
 
 from models import Account, FarmData, Server, User, db
+from services.db_backup import backup_database
 from services.remote_api import fetch_rssv7_accounts_meta
 
 
@@ -33,6 +35,27 @@ def admin_required():
     """
     if not current_user.is_authenticated or current_user.role != "admin":
         abort(403)
+
+
+def _get_unassigned_user():
+    """
+    Возвращает "служебного" пользователя для новых импортированных ферм,
+    у которых пока не выбран клиент. Если его нет — создаёт неактивного
+    клиента с предсказуемым логином и паролем.
+    """
+    placeholder = User.query.filter_by(username="unassigned").first()
+    if placeholder:
+        return placeholder
+
+    placeholder = User(
+        username="unassigned",
+        role="client",
+        is_active=False,
+        password_hash=generate_password_hash("changeme"),
+    )
+    db.session.add(placeholder)
+    db.session.commit()
+    return placeholder
 
 
 def _get_unassigned_user():
@@ -938,6 +961,13 @@ def admin_farm_data_pull_apply():
     warnings: list[str] = []
 
     try:
+        try:
+            backup_path = backup_database("before_pull_apply")
+            print(f"[farm-data pull-apply] Backup created: {backup_path}")
+        except Exception:
+            warnings.append("Не удалось создать бэкап перед применением.")
+            traceback.print_exc()
+
         placeholder_user = _get_unassigned_user()
 
         for row in rows:
