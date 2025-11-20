@@ -10,7 +10,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 from werkzeug.exceptions import BadRequest
 
-from models import db, Server, Account, FarmData
+from UsersDash.models import db, Server, Account, FarmData
 
 api_bp = Blueprint("api", __name__)
 
