@@ -916,8 +916,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
                     const remote = item.remote || {};
                     const local = item.local || {};
-                    const canApply = !!item.can_apply && !!item.account_id;
-                    const statusText = canApply ? "Найден в UsersDash" : "Аккаунт не найден";
+                    const isNew = !!item.is_new;
+                    const statusText = isNew ? "Будет создан новый" : "Найден в UsersDash";
 
                     const localSummary = [
                         local.email ? `Email: ${local.email}` : "",
@@ -938,7 +938,7 @@ document.addEventListener("DOMContentLoaded", function () {
                           <input type="checkbox"
                                  data-role="pull-row-check"
                                  data-index="${idx}"
-                                 ${canApply ? "checked" : "disabled"}>
+                                 checked>
                         </td>
                         <td>${statusText}</td>
                         <td>${escapeHtml(item.server_name || "")}</td>
@@ -1069,17 +1069,20 @@ document.addEventListener("DOMContentLoaded", function () {
                 const raw = tr.dataset.item;
                 if (!raw) return;
 
-                try {
-                    const item = JSON.parse(raw);
-                    const remote = item.remote || {};
+                    try {
+                        const item = JSON.parse(raw);
+                        const remote = item.remote || {};
 
-                    itemsToApply.push({
-                        account_id: item.account_id,
-                        email: remote.email || "",
-                        password: remote.password || "",
-                        igg_id: remote.igg_id || "",
-                        server: remote.server || "",
-                        telegram: remote.telegram || "",
+                        itemsToApply.push({
+                            account_id: item.account_id,
+                            server_id: item.server_id,
+                            farm_name: item.farm_name,
+                            internal_id: item.internal_id,
+                            email: remote.email || "",
+                            password: remote.password || "",
+                            igg_id: remote.igg_id || "",
+                            server: remote.server || "",
+                            telegram: remote.telegram || "",
                         next_payment_at: remote.next_payment_at || "",
                         tariff: remote.tariff,
                     });
