@@ -19,9 +19,9 @@ from flask import (
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
 
-from models import Account, FarmData, Server, User, db
-from services.db_backup import backup_database
-from services.remote_api import fetch_rssv7_accounts_meta
+from UsersDash.models import Account, FarmData, Server, User, db
+from UsersDash.services.db_backup import backup_database
+from UsersDash.services.remote_api import fetch_rssv7_accounts_meta
 
 
 

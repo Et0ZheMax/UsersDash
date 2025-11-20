@@ -8,8 +8,8 @@ import ctypes
 
 from werkzeug.security import generate_password_hash
 
-from app import create_app
-from models import db, User
+from UsersDash.app import create_app
+from UsersDash.models import db, User
 
 
 def is_admin() -> bool:

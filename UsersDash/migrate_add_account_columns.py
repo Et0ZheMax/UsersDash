@@ -6,7 +6,7 @@
 import os
 import sqlite3
 
-from config import Config
+from UsersDash.config import Config
 
 
 def get_db_path_from_uri(uri: str) -> str:

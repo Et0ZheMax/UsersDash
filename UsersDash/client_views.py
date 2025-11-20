@@ -16,8 +16,8 @@ from flask import (
 )
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
-from models import Account, FarmData, db
-from services.remote_api import (
+from UsersDash.models import Account, FarmData, db
+from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_account_settings,
     update_account_step_settings,
@@ -331,7 +331,7 @@ def farm_data_save():
         return jsonify({"ok": False, "error": "Нет валидных ферм для сохранения"}), 400
 
     # Подтягиваем аккаунты текущего пользователя одним запросом
-    from models import Account, FarmData  # локальный импорт, чтобы избежать циклов
+    from UsersDash.models import Account, FarmData  # локальный импорт, чтобы избежать циклов
 
     accounts = (
         Account.query
