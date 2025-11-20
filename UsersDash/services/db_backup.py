@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from config import Config
+from UsersDash.config import Config
 
 DB_FILE = Path(Config.DATA_DIR) / "app.db"
 BACKUP_DIR = Path(Config.DATA_DIR) / "backups"
