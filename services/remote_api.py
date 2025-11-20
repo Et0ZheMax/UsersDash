@@ -420,13 +420,27 @@ def fetch_rssv7_accounts_meta(server: Server) -> Tuple[List[Dict], str]:
         log.error(err)
         return [], err
 
-    # Ожидаем, что RssV7 вернёт {"ok": true, "items": [...]}
-    if not isinstance(data, dict) or not data.get("ok"):
-        err = f"RssV7 вернул ошибку: {data!r}"
+    # Поддерживаем два формата ответа:
+    #  1) {"ok": true, "items": [...]} — прежний контракт
+    #  2) [ {...}, {...} ] — RssV7 отдаёт список напрямую
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        if data.get("ok") is False:
+            err = f"RssV7 вернул ошибку: {data!r}"
+            log.error(err)
+            return [], err
+
+        items = data.get("items")
+        if items is None:
+            err = f"Некорректный ответ от {url}: нет items"
+            log.error(err)
+            return [], err
+    else:
+        err = f"Некорректный формат ответа от {url}: {data!r}"
         log.error(err)
         return [], err
 
-    items = data.get("items") or []
     if not isinstance(items, list):
         err = f"Некорректный формат items от {url}"
         log.error(err)
