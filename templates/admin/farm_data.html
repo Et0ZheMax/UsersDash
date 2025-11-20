@@ -968,6 +968,106 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    if (pullBtn) {
+        pullBtn.addEventListener("click", async function () {
+            setBtnLoading(pullBtn, true, pullSpinner);
+
+            if (pullErrors) {
+                pullErrors.style.display = "none";
+                pullErrors.textContent = "";
+            }
+            if (pullTableBody) {
+                pullTableBody.innerHTML = "";
+            }
+
+            try {
+                const resp = await fetch("/admin/farm-data/pull-preview", {
+                    method: "GET",
+                    headers: { "Accept": "application/json" }
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка запроса данных.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка при получении данных.", "error");
+                    return;
+                }
+
+                const errors = data.errors || [];
+                const items = data.items || [];
+
+                if (errors.length && pullErrors) {
+                    pullErrors.textContent = errors.join(" | ");
+                    pullErrors.style.display = "block";
+                }
+
+                if (!items.length) {
+                    showToast("Удалённых данных не найдено.", "info");
+                    return;
+                }
+
+                items.forEach(function (item, idx) {
+                    const tr = document.createElement("tr");
+                    tr.dataset.item = JSON.stringify(item);
+
+                    const remote = item.remote || {};
+                    const local = item.local || {};
+                    const isNew = !!item.is_new;
+                    const statusText = isNew ? "Будет создан новый" : "Найден в UsersDash";
+
+                    const localSummary = [
+                        local.email ? `Email: ${local.email}` : "",
+                        local.password ? `Пароль: ${local.password}` : "",
+                        local.igg_id ? `IGG: ${local.igg_id}` : "",
+                        local.next_payment_at ? `Оплата: ${local.next_payment_at}` : "",
+                        local.tariff !== undefined && local.tariff !== null && local.tariff !== ""
+                            ? `Тариф: ${local.tariff}`
+                            : ""
+                    ].filter(Boolean).join(" | ");
+
+                    if (localSummary) {
+                        tr.title = "UsersDash: " + localSummary;
+                    }
+
+                    tr.innerHTML = `
+                        <td>
+                          <input type="checkbox"
+                                 data-role="pull-row-check"
+                                 data-index="${idx}"
+                                 checked>
+                        </td>
+                        <td>${statusText}</td>
+                        <td>${escapeHtml(item.server_name || "")}</td>
+                        <td>${escapeHtml(item.owner_name || "")}</td>
+                        <td>${escapeHtml(item.farm_name || "")}</td>
+                        <td>${escapeHtml(remote.email || "")}</td>
+                        <td>${escapeHtml(remote.password || "")}</td>
+                        <td>${escapeHtml(remote.igg_id || "")}</td>
+                        <td>${escapeHtml(remote.next_payment_at || "")}</td>
+                        <td>${escapeHtml(
+                            remote.tariff === 0 || remote.tariff
+                                ? remote.tariff
+                                : ""
+                        )}</td>
+                    `;
+
+                    pullTableBody.appendChild(tr);
+                });
+
+                openPullModal();
+            } catch (err) {
+                console.error("pull-preview error:", err);
+                showToast("Ошибка запроса данных (см. консоль).", "error");
+            } finally {
+                setBtnLoading(pullBtn, false, pullSpinner);
+            }
+        });
+    }
+
     function formatFieldName(field) {
         switch (field) {
             case "email": return "E-mail";
