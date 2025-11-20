@@ -2,8 +2,8 @@
 # Health-check: проверка БД, наличия админа, серверов и пр.
 # При старте выводит лог в консоль, не падает при единичных ошибках.
 
-from models import User, Server, Account
-from services.remote_api import ping_server
+from UsersDash.models import User, Server, Account
+from UsersDash.services.remote_api import ping_server
 
 
 def run_health_check(app):
