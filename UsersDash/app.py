@@ -11,6 +11,13 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Обеспечиваем возможность запускать приложение напрямую (python app.py)
+# даже если корневая папка проекта не лежит в PYTHONPATH (актуально на Windows).
+CURRENT_FILE = Path(__file__).resolve()
+PROJECT_ROOT = CURRENT_FILE.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from flask import Flask, redirect, url_for
 from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
