@@ -58,6 +58,27 @@ def _get_unassigned_user():
     return placeholder
 
 
+def _get_unassigned_user():
+    """
+    Возвращает "служебного" пользователя для новых импортированных ферм,
+    у которых пока не выбран клиент. Если его нет — создаёт неактивного
+    клиента с предсказуемым логином и паролем.
+    """
+    placeholder = User.query.filter_by(username="unassigned").first()
+    if placeholder:
+        return placeholder
+
+    placeholder = User(
+        username="unassigned",
+        role="client",
+        is_active=False,
+        password_hash=generate_password_hash("changeme"),
+    )
+    db.session.add(placeholder)
+    db.session.commit()
+    return placeholder
+
+
 # -------------------- Общий дашборд админа --------------------
 
 
