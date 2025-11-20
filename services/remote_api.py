@@ -426,12 +426,28 @@ def fetch_rssv7_accounts_meta(server: Server) -> Tuple[List[Dict], str]:
     if isinstance(data, list):
         items = data
     elif isinstance(data, dict):
-        if data.get("ok") is False:
-            err = f"RssV7 вернул ошибку: {data!r}"
-            log.error(err)
-            return [], err
-
         items = data.get("items")
+
+        # Если ok == False, попробуем достать список аккаунтов из других ключей,
+        # прежде чем возвращать ошибку.
+        if data.get("ok") is False:
+            # Некоторые инстансы RssV7 кладут аккаунты в поле error
+            # (хотя статус при этом 200). Если это список словарей — считаем, что
+            # это и есть нужные элементы.
+            if items is None and isinstance(data.get("error"), list):
+                candidate = data.get("error")
+                if all(isinstance(x, dict) for x in candidate):
+                    items = candidate
+                    log.warning(
+                        "RssV7 вернул ok=false, но прислал список аккаунтов в error"
+                    )
+
+            # Если так и не нашли элементы — это реальная ошибка
+            if items is None:
+                err = f"RssV7 вернул ошибку: {data!r}"
+                log.error(err)
+                return [], err
+
         if items is None:
             err = f"Некорректный ответ от {url}: нет items"
             log.error(err)
