@@ -420,13 +420,43 @@ def fetch_rssv7_accounts_meta(server: Server) -> Tuple[List[Dict], str]:
         log.error(err)
         return [], err
 
-    # Ожидаем, что RssV7 вернёт {"ok": true, "items": [...]}
-    if not isinstance(data, dict) or not data.get("ok"):
-        err = f"RssV7 вернул ошибку: {data!r}"
+    # Поддерживаем два формата ответа:
+    #  1) {"ok": true, "items": [...]} — прежний контракт
+    #  2) [ {...}, {...} ] — RssV7 отдаёт список напрямую
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("items")
+
+        # Если ok == False, попробуем достать список аккаунтов из других ключей,
+        # прежде чем возвращать ошибку.
+        if data.get("ok") is False:
+            # Некоторые инстансы RssV7 кладут аккаунты в поле error
+            # (хотя статус при этом 200). Если это список словарей — считаем, что
+            # это и есть нужные элементы.
+            if items is None and isinstance(data.get("error"), list):
+                candidate = data.get("error")
+                if all(isinstance(x, dict) for x in candidate):
+                    items = candidate
+                    log.warning(
+                        "RssV7 вернул ok=false, но прислал список аккаунтов в error"
+                    )
+
+            # Если так и не нашли элементы — это реальная ошибка
+            if items is None:
+                err = f"RssV7 вернул ошибку: {data!r}"
+                log.error(err)
+                return [], err
+
+        if items is None:
+            err = f"Некорректный ответ от {url}: нет items"
+            log.error(err)
+            return [], err
+    else:
+        err = f"Некорректный формат ответа от {url}: {data!r}"
         log.error(err)
         return [], err
 
-    items = data.get("items") or []
     if not isinstance(items, list):
         err = f"Некорректный формат items от {url}"
         log.error(err)

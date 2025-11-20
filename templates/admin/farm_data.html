@@ -738,6 +738,11 @@ document.addEventListener("DOMContentLoaded", function () {
                     syncErrors.style.display = "block";
                 }
 
+                if (errors.length && !changes.length) {
+                    showToast("RssV7 вернул ошибки (см. ниже).", "error");
+                    return;
+                }
+
                 if (!changes.length) {
                     showToast("Различий с RssV7 не найдено.", "success");
                     return;
