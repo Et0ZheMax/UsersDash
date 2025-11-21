@@ -225,6 +225,25 @@
         return "";
     }
 
+    function buildViewStepsFromRaw(rawSteps) {
+        return (rawSteps || []).map((step, idx) => {
+            const cfg = (step && step.Config) || {};
+            const name = getScriptTitle(step) || `Шаг ${idx + 1}`;
+            const description = cfg.Description || cfg.description || "";
+            const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
+            return {
+                index: idx,
+                name,
+                script_id: step && step.ScriptId,
+                config: cfg,
+                description,
+                is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
+                schedule_summary: scheduleSummary(null, step) || undefined,
+                schedule_rules_count: schedule_rules.length,
+            };
+        });
+    }
+
     function renderEmptyState(message) {
         if (stepsRoot) stepsRoot.innerHTML = `<div class="manage-empty">${message || "Нет данных по шагам."}</div>`;
         if (configRoot) configRoot.innerHTML = "";
@@ -473,9 +492,11 @@
         }
     }
 
-    async function loadSteps(accountId) {
+    async function loadSteps(accountId, meta = {}) {
         if (!accountId || state.isLoading) return;
         state.isLoading = true;
+        if (meta.name) state.selectedAccountName = meta.name;
+        if (meta.server) state.selectedServerName = meta.server;
         highlightAccount(accountId);
         renderEmptyState("Загружаем настройки...");
 
@@ -485,16 +506,22 @@
             let data = {};
             try { data = await resp.json(); } catch (_) { data = {}; }
 
-            if (!resp.ok || !data.ok) {
+            const isOk = resp.ok && (data.ok !== false);
+            if (!isOk) {
                 throw new Error((data && data.error) || "Не удалось загрузить настройки.");
             }
 
+            const rawSteps = data.raw_steps || data.rawSteps || data.Data || [];
+            const viewSteps = data.steps || data.view_steps || buildViewStepsFromRaw(rawSteps);
+            const menu = data.menu || data.MenuData || {};
+            const account = data.account || {};
+
             state.selectedAccountId = accountId;
-            state.selectedAccountName = data.account && data.account.name;
-            state.selectedServerName = data.account && data.account.server;
-            state.steps = data.steps || [];
-            state.rawSteps = data.raw_steps || [];
-            state.menu = data.menu || {};
+            state.selectedAccountName = account.name || state.selectedAccountName || meta.name || "";
+            state.selectedServerName = account.server || state.selectedServerName || meta.server || "";
+            state.steps = viewSteps || [];
+            state.rawSteps = rawSteps || [];
+            state.menu = menu;
             state.selectedStepIndex = state.rawSteps.length ? 0 : null;
             renderSteps();
             renderConfig();
@@ -514,8 +541,11 @@
             event.preventDefault();
         }
         const accountId = btn.dataset.accountId;
-        if (!accountId || String(accountId) === String(state.selectedAccountId)) return;
-        loadSteps(accountId);
+        if (!accountId) return;
+        loadSteps(accountId, {
+            name: btn.dataset.accountName,
+            server: btn.dataset.serverName,
+        });
     }
 
     function handleStepsClick(event) {
