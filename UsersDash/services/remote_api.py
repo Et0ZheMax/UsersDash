@@ -309,6 +309,11 @@ def _deep_decode_manage(value: Any) -> Any:
 
     value = _decode_json_if_str(value)
 
+    if isinstance(value, dict) and len(value) == 1:
+        (only_key, only_val), = value.items()
+        if only_key in ("data", "settings", "payload"):
+            return _deep_decode_manage(only_val)
+
     if isinstance(value, list):
         return [_deep_decode_manage(item) for item in value]
 
@@ -324,13 +329,12 @@ def _unwrap_manage_payload(data: Any) -> Any:
     # Если пришла строка — пробуем распарсить JSON
     data = _decode_json_if_str(data)
 
-    # Могут быть вложенные data/settings/payload
-    if isinstance(data, dict):
-        for key in ("data", "settings", "payload"):
-            nested = data.get(key)
-            if nested is not None:
-                # рекурсивно распаковываем, чтобы достать финальный словарь
-                return _unwrap_manage_payload(nested)
+    while isinstance(data, dict) and len(data) == 1:
+        (only_key, only_val), = data.items()
+        if only_key in ("data", "settings", "payload"):
+            data = _decode_json_if_str(only_val)
+            continue
+        break
     return data
 
 
@@ -361,6 +365,9 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
     url = f"{base}/manage/account/{remote_id}/settings"
     data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
     data = _unwrap_manage_payload(data)
+
+    if isinstance(data, dict):
+        data = {key: _unwrap_manage_payload(val) for key, val in data.items()}
 
     if isinstance(data, list):
         data = {"Data": data}
