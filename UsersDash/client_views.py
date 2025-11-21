@@ -423,6 +423,15 @@ def farm_data_save():
         print(f"[farm_data_save] ERROR: {exc}")
         return jsonify({"ok": False, "error": "Ошибка при сохранении данных."}), 500
 
-    return jsonify({"ok": True})
+    farmdata_status = collect_farmdata_status(current_user.id)
+    g.farmdata_status_cache = farmdata_status
+
+    return jsonify(
+        {
+            "ok": True,
+            "farmdata_status": farmdata_status,
+            "farmdata_required": bool(farmdata_status.get("has_issues")),
+        }
+    )
 
 
