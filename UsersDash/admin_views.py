@@ -18,10 +18,15 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
+from sqlalchemy.orm import joinedload
 
 from UsersDash.models import Account, FarmData, Server, User, db
 from UsersDash.services.db_backup import backup_database
-from UsersDash.services.remote_api import fetch_rssv7_accounts_meta
+from UsersDash.services.remote_api import (
+    fetch_account_settings,
+    fetch_resources_for_accounts,
+    fetch_rssv7_accounts_meta,
+)
 
 
 
@@ -39,19 +44,28 @@ def admin_required():
 
 def _get_unassigned_user():
     """
-    Возвращает "служебного" пользователя для новых импортированных ферм,
-    у которых пока не выбран клиент. Если его нет — создаёт неактивного
-    клиента с предсказуемым логином и паролем.
-    """
-    placeholder = User.query.filter_by(username="unassigned").first()
-    if placeholder:
-        return placeholder
+    Возвращает клиента с базовым именем фермы (без числового суффикса).
 
-    placeholder = User(
-        username="unassigned",
+    Примеры:
+    - "Ivan" или "Ivan1" или "Ivan2" -> клиент "Ivan".
+    - Если клиента ещё нет, создаёт его с дефолтным паролем.
+    """
+    base_name = (farm_name or "").strip()
+    if not base_name:
+        return _get_unassigned_user()
+
+    match = re.match(r"^(.*?)(\d+)?$", base_name)
+    username = (match.group(1) if match else base_name).strip(" _-") or base_name
+
+    existing = User.query.filter_by(username=username).first()
+    if existing:
+        return (existing, False) if return_created else existing
+
+    user = User(
+        username=username,
         role="client",
-        is_active=False,
-        password_hash=generate_password_hash("changeme"),
+        is_active=True,
+        password_hash=generate_password_hash("123456789m"),
     )
     db.session.add(placeholder)
     db.session.commit()
@@ -151,6 +165,42 @@ def admin_dashboard():
     total_accounts = Account.query.count()
     total_servers = Server.query.count()
 
+    accounts = (
+        Account.query.options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter_by(is_active=True)
+        .order_by(Account.server_id.asc(), Account.name.asc())
+        .all()
+    )
+
+    resources_map = fetch_resources_for_accounts(accounts)
+    accounts_data = []
+    for acc in accounts:
+        res_info = resources_map.get(acc.id)
+
+        if res_info:
+            resources_brief = res_info.get("brief", "—")
+            today_gain = res_info.get("today_gain")
+            last_updated = res_info.get("last_updated_fmt") or res_info.get("last_updated")
+            has_data = True
+        else:
+            resources_brief = "—"
+            today_gain = None
+            last_updated = None
+            has_data = False
+
+        accounts_data.append(
+            {
+                "account": acc,
+                "resources_brief": resources_brief,
+                "today_gain": today_gain,
+                "last_updated": last_updated,
+                "has_data": has_data,
+            }
+        )
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -158,6 +208,70 @@ def admin_dashboard():
         total_admins=total_admins,
         total_accounts=total_accounts,
         total_servers=total_servers,
+        accounts_data=accounts_data,
+    )
+
+
+# -------------------- Manage / настройки бота --------------------
+
+
+@admin_bp.route("/manage", endpoint="manage")
+@login_required
+def manage():
+    """Страница manage для админа с доступом ко всем активным фермам."""
+
+    admin_required()
+
+    from UsersDash.client_views import _build_manage_view_steps
+
+    accounts = (
+        Account.query.options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter_by(is_active=True)
+        .order_by(Account.server_id.asc(), Account.name.asc())
+        .all()
+    )
+
+    selected_account = None
+    selected_id = request.args.get("account_id")
+    if selected_id:
+        try:
+            selected_id_int = int(selected_id)
+        except (TypeError, ValueError):
+            selected_id_int = None
+    else:
+        selected_id_int = accounts[0].id if accounts else None
+
+    for acc in accounts:
+        if selected_id_int and acc.id == selected_id_int:
+            selected_account = acc
+            break
+    if not selected_account and accounts:
+        selected_account = accounts[0]
+
+    view_steps = []
+    steps_error = None
+    raw_steps = []
+    menu_data = None
+    if selected_account:
+        raw_settings = fetch_account_settings(selected_account)
+        if raw_settings and "Data" in raw_settings:
+            view_steps = _build_manage_view_steps(raw_settings)
+            raw_steps = raw_settings.get("Data") or []
+            menu_data = raw_settings.get("MenuData") or {}
+        else:
+            steps_error = "Не удалось загрузить настройки этой фермы."
+
+    return render_template(
+        "admin/manage.html",
+        accounts=accounts,
+        selected_account=selected_account,
+        view_steps=view_steps,
+        raw_steps=raw_steps,
+        menu_data=menu_data,
+        steps_error=steps_error,
     )
 
 
