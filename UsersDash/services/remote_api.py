@@ -297,12 +297,17 @@ def _decode_json_if_str(value: Any) -> Any:
     return value
 
 
-def _decode_manage_block(value: Any) -> Any:
-    """Декодирует строки JSON и отдельные элементы списков для manage."""
+def _deep_decode_manage(value: Any) -> Any:
+    """Рекурсивно декодирует строковый JSON внутри manage-пэйлоада."""
 
     value = _decode_json_if_str(value)
+
     if isinstance(value, list):
-        return [_decode_json_if_str(item) for item in value]
+        return [_deep_decode_manage(item) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _deep_decode_manage(val) for key, val in value.items()}
+
     return value
 
 
@@ -354,7 +359,7 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
         data = {"Data": data}
     if isinstance(data, dict):
         for key in ("Data", "MenuData"):
-            data[key] = _decode_manage_block(data.get(key))
+            data[key] = _deep_decode_manage(data.get(key))
     if data is None:
         print(f"[remote_api] WARNING: не удалось получить настройки аккаунта {remote_id} с {url}")
     return data
