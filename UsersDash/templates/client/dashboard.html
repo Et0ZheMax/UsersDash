@@ -43,15 +43,15 @@
             <div class="status-list status-list--scrollable">
                 {% if status.missing_details %}
                     {% for item in status.missing_details %}
-                        <div class="status-item status-item--warn">
+                        <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
                             <div class="status-item-title">{{ item.farm_name }}</div>
                             <div class="status-item-text">Не заполнено: {{ item.missing_fields|join(', ') }}</div>
-                        </div>
+                        </a>
                     {% endfor %}
                 {% elif status.missing_accounts %}
-                    <div class="status-item status-item--warn">
+                    <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
                         Заполните данные ферм: {{ status.missing_accounts|join(', ') }}
-                    </div>
+                    </a>
                 {% endif %}
             </div>
             <div class="status-note">Проблемы по логам будут отображаться здесь позже.</div>

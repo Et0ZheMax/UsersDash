@@ -208,6 +208,49 @@
     }
 
 
+        function applyFarmDataStatusUI(status) {
+            const table = document.querySelector('[data-role="farmdata-table"]');
+            let missingCount = 0;
+
+            if (table) {
+                const rows = table.querySelectorAll("tbody tr[data-account-id]");
+                rows.forEach(function (tr) {
+                    const requiredFilled = ["email", "password", "igg_id", "server", "telegram_tag"].every(
+                        function (name) {
+                            const input = tr.querySelector(`input[name="${name}"]`);
+                            return input && input.value && input.value.trim();
+                        }
+                    );
+
+                    const badge = tr.querySelector(".farmdata-status-badge");
+                    if (badge) {
+                        badge.textContent = requiredFilled ? "Заполнено" : "Нужно заполнить";
+                        badge.classList.toggle("farmdata-status-ok", requiredFilled);
+                        badge.classList.toggle("farmdata-status-empty", !requiredFilled);
+                    }
+
+                    if (!requiredFilled) missingCount += 1;
+                });
+            }
+
+            const hasIssues = status ? !!status.has_issues : missingCount > 0;
+
+            const alertBox = document.querySelector(".farmdata-alert");
+            if (alertBox) {
+                alertBox.style.display = hasIssues ? "" : "none";
+            }
+
+            const badgeRequired = document.querySelector(".farmdata-badge-required");
+            if (badgeRequired) {
+                badgeRequired.style.display = hasIssues ? "inline-flex" : "none";
+            }
+
+            const navLink = document.querySelector('.nav .nav-link[href$="/farm-data"]');
+            if (navLink) {
+                navLink.classList.toggle("nav-link-attention", hasIssues);
+            }
+        }
+
         async function handleFarmDataSave(btn) {
             const table = document.querySelector('[data-role="farmdata-table"]');
             if (!table) {
@@ -272,6 +315,7 @@
                     throw new Error(data.error || "Ошибка при сохранении данных.");
                 }
 
+                applyFarmDataStatusUI(data.farmdata_status);
                 showToast("Данные ферм сохранены.", "success");
             } catch (err) {
                 console.error(err);
