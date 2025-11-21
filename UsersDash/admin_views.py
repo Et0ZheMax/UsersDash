@@ -58,25 +58,79 @@ def _get_unassigned_user():
     return placeholder
 
 
-def _get_unassigned_user():
+def _get_or_create_client_for_farm(
+    farm_name: str, *, return_created: bool = False
+) -> User | tuple[User, bool]:
     """
-    Возвращает "служебного" пользователя для новых импортированных ферм,
-    у которых пока не выбран клиент. Если его нет — создаёт неактивного
-    клиента с предсказуемым логином и паролем.
-    """
-    placeholder = User.query.filter_by(username="unassigned").first()
-    if placeholder:
-        return placeholder
+    Возвращает клиента с базовым именем фермы (без числового суффикса).
 
-    placeholder = User(
-        username="unassigned",
+    Примеры:
+    - "Ivan" или "Ivan1" или "Ivan2" -> клиент "Ivan".
+    - Если клиента ещё нет, создаёт его с дефолтным паролем.
+    """
+    base_name = (farm_name or "").strip()
+    if not base_name:
+        return _get_unassigned_user()
+
+    match = re.match(r"^(.*?)(\d+)?$", base_name)
+    username = (match.group(1) if match else base_name).strip(" _-") or base_name
+
+    existing = User.query.filter_by(username=username).first()
+    if existing:
+        return (existing, False) if return_created else existing
+
+    user = User(
+        username=username,
         role="client",
-        is_active=False,
-        password_hash=generate_password_hash("changeme"),
+        is_active=True,
+        password_hash=generate_password_hash("123456789m"),
     )
-    db.session.add(placeholder)
-    db.session.commit()
-    return placeholder
+    db.session.add(user)
+    db.session.flush()  # чтобы id появился до использования
+    return (user, True) if return_created else user
+
+
+def _merge_farmdata_for_move(
+    old_owner_id: int | None,
+    old_name: str | None,
+    new_owner_id: int,
+    new_name: str,
+):
+    """
+    Переносит/объединяет FarmData при смене владельца или имени фермы.
+    - Если данных не было — создаёт запись для нового владельца/имени.
+    - Если были, но у нового владельца пусто — переносит полностью.
+    - Если у нового владельца уже были данные, то заполняет пустые поля
+      значениями из старой записи.
+    """
+
+    if not old_owner_id or not old_name:
+        target_fd = FarmData.query.filter_by(
+            user_id=new_owner_id, farm_name=new_name
+        ).first()
+        if not target_fd:
+            target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+            db.session.add(target_fd)
+        return
+
+    old_fd = FarmData.query.filter_by(user_id=old_owner_id, farm_name=old_name).first()
+    target_fd = FarmData.query.filter_by(
+        user_id=new_owner_id, farm_name=new_name
+    ).first()
+
+    if old_fd and not target_fd:
+        old_fd.user_id = new_owner_id
+        old_fd.farm_name = new_name
+        target_fd = old_fd
+    elif old_fd and target_fd and old_fd is not target_fd:
+        for field in ["email", "login", "password", "igg_id", "server", "telegram_tag"]:
+            current_val = getattr(target_fd, field)
+            if not current_val:
+                setattr(target_fd, field, getattr(old_fd, field))
+
+    if not target_fd:
+        target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+        db.session.add(target_fd)
 
 
 # -------------------- Общий дашборд админа --------------------
@@ -352,8 +406,8 @@ def account_create():
         game_world = request.form.get("game_world", "").strip()
         notes = request.form.get("notes", "").strip()
 
-        if not name or not internal_id or not server_id or not owner_id:
-            flash("Имя, internal_id, сервер и владелец обязательны.", "danger")
+        if not name or not internal_id or not server_id:
+            flash("Имя, internal_id и сервер обязательны.", "danger")
             return render_template(
                 "admin/account_edit.html",
                 account=None,
@@ -362,11 +416,21 @@ def account_create():
                 clients=clients,
             )
 
+        # если владелец не выбран — создаём/берём клиента по имени фермы
+        owner_user = None
+        if owner_id:
+            try:
+                owner_user = User.query.filter_by(id=int(owner_id)).first()
+            except (TypeError, ValueError):
+                owner_user = None
+        if owner_user is None:
+            owner_user = _get_or_create_client_for_farm(name)
+
         account = Account(
             name=name,
             internal_id=internal_id,
             server_id=int(server_id),
-            owner_id=int(owner_id),
+            owner_id=owner_user.id,
             is_active=is_active,
             game_world=game_world or None,
             notes=notes or None,
@@ -399,6 +463,9 @@ def account_edit(account_id: int):
     clients = User.query.filter_by(role="client").order_by(User.username.asc()).all()
 
     if request.method == "POST":
+        old_owner_id = account.owner_id
+        old_name = account.name
+
         name = request.form.get("name", "").strip()
         internal_id = request.form.get("internal_id", "").strip()
         server_id = request.form.get("server_id")
@@ -407,8 +474,8 @@ def account_edit(account_id: int):
         game_world = request.form.get("game_world", "").strip()
         notes = request.form.get("notes", "").strip()
 
-        if not name or not internal_id or not server_id or not owner_id:
-            flash("Имя, internal_id, сервер и владелец обязательны.", "danger")
+        if not name or not internal_id or not server_id:
+            flash("Имя, internal_id и сервер обязательны.", "danger")
             return render_template(
                 "admin/account_edit.html",
                 account=account,
@@ -417,13 +484,33 @@ def account_edit(account_id: int):
                 clients=clients,
             )
 
+        owner_user = None
+        if owner_id:
+            try:
+                owner_user = User.query.filter_by(id=int(owner_id)).first()
+            except (TypeError, ValueError):
+                owner_user = None
+        if owner_user is None:
+            owner_user = _get_or_create_client_for_farm(name)
+
         account.name = name
         account.internal_id = internal_id
         account.server_id = int(server_id)
-        account.owner_id = int(owner_id)
+        account.owner_id = owner_user.id
         account.is_active = is_active
         account.game_world = game_world or None
         account.notes = notes or None
+
+        owner_changed = old_owner_id != account.owner_id
+        name_changed = old_name != account.name
+
+        if owner_changed or name_changed:
+            _merge_farmdata_for_move(
+                old_owner_id,
+                old_name,
+                account.owner_id,
+                account.name,
+            )
 
         db.session.commit()
         flash("Изменения по аккаунту сохранены.", "success")
@@ -486,6 +573,64 @@ def admin_farm_data():
     return render_template(
         "admin/farm_data.html",
         items=items,
+    )
+
+
+@admin_bp.route("/farm-data/autocreate-clients", methods=["POST"])
+@login_required
+def admin_farm_data_autocreate_clients():
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    accounts = Account.query.order_by(Account.id.asc()).all()
+
+    created_clients = 0
+    reassigned_accounts = 0
+    warnings: list[str] = []
+
+    try:
+        try:
+            backup_path = backup_database("before_autocreate_clients")
+            print(f"[farm-data autocreate] Backup created: {backup_path}")
+        except Exception:
+            warnings.append("Не удалось создать бэкап перед автосозданием клиентов.")
+            traceback.print_exc()
+
+        for acc in accounts:
+            farm_name = (acc.name or "").strip()
+            if not farm_name:
+                continue
+
+            owner_user, was_created = _get_or_create_client_for_farm(
+                farm_name, return_created=True
+            )
+            if was_created:
+                created_clients += 1
+
+            if acc.owner_id != owner_user.id:
+                _merge_farmdata_for_move(
+                    acc.owner_id,
+                    acc.name,
+                    owner_user.id,
+                    acc.name,
+                )
+                acc.owner_id = owner_user.id
+                reassigned_accounts += 1
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        print("[farm-data autocreate] ERROR:", exc)
+        return jsonify({"ok": False, "error": "Ошибка при автосоздании клиентов"}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "created_clients": created_clients,
+            "reassigned_accounts": reassigned_accounts,
+            "total_accounts": len(accounts),
+            "warnings": warnings,
+        }
     )
 
 
@@ -968,11 +1113,10 @@ def admin_farm_data_pull_apply():
             warnings.append("Не удалось создать бэкап перед применением.")
             traceback.print_exc()
 
-        placeholder_user = _get_unassigned_user()
-
         for row in rows:
             acc_id = row.get("account_id")
             acc: Account | None = None
+            is_new = bool(row.get("is_new"))
 
             if acc_id is not None:
                 try:
@@ -982,6 +1126,13 @@ def admin_farm_data_pull_apply():
 
                 if acc_id_int is not None:
                     acc = Account.query.filter_by(id=acc_id_int).first()
+
+            # Уже существующие аккаунты не перезаписываем в рамках pull-apply
+            if acc is not None and not is_new:
+                warnings.append(
+                    f"{acc.name}: уже есть в UsersDash, пропущен при импорте"
+                )
+                continue
 
             # Если не нашли аккаунт — создаём новый на указанном сервере
             if acc is None:
@@ -1001,10 +1152,11 @@ def admin_farm_data_pull_apply():
                     warnings.append(f"Сервер id={srv_id_int} не найден — строка пропущена")
                     continue
 
+                owner_user = _get_or_create_client_for_farm(farm_name)
                 acc = Account(
                     name=farm_name,
                     server_id=server_obj.id,
-                    owner_id=placeholder_user.id,
+                    owner_id=owner_user.id,
                     internal_id=(row.get("internal_id") or "").strip() or None,
                     is_active=True,
                 )
