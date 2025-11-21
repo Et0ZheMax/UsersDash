@@ -506,6 +506,13 @@
                 </button>
 
                 <button type="button"
+                        class="btn btn-secondary"
+                        data-role="auto-create-clients">
+                    Создать клиентов по именам
+                    <span class="btn-spinner" data-role="auto-create-spinner" hidden></span>
+                </button>
+
+                <button type="button"
                         class="btn btn-primary"
                         data-role="farmdata-save">
                     Сохранить
@@ -794,6 +801,8 @@ document.addEventListener("DOMContentLoaded", function () {
     const pullBtn = document.querySelector('[data-role="farmdata-pull"]');
     const pullSpinner = document.querySelector('[data-role="farmdata-pull-spinner"]');
     const pullApplyBtn = document.querySelector('[data-role="pull-apply"]');
+    const autoCreateBtn = document.querySelector('[data-role="auto-create-clients"]');
+    const autoCreateSpinner = document.querySelector('[data-role="auto-create-spinner"]');
 
     if (syncBtn) {
         syncBtn.addEventListener("click", async function () {
@@ -864,6 +873,51 @@ document.addEventListener("DOMContentLoaded", function () {
                 showToast("Ошибка синхронизации (см. консоль).", "error");
             } finally {
                 setBtnLoading(syncBtn, false, syncSpinner);
+            }
+        });
+    }
+
+    if (autoCreateBtn) {
+        autoCreateBtn.addEventListener("click", async function () {
+            if (!confirm("Создать/переназначить клиентов по именам всех ферм?")) {
+                return;
+            }
+
+            setBtnLoading(autoCreateBtn, true, autoCreateSpinner);
+
+            try {
+                const resp = await fetch("/admin/farm-data/autocreate-clients", {
+                    method: "POST",
+                    headers: { "Accept": "application/json" }
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка автосоздания клиентов.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка автосоздания клиентов.", "error");
+                    return;
+                }
+
+                const parts = [];
+                parts.push(`Создано клиентов: ${data.created_clients || 0}`);
+                parts.push(`Переназначено ферм: ${data.reassigned_accounts || 0}`);
+                parts.push(`Всего ферм: ${data.total_accounts || 0}`);
+                showToast(parts.join(" | "), "success");
+
+                if (Array.isArray(data.warnings) && data.warnings.length) {
+                    showToast(data.warnings.join(" | "), "info");
+                }
+
+                window.location.reload();
+            } catch (e) {
+                console.error("autocreate-clients error:", e);
+                showToast("Ошибка автосоздания (см. консоль).", "error");
+            } finally {
+                setBtnLoading(autoCreateBtn, false, autoCreateSpinner);
             }
         });
     }

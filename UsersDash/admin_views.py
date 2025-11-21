@@ -58,7 +58,9 @@ def _get_unassigned_user():
     return placeholder
 
 
-def _get_or_create_client_for_farm(farm_name: str) -> User:
+def _get_or_create_client_for_farm(
+    farm_name: str, *, return_created: bool = False
+) -> User | tuple[User, bool]:
     """
     Возвращает клиента с базовым именем фермы (без числового суффикса).
 
@@ -75,7 +77,7 @@ def _get_or_create_client_for_farm(farm_name: str) -> User:
 
     existing = User.query.filter_by(username=username).first()
     if existing:
-        return existing
+        return (existing, False) if return_created else existing
 
     user = User(
         username=username,
@@ -85,7 +87,50 @@ def _get_or_create_client_for_farm(farm_name: str) -> User:
     )
     db.session.add(user)
     db.session.flush()  # чтобы id появился до использования
-    return user
+    return (user, True) if return_created else user
+
+
+def _merge_farmdata_for_move(
+    old_owner_id: int | None,
+    old_name: str | None,
+    new_owner_id: int,
+    new_name: str,
+):
+    """
+    Переносит/объединяет FarmData при смене владельца или имени фермы.
+    - Если данных не было — создаёт запись для нового владельца/имени.
+    - Если были, но у нового владельца пусто — переносит полностью.
+    - Если у нового владельца уже были данные, то заполняет пустые поля
+      значениями из старой записи.
+    """
+
+    if not old_owner_id or not old_name:
+        target_fd = FarmData.query.filter_by(
+            user_id=new_owner_id, farm_name=new_name
+        ).first()
+        if not target_fd:
+            target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+            db.session.add(target_fd)
+        return
+
+    old_fd = FarmData.query.filter_by(user_id=old_owner_id, farm_name=old_name).first()
+    target_fd = FarmData.query.filter_by(
+        user_id=new_owner_id, farm_name=new_name
+    ).first()
+
+    if old_fd and not target_fd:
+        old_fd.user_id = new_owner_id
+        old_fd.farm_name = new_name
+        target_fd = old_fd
+    elif old_fd and target_fd and old_fd is not target_fd:
+        for field in ["email", "login", "password", "igg_id", "server", "telegram_tag"]:
+            current_val = getattr(target_fd, field)
+            if not current_val:
+                setattr(target_fd, field, getattr(old_fd, field))
+
+    if not target_fd:
+        target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+        db.session.add(target_fd)
 
 
 # -------------------- Общий дашборд админа --------------------
@@ -460,26 +505,12 @@ def account_edit(account_id: int):
         name_changed = old_name != account.name
 
         if owner_changed or name_changed:
-            old_fd = FarmData.query.filter_by(
-                user_id=old_owner_id, farm_name=old_name
-            ).first()
-            target_fd = FarmData.query.filter_by(
-                user_id=account.owner_id, farm_name=account.name
-            ).first()
-
-            if old_fd and not target_fd:
-                old_fd.user_id = account.owner_id
-                old_fd.farm_name = account.name
-                target_fd = old_fd
-            elif old_fd and target_fd and old_fd is not target_fd:
-                for field in ["email", "password", "igg_id", "server", "telegram_tag"]:
-                    current_val = getattr(target_fd, field)
-                    if not current_val:
-                        setattr(target_fd, field, getattr(old_fd, field))
-
-            if not target_fd:
-                target_fd = FarmData(user_id=account.owner_id, farm_name=account.name)
-                db.session.add(target_fd)
+            _merge_farmdata_for_move(
+                old_owner_id,
+                old_name,
+                account.owner_id,
+                account.name,
+            )
 
         db.session.commit()
         flash("Изменения по аккаунту сохранены.", "success")
@@ -542,6 +573,64 @@ def admin_farm_data():
     return render_template(
         "admin/farm_data.html",
         items=items,
+    )
+
+
+@admin_bp.route("/farm-data/autocreate-clients", methods=["POST"])
+@login_required
+def admin_farm_data_autocreate_clients():
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    accounts = Account.query.order_by(Account.id.asc()).all()
+
+    created_clients = 0
+    reassigned_accounts = 0
+    warnings: list[str] = []
+
+    try:
+        try:
+            backup_path = backup_database("before_autocreate_clients")
+            print(f"[farm-data autocreate] Backup created: {backup_path}")
+        except Exception:
+            warnings.append("Не удалось создать бэкап перед автосозданием клиентов.")
+            traceback.print_exc()
+
+        for acc in accounts:
+            farm_name = (acc.name or "").strip()
+            if not farm_name:
+                continue
+
+            owner_user, was_created = _get_or_create_client_for_farm(
+                farm_name, return_created=True
+            )
+            if was_created:
+                created_clients += 1
+
+            if acc.owner_id != owner_user.id:
+                _merge_farmdata_for_move(
+                    acc.owner_id,
+                    acc.name,
+                    owner_user.id,
+                    acc.name,
+                )
+                acc.owner_id = owner_user.id
+                reassigned_accounts += 1
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        print("[farm-data autocreate] ERROR:", exc)
+        return jsonify({"ok": False, "error": "Ошибка при автосоздании клиентов"}), 500
+
+    return jsonify(
+        {
+            "ok": True,
+            "created_clients": created_clients,
+            "reassigned_accounts": reassigned_accounts,
+            "total_accounts": len(accounts),
+            "warnings": warnings,
+        }
     )
 
 
