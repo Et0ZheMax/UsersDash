@@ -32,6 +32,26 @@ def _build_manage_view_steps(raw_settings):
     steps = raw_settings.get("Data") or []
     view_steps = []
 
+    script_labels = {
+        "vikingbot.base.gathervip": "Сбор ресурсов",
+        "vikingbot.base.dailies": "Ежедневные задания",
+        "vikingbot.base.alliancedonation": "Техи и подарки племени",
+        "vikingbot.base.mail": "Почта",
+        "vikingbot.base.buffs": "Баффы",
+        "vikingbot.base.recruitment": "Найм войск",
+        "vikingbot.base.upgrade": "Стройка",
+        "vikingbot.base.research": "Исследования",
+        "vikingbot.base.divinationshack": "Хижина Гадалки",
+        "vikingbot.base.exploration": "Экспедиции в поручениях (перья, яблоки)",
+        "vikingbot.base.commission": "Выполнять поручения",
+        "vikingbot.base.dragoncave": "Пещера дракона",
+        "vikingbot.base.stagingpost": "Пост разгрузки",
+        "vikingbot.base.build": "Строить новые здания (молоток)",
+        "vikingbot.base.villages": "Сбор наград с орлов",
+        "vikingbot.base.heal": "Лечение",
+        "vikingbot.base.eaglenest": "Орлиное гнездо",
+    }
+
     def _fmt_schedule_rule(rule):
         if not isinstance(rule, dict):
             return None
@@ -72,7 +92,14 @@ def _build_manage_view_steps(raw_settings):
             step = {}
 
         cfg = step.get("Config") or {}
-        name = cfg.get("Name") or cfg.get("name") or f"Шаг {idx + 1}"
+        script_id = step.get("ScriptId")
+        name = (
+            cfg.get("Name")
+            or cfg.get("name")
+            or script_labels.get(script_id)
+            or script_id
+            or f"Шаг {idx + 1}"
+        )
         description = cfg.get("Description") or cfg.get("description") or ""
 
         schedule_rules = step.get("ScheduleRules") or []
@@ -83,6 +110,8 @@ def _build_manage_view_steps(raw_settings):
             {
                 "index": idx,
                 "name": name,
+                "script_id": script_id,
+                "config": cfg,
                 "description": description,
                 "is_active": bool(step.get("IsActive", True)),
                 "schedule_summary": schedule_summary,
@@ -219,10 +248,14 @@ def manage():
 
     view_steps = []
     steps_error = None
+    raw_steps = []
+    menu_data = None
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         if raw_settings and "Data" in raw_settings:
             view_steps = _build_manage_view_steps(raw_settings)
+            raw_steps = raw_settings.get("Data") or []
+            menu_data = raw_settings.get("MenuData") or {}
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
 
@@ -231,6 +264,8 @@ def manage():
         accounts=accounts,
         selected_account=selected_account,
         view_steps=view_steps,
+        raw_steps=raw_steps,
+        menu_data=menu_data,
         steps_error=steps_error,
     )
 
@@ -312,6 +347,8 @@ def manage_account_details(account_id: int):
         return jsonify({"ok": False, "error": "failed to load settings"}), 500
 
     steps = _build_manage_view_steps(raw_settings)
+    raw_steps = raw_settings.get("Data") or []
+    menu_data = raw_settings.get("MenuData") or {}
 
     return jsonify(
         {
@@ -322,6 +359,8 @@ def manage_account_details(account_id: int):
                 "server": account.server.name if account.server else None,
             },
             "steps": steps,
+            "raw_steps": raw_steps,
+            "menu": menu_data,
         }
     )
 
@@ -350,6 +389,38 @@ def account_toggle_step(account_id: int, step_idx: int):
     new_active = bool(payload.get("is_active"))
 
     ok, msg = update_account_step_settings(account, step_idx, {"IsActive": new_active})
+    status = 200 if ok else 500
+    return jsonify({"ok": ok, "message": msg}), status
+
+
+@client_bp.route("/manage/account/<int:account_id>/settings/<int:step_idx>", methods=["PUT"])
+@login_required
+def manage_update_step(account_id: int, step_idx: int):
+    account = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(id=account_id, owner_id=current_user.id, is_active=True)
+        .first()
+    )
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    update_payload = {}
+
+    if "IsActive" in payload:
+        update_payload["IsActive"] = bool(payload.get("IsActive"))
+
+    if isinstance(payload.get("Config"), dict):
+        update_payload["Config"] = payload.get("Config")
+
+    if isinstance(payload.get("ScheduleRules"), list):
+        update_payload["ScheduleRules"] = payload.get("ScheduleRules")
+
+    if not update_payload:
+        return jsonify({"ok": False, "error": "no valid fields"}), 400
+
+    ok, msg = update_account_step_settings(account, step_idx, update_payload)
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": msg}), status
 

@@ -48,7 +48,10 @@
             </div>
         </div>
 
-        <div class="manage-steps" data-role="manage-steps"></div>
+        <div class="manage-panels">
+            <div class="manage-steps" data-role="manage-steps"></div>
+            <div class="manage-config" data-role="manage-config"></div>
+        </div>
 
         {% if steps_error %}
             <div class="manage-error">{{ steps_error }}</div>
@@ -62,6 +65,8 @@
         selectedAccountName: {{ (selected_account.name if selected_account else '')|tojson }},
         selectedServerName: {{ (selected_account.server.name if selected_account and selected_account.server else '')|tojson }},
         steps: {{ view_steps|tojson }},
+        rawSteps: {{ raw_steps|tojson }},
+        menu: {{ menu_data|tojson }},
         detailsUrlTemplate: "{{ url_for('client.manage_account_details', account_id=0) }}".replace('/0/', '/__ACCOUNT__/')
     };
 </script>
