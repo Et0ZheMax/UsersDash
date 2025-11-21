@@ -973,6 +973,7 @@ def admin_farm_data_pull_apply():
         for row in rows:
             acc_id = row.get("account_id")
             acc: Account | None = None
+            is_new = bool(row.get("is_new"))
 
             if acc_id is not None:
                 try:
@@ -982,6 +983,13 @@ def admin_farm_data_pull_apply():
 
                 if acc_id_int is not None:
                     acc = Account.query.filter_by(id=acc_id_int).first()
+
+            # Уже существующие аккаунты не перезаписываем в рамках pull-apply
+            if acc is not None and not is_new:
+                warnings.append(
+                    f"{acc.name}: уже есть в UsersDash, пропущен при импорте"
+                )
+                continue
 
             # Если не нашли аккаунт — создаём новый на указанном сервере
             if acc is None:
