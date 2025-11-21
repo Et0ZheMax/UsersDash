@@ -19,7 +19,8 @@
     <div class="manage-accounts" data-role="manage-accounts">
         {% if accounts %}
             {% for acc in accounts %}
-                <button class="manage-account-item {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                <a class="manage-account-item {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                        href="{{ url_for('admin.manage', account_id=acc.id) }}"
                         data-account-id="{{ acc.id }}"
                         data-account-name="{{ acc.name }}"
                         data-server-name="{{ acc.server.name if acc.server else 'N/A' }}">
@@ -27,7 +28,7 @@
                     <div class="manage-account-meta">
                         {{ acc.server.name if acc.server else 'N/A' }} — {{ acc.owner.username if acc.owner else '—' }}
                     </div>
-                </button>
+                </a>
             {% endfor %}
         {% else %}
             <div class="manage-empty">Активных ферм нет.</div>
