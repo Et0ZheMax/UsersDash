@@ -525,7 +525,9 @@
             state.steps = state.view_steps;
         }
 
-        if (!state.rawSteps && state.selectedAccountId) {
+        // Если ничего не подгружено сервером (или пришёл пустой массив),
+        // подгружаем настройки через AJAX, чтобы правая часть не оставалась пустой.
+        if (state.selectedAccountId && (!state.rawSteps || !state.rawSteps.length)) {
             loadSteps(state.selectedAccountId);
             return;
         }
