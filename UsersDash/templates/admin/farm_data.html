@@ -916,8 +916,13 @@ document.addEventListener("DOMContentLoaded", function () {
 
                     const remote = item.remote || {};
                     const local = item.local || {};
-                    const canApply = !!item.can_apply && !!item.account_id;
-                    const statusText = canApply ? "Найден в UsersDash" : "Аккаунт не найден";
+                    const isNew = !!item.is_new;
+                    const canApply = !!item.can_apply;
+                    const statusText = isNew
+                        ? "Будет создан"
+                        : item.account_id
+                            ? "Найден в UsersDash"
+                            : "Аккаунт не найден";
 
                     const localSummary = [
                         local.email ? `Email: ${local.email}` : "",
@@ -938,7 +943,7 @@ document.addEventListener("DOMContentLoaded", function () {
                           <input type="checkbox"
                                  data-role="pull-row-check"
                                  data-index="${idx}"
-                                 ${canApply ? "checked" : "disabled"}>
+                                 ${canApply ? (isNew ? "checked" : "") : "disabled"}>
                         </td>
                         <td>${statusText}</td>
                         <td>${escapeHtml(item.server_name || "")}</td>
@@ -1075,6 +1080,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
                     itemsToApply.push({
                         account_id: item.account_id,
+                        server_id: item.server_id,
+                        farm_name: item.farm_name,
+                        internal_id: item.internal_id,
+                        is_new: item.is_new,
                         email: remote.email || "",
                         password: remote.password || "",
                         igg_id: remote.igg_id || "",
