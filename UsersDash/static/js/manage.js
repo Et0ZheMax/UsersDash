@@ -170,6 +170,10 @@
     const accountsRoot = document.querySelector('[data-role="manage-accounts"]');
     const stepsRoot = document.querySelector('[data-role="manage-steps"]');
     const configRoot = document.querySelector('[data-role="manage-config"]');
+    const stepsTitleEl = document.querySelector('[data-role="steps-title"]');
+    const stepsSubtitleEl = document.querySelector('[data-role="steps-subtitle"]');
+    const configTitleEl = document.querySelector('[data-role="config-title"]');
+    const configSubtitleEl = document.querySelector('[data-role="config-subtitle"]');
 
     function replaceTemplate(str, accountId) {
         return (str || "").replace("__ACCOUNT__", accountId);
@@ -224,6 +228,31 @@
     function renderEmptyState(message) {
         if (stepsRoot) stepsRoot.innerHTML = `<div class="manage-empty">${message || "Нет данных по шагам."}</div>`;
         if (configRoot) configRoot.innerHTML = "";
+        updateHeaderText();
+    }
+
+    function updateHeaderText() {
+        if (stepsTitleEl) {
+            stepsTitleEl.textContent = state.selectedAccountName || "Выберите ферму";
+        }
+        if (stepsSubtitleEl) {
+            stepsSubtitleEl.textContent = state.selectedAccountId
+                ? (state.selectedServerName || "Сервер не указан")
+                : "Выберите ферму, чтобы увидеть шаги";
+        }
+
+        const selectedStep = (state.selectedStepIndex !== null && state.rawSteps[state.selectedStepIndex])
+            ? state.rawSteps[state.selectedStepIndex]
+            : null;
+
+        if (configTitleEl) {
+            configTitleEl.textContent = selectedStep ? getScriptTitle(selectedStep) : "Выберите шаг";
+        }
+        if (configSubtitleEl) {
+            configSubtitleEl.textContent = selectedStep
+                ? (state.selectedAccountName || "")
+                : "Параметры появятся после выбора шага";
+        }
     }
 
     function renderSteps() {
@@ -275,6 +304,7 @@
         }).join("");
 
         stepsRoot.innerHTML = html;
+        updateHeaderText();
     }
 
     function renderConfig() {
@@ -283,6 +313,7 @@
 
         if (state.selectedStepIndex === null || !state.rawSteps[state.selectedStepIndex]) {
             configRoot.innerHTML = '<div class="config-empty">Выберите шаг, чтобы редактировать настройки.</div>';
+            updateHeaderText();
             return;
         }
 
@@ -362,6 +393,7 @@
         form.appendChild(footer);
 
         configRoot.appendChild(form);
+        updateHeaderText();
     }
 
     function highlightAccount(accountId) {
@@ -466,6 +498,7 @@
             state.selectedStepIndex = state.rawSteps.length ? 0 : null;
             renderSteps();
             renderConfig();
+            updateHeaderText();
         } catch (err) {
             console.error(err);
             renderEmptyState(err.message);
