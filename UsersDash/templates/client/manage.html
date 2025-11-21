@@ -32,32 +32,35 @@
         {% endif %}
     </div>
 
-    <div class="manage-content">
+    <div class="manage-steps-column">
         <div class="manage-content-header">
-            {% if selected_account %}
-                <div>
-                    <div class="content-kicker">Выбранная ферма</div>
-                    <div class="content-title">{{ selected_account.name }}</div>
-                    <div class="content-subtitle">{{ selected_account.server.name if selected_account.server else 'Сервер не указан' }}</div>
-                </div>
-            {% else %}
-                <div class="content-title">Нет выбранной фермы</div>
-            {% endif %}
+            <div>
+                <div class="content-kicker">Шаги фермы</div>
+                <div class="content-title" data-role="steps-title">{{ selected_account.name if selected_account else 'Выберите ферму' }}</div>
+                <div class="content-subtitle" data-role="steps-subtitle">{{ selected_account.server.name if selected_account and selected_account.server else 'Выберите ферму, чтобы увидеть шаги' }}</div>
+            </div>
             <div class="content-actions">
                 <a href="{{ url_for('client.dashboard') }}" class="btn btn-outline">← Назад к фермам</a>
             </div>
         </div>
+        <div class="manage-steps" data-role="manage-steps"></div>
+    </div>
 
-        <div class="manage-panels">
-            <div class="manage-steps" data-role="manage-steps"></div>
-            <div class="manage-config" data-role="manage-config"></div>
+    <div class="manage-config-column">
+        <div class="manage-content-header">
+            <div>
+                <div class="content-kicker">Конфигурация шага</div>
+                <div class="content-title" data-role="config-title">Выберите шаг</div>
+                <div class="content-subtitle" data-role="config-subtitle">Параметры появятся после выбора шага</div>
+            </div>
         </div>
-
-        {% if steps_error %}
-            <div class="manage-error">{{ steps_error }}</div>
-        {% endif %}
+        <div class="manage-config" data-role="manage-config"></div>
     </div>
 </div>
+
+{% if steps_error %}
+    <div class="manage-error">{{ steps_error }}</div>
+{% endif %}
 
 <script>
     {% set details_url = url_for('client.manage_account_details', account_id=0) %}

@@ -777,7 +777,7 @@ h1 {
 
 .manage-layout {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 260px 320px 1fr;
   gap: 14px;
 }
 
@@ -827,18 +827,20 @@ h1 {
   margin-top: 2px;
 }
 
-.manage-content {
+.manage-steps-column,
+.manage-config-column {
   background: #141620;
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 12px;
   padding: 14px;
   min-height: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.manage-panels {
-  display: grid;
-  grid-template-columns: 1fr 360px;
-  gap: 12px;
+.manage-config-column {
+  border-color: rgba(76, 127, 255, 0.25);
 }
 
 .manage-config {
@@ -932,6 +934,7 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1;
 }
 
 .manage-step-card {
@@ -995,6 +998,17 @@ h1 {
   color: #f8d7da;
 }
 
+@media (max-width: 1200px) {
+  .manage-layout {
+    grid-template-columns: 240px 1fr;
+  }
+
+  .manage-steps-column,
+  .manage-config-column {
+    min-height: 300px;
+  }
+}
+
 @media (max-width: 960px) {
   .manage-layout {
     grid-template-columns: 1fr;
@@ -1004,7 +1018,8 @@ h1 {
     max-height: none;
   }
 
-  .manage-panels {
-    grid-template-columns: 1fr;
+  .manage-steps-column,
+  .manage-config-column {
+    min-height: 0;
   }
 }
