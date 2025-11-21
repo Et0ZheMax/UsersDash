@@ -25,21 +25,28 @@ def _get_effective_api_base(server) -> Optional[str]:
     """
     Возвращает "правильный" base URL для API конкретного сервера.
 
-    В БД server.api_base_url ожидается что-то вроде:
-      - "https://hotly-large-coral.cloudpub.ru/"
-      - "http://192.168.31.234:5000"
-      - "http://host:5000/api"
+    Пытаемся использовать api_base_url, а при его отсутствии — host/base_url,
+    чтобы не требовать жёсткого заполнения только одного поля.
 
-    На выходе хотим:
-      - "https://hotly-large-coral.cloudpub.ru/api"
-      - "http://192.168.31.234:5000/api"
+    На выходе хотим строку вида "http://host:5000/api".
     """
-    raw = (server.api_base_url or "").strip()
+
+    raw = (
+        getattr(server, "api_base_url", None)
+        or getattr(server, "host", None)
+        or getattr(server, "base_url", None)
+        or ""
+    ).strip()
+
     if not raw:
-        print(f"[remote_api] WARNING: api_base_url не заполнен для сервера {server}")
+        print(f"[remote_api] WARNING: api_base_url/host не заполнен для сервера {server}")
         return None
 
     base = raw.rstrip("/")
+
+    # Если строка не начинается с http, добавим http://
+    if not base.startswith("http://") and not base.startswith("https://"):
+        base = "http://" + base
 
     # Если админ уже указал .../api — оставляем как есть
     if base.endswith("/api"):
@@ -58,7 +65,15 @@ def _safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[Dict[st
     try:
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            # На некоторых хостах content-type может быть text/plain — пробуем сами
+            try:
+                return json.loads(resp.text)
+            except Exception as exc:
+                print(f"[remote_api] ERROR: GET {url} JSON decode failed: {exc}")
+                return None
     except Exception as exc:
         print(f"[remote_api] ERROR: GET {url} failed: {exc}")
         return None
@@ -357,7 +372,16 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
 
     # Сначала подтягиваем ресурсы по серверу, чтобы определить remote_id
     server_resources = fetch_resources_for_server(server)
-    remote_id, _ = _resolve_remote_account(account, server_resources)
+    remote_id = None
+    if server_resources:
+        remote_id, _ = _resolve_remote_account(account, server_resources)
+
+    # Если ресурсы не достались или не сопоставились — пробуем прямой fallback
+    if not remote_id:
+        fallback_remote = getattr(account, "internal_id", None) or getattr(account, "name", None)
+        if fallback_remote:
+            remote_id = str(fallback_remote)
+
     if not remote_id:
         print(f"[remote_api] WARNING: не удалось определить remote_id для аккаунта {account}")
         return None
