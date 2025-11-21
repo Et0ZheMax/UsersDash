@@ -18,7 +18,7 @@ PROJECT_ROOT = CURRENT_FILE.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from flask import Flask, redirect, url_for
+from flask import Flask, g, redirect, url_for
 from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
 
@@ -29,6 +29,7 @@ from UsersDash.admin_views import admin_bp
 from UsersDash.client_views import client_bp
 from UsersDash.api_views import api_bp
 from UsersDash.services.db_backup import backup_database, ensure_backup_dir
+from UsersDash.services.farmdata_status import collect_farmdata_status
 
 
 # -------------------------------------------------
@@ -261,6 +262,26 @@ def create_app() -> Flask:
     app.register_blueprint(admin_bp, url_prefix="/admin")
     app.register_blueprint(client_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
+
+    @app.context_processor
+    def inject_farmdata_flags():
+        farmdata_required = False
+        farmdata_status = None
+
+        try:
+            if current_user.is_authenticated and getattr(current_user, "role", None) != "admin":
+                if not hasattr(g, "farmdata_status_cache"):
+                    g.farmdata_status_cache = collect_farmdata_status(current_user.id)
+
+                farmdata_status = g.farmdata_status_cache
+                farmdata_required = bool(farmdata_status.get("has_issues"))
+        except Exception as exc:
+            print(f"[context_processor] farmdata flags failed: {exc}")
+
+        return {
+            "farmdata_required": farmdata_required,
+            "farmdata_status": farmdata_status,
+        }
 
     # ---------- Маршрут по умолчанию ----------
 
