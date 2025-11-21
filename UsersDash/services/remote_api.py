@@ -25,21 +25,28 @@ def _get_effective_api_base(server) -> Optional[str]:
     """
     Возвращает "правильный" base URL для API конкретного сервера.
 
-    В БД server.api_base_url ожидается что-то вроде:
-      - "https://hotly-large-coral.cloudpub.ru/"
-      - "http://192.168.31.234:5000"
-      - "http://host:5000/api"
+    Пытаемся использовать api_base_url, а при его отсутствии — host/base_url,
+    чтобы не требовать жёсткого заполнения только одного поля.
 
-    На выходе хотим:
-      - "https://hotly-large-coral.cloudpub.ru/api"
-      - "http://192.168.31.234:5000/api"
+    На выходе хотим строку вида "http://host:5000/api".
     """
-    raw = (server.api_base_url or "").strip()
+
+    raw = (
+        getattr(server, "api_base_url", None)
+        or getattr(server, "host", None)
+        or getattr(server, "base_url", None)
+        or ""
+    ).strip()
+
     if not raw:
-        print(f"[remote_api] WARNING: api_base_url не заполнен для сервера {server}")
+        print(f"[remote_api] WARNING: api_base_url/host не заполнен для сервера {server}")
         return None
 
     base = raw.rstrip("/")
+
+    # Если строка не начинается с http, добавим http://
+    if not base.startswith("http://") and not base.startswith("https://"):
+        base = "http://" + base
 
     # Если админ уже указал .../api — оставляем как есть
     if base.endswith("/api"):
