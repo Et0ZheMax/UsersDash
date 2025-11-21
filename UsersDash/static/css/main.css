@@ -719,6 +719,76 @@ h1 {
   min-height: 400px;
 }
 
+.manage-panels {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 12px;
+}
+
+.manage-config {
+  background: #0f111a;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  border-radius: 12px;
+  padding: 14px;
+  min-height: 200px;
+}
+
+.config-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.config-title {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.config-subtitle {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  margin-top: 2px;
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.config-field label {
+  font-size: 0.9rem;
+  color: #e5e7eb;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.config-field input,
+.config-field select {
+  width: 100%;
+  background: #0c0e16;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e5e7eb;
+  padding: 8px 10px;
+  border-radius: 8px;
+}
+
+.config-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.config-empty {
+  color: #9ca3af;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+}
+
 .manage-content-header {
   display: flex;
   justify-content: space-between;
@@ -753,6 +823,11 @@ h1 {
   border: 1px solid rgba(148, 163, 184, 0.1);
   border-radius: 12px;
   padding: 12px 14px;
+}
+
+.manage-step-card.is-selected {
+  border-color: rgba(76, 127, 255, 0.8);
+  box-shadow: 0 0 0 1px rgba(76, 127, 255, 0.35);
 }
 
 .manage-step-head {
@@ -811,5 +886,9 @@ h1 {
 
   .manage-accounts {
     max-height: none;
+  }
+
+  .manage-panels {
+    grid-template-columns: 1fr;
   }
 }
