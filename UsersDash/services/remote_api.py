@@ -6,6 +6,7 @@
 
 from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
+import json
 import requests
 
 
@@ -311,6 +312,18 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
 
     url = f"{base}/manage/account/{remote_id}/settings"
     data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    if isinstance(data, dict):
+        nested = data.get("data") or data.get("settings") or data.get("payload")
+        if isinstance(nested, dict):
+            data = nested
+
+        for key in ("Data", "MenuData"):
+            raw_value = data.get(key)
+            if isinstance(raw_value, str):
+                try:
+                    data[key] = json.loads(raw_value)
+                except json.JSONDecodeError:
+                    pass
     if data is None:
         print(f"[remote_api] WARNING: не удалось получить настройки аккаунта {remote_id} с {url}")
     return data
