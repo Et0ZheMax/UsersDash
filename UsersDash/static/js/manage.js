@@ -496,6 +496,21 @@
             stepsRoot.addEventListener('click', handleStepsClick);
         }
 
+        if (state.rawSteps === undefined && state.raw_steps) {
+            state.rawSteps = state.raw_steps;
+        }
+        if (!state.rawSteps && state.steps && state.steps.length && Array.isArray(state.raw_steps)) {
+            state.rawSteps = state.raw_steps;
+        }
+        if (!state.steps && state.view_steps) {
+            state.steps = state.view_steps;
+        }
+
+        if (!state.rawSteps && state.selectedAccountId) {
+            loadSteps(state.selectedAccountId);
+            return;
+        }
+
         if (state.selectedAccountId) {
             highlightAccount(state.selectedAccountId);
             if (state.rawSteps && state.rawSteps.length && state.selectedStepIndex === null) {
