@@ -158,8 +158,14 @@
         menu: {},
         isLoading: false,
         detailsUrlTemplate: "",
+        toggleUrlTemplate: "",
+        updateUrlTemplate: "",
         selectedStepIndex: null,
     }, window.manageInitialState || {});
+
+    state.detailsUrlTemplate = state.detailsUrlTemplate || "/manage/account/__ACCOUNT__/details";
+    state.toggleUrlTemplate = state.toggleUrlTemplate || "/account/__ACCOUNT__/settings/step/__STEP__/toggle";
+    state.updateUrlTemplate = state.updateUrlTemplate || "/manage/account/__ACCOUNT__/settings/__STEP__";
 
     const accountsRoot = document.querySelector('[data-role="manage-accounts"]');
     const stepsRoot = document.querySelector('[data-role="manage-steps"]');
@@ -167,6 +173,14 @@
 
     function replaceTemplate(str, accountId) {
         return (str || "").replace("__ACCOUNT__", accountId);
+    }
+
+    function replaceStepTemplate(str, accountId, stepIdx) {
+        let url = replaceTemplate(str, accountId);
+        if (stepIdx !== undefined && stepIdx !== null) {
+            url = url.replace("__STEP__", stepIdx);
+        }
+        return url;
     }
 
     function getScriptTitle(step) {
@@ -364,7 +378,8 @@
         const newActive = currentActive === "1" ? false : true;
         if (button) button.disabled = true;
         try {
-            const resp = await fetch(`/account/${accountId}/settings/step/${stepIdx}/toggle`, {
+            const url = replaceStepTemplate(state.toggleUrlTemplate, accountId, stepIdx);
+            const resp = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
                 body: JSON.stringify({ is_active: newActive }),
@@ -408,7 +423,8 @@
         if (!state.selectedAccountId) return;
         const payload = collectConfig(formEl, cfg || {});
         try {
-            const resp = await fetch(`/manage/account/${state.selectedAccountId}/settings/${stepIdx}`, {
+            const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
+            const resp = await fetch(url, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
                 body: JSON.stringify({ Config: payload }),
@@ -461,6 +477,9 @@
     function handleAccountClick(event) {
         const btn = event.target.closest('[data-account-id]');
         if (!btn) return;
+        if (event.preventDefault) {
+            event.preventDefault();
+        }
         const accountId = btn.dataset.accountId;
         if (!accountId || String(accountId) === String(state.selectedAccountId)) return;
         loadSteps(accountId);

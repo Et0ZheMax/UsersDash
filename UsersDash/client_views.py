@@ -501,7 +501,7 @@ def manage_page():
     """Полноценная страница manage с выбором всех ферм пользователя."""
 
     if getattr(current_user, "role", None) == "admin":
-        return redirect(url_for("admin.admin_dashboard"))
+        return redirect(url_for("admin.manage"))
 
     accounts = (
         Account.query
@@ -563,15 +563,19 @@ def account_settings(account_id: int):
     Защита:
     - клиент видит только свои аккаунты (owner_id == current_user.id).
     """
-    account = (
+    query = (
         Account.query
         .options(
             joinedload(Account.server),
             joinedload(Account.owner),
         )
-        .filter_by(id=account_id, owner_id=current_user.id)
-        .first()
+        .filter(Account.id == account_id)
     )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter(Account.owner_id == current_user.id)
+
+    account = query.first()
     if not account:
         abort(404)
 
@@ -617,12 +621,16 @@ def account_settings(account_id: int):
 @client_bp.route("/manage/account/<int:account_id>/details")
 @login_required
 def manage_account_details(account_id: int):
-    account = (
+    query = (
         Account.query
         .options(joinedload(Account.server))
-        .filter_by(id=account_id, owner_id=current_user.id, is_active=True)
-        .first()
+        .filter(Account.id == account_id)
     )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter_by(owner_id=current_user.id, is_active=True)
+
+    account = query.first()
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
@@ -657,12 +665,16 @@ def account_toggle_step(account_id: int, step_idx: int):
 
     Принимает JSON: {"is_active": true|false}
     """
-    account = (
+    query = (
         Account.query
         .options(joinedload(Account.server))
-        .filter_by(id=account_id, owner_id=current_user.id)
-        .first()
+        .filter(Account.id == account_id)
     )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter_by(owner_id=current_user.id)
+
+    account = query.first()
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
@@ -680,12 +692,16 @@ def account_toggle_step(account_id: int, step_idx: int):
 @client_bp.route("/manage/account/<int:account_id>/settings/<int:step_idx>", methods=["PUT"])
 @login_required
 def manage_update_step(account_id: int, step_idx: int):
-    account = (
+    query = (
         Account.query
         .options(joinedload(Account.server))
-        .filter_by(id=account_id, owner_id=current_user.id, is_active=True)
-        .first()
+        .filter(Account.id == account_id)
     )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter_by(owner_id=current_user.id, is_active=True)
+
+    account = query.first()
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
@@ -720,12 +736,16 @@ def account_refresh(account_id: int):
     - вызываем fetch_resources_for_accounts([account]);
     - отдаём JSON с текущими ресурсами для обновления строки в таблице.
     """
-    account = (
+    query = (
         Account.query
         .options(joinedload(Account.server))
-        .filter_by(id=account_id, owner_id=current_user.id)
-        .first()
+        .filter(Account.id == account_id)
     )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter_by(owner_id=current_user.id)
+
+    account = query.first()
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 

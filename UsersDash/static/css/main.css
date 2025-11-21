@@ -795,11 +795,13 @@ h1 {
 
 .manage-account-item {
   width: 100%;
+  display: block;
   background: none;
   border: 1px solid transparent;
   border-radius: 10px;
   padding: 10px 12px;
   color: #e5e7eb;
+  text-decoration: none;
   text-align: left;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
