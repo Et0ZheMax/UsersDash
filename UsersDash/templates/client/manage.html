@@ -62,7 +62,7 @@
         selectedAccountName: {{ (selected_account.name if selected_account else '')|tojson }},
         selectedServerName: {{ (selected_account.server.name if selected_account and selected_account.server else '')|tojson }},
         steps: {{ view_steps|tojson }},
-        detailsUrlTemplate: "{{ url_for('client.manage_account_details', account_id='__ACCOUNT__') }}"
+        detailsUrlTemplate: "{{ url_for('client.manage_account_details', account_id=0) }}".replace('/0/', '/__ACCOUNT__/')
     };
 </script>
 <script src="{{ url_for('static', filename='js/manage.js') }}"></script>
