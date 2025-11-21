@@ -62,6 +62,10 @@
 </div>
 
 <script>
+    {% set details_url = url_for('client.manage_account_details', account_id=0) %}
+    {% set toggle_url = url_for('client.account_toggle_step', account_id=0, step_idx=0) %}
+    {% set update_url = url_for('client.manage_update_step', account_id=0, step_idx=0) %}
+
     window.manageInitialState = {
         selectedAccountId: {{ selected_account.id if selected_account else 'null' }},
         selectedAccountName: {{ (selected_account.name if selected_account else '')|tojson }},
@@ -70,9 +74,9 @@
         rawSteps: {{ raw_steps|tojson }},
         raw_steps: {{ raw_steps|tojson }},
         menu: {{ menu_data|tojson }},
-        detailsUrlTemplate: {{ url_for('client.manage_account_details', account_id='__ACCOUNT__')|tojson }},
-        toggleUrlTemplate: {{ url_for('client.account_toggle_step', account_id='__ACCOUNT__', step_idx='__STEP__')|tojson }},
-        updateUrlTemplate: {{ url_for('client.manage_update_step', account_id='__ACCOUNT__', step_idx='__STEP__')|tojson }},
+        detailsUrlTemplate: {{ details_url.replace('0', '__ACCOUNT__', 1)|tojson }},
+        toggleUrlTemplate: {{ toggle_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
+        updateUrlTemplate: {{ update_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
     };
 </script>
 <script src="{{ url_for('static', filename='js/manage.js') }}"></script>
