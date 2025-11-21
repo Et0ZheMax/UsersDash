@@ -235,7 +235,6 @@
                 const item = {
                     account_id: accountId,
                     email: val('input[name="email"]'),
-                    login: val('input[name="login"]'),
                     password: val('input[name="password"]'),
                     igg_id: val('input[name="igg_id"]'),
                     server: val('input[name="server"]'),

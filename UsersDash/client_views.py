@@ -13,10 +13,12 @@ from flask import (
     request,
     redirect,
     url_for,
+    g,
 )
 from flask_login import login_required, current_user
 from sqlalchemy.orm import joinedload
 from UsersDash.models import Account, FarmData, db
+from UsersDash.services.farmdata_status import collect_farmdata_status
 from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_account_settings,
@@ -37,6 +39,11 @@ def dashboard():
     """
     if getattr(current_user, "role", None) == "admin":
         return redirect(url_for("admin.admin_dashboard"))
+
+    if not hasattr(g, "farmdata_status_cache"):
+        g.farmdata_status_cache = collect_farmdata_status(current_user.id)
+
+    farmdata_status = g.farmdata_status_cache
 
     accounts = (
         Account.query
@@ -74,6 +81,7 @@ def dashboard():
             total_accounts=0,
             upcoming_payments=[],
             upcoming_more=0,
+            farmdata_status=farmdata_status,
         )
 
     resources_map = fetch_resources_for_accounts(accounts)
@@ -107,6 +115,7 @@ def dashboard():
         total_accounts=total_accounts,
         upcoming_payments=upcoming_payments,
         upcoming_more=upcoming_more,
+        farmdata_status=farmdata_status,
     )
 
 
@@ -288,7 +297,6 @@ def farm_data_save():
         {
           "account_id": "123",   // ID из таблицы accounts
           "email": "...",
-          "login": "...",
           "password": "...",
           "igg_id": "123456789",
           "server": "K72"
@@ -384,15 +392,15 @@ def farm_data_save():
             key = (current_user.id, farm_name)
 
             email = (row.get("email") or "").strip()
-            login_val = (row.get("login") or "").strip()
             password_val = (row.get("password") or "").strip()
             igg_id = (row.get("igg_id") or "").strip()
             server_val = (row.get("server") or "").strip()
+            telegram_tag_val = (row.get("telegram_tag") or "").strip()
 
             fd = fd_by_key.get(key)
             if not fd:
                 # создаём только если есть хоть какие-то данные
-                if not any([email, login_val, password_val, igg_id, server_val]):
+                if not any([email, password_val, igg_id, server_val, telegram_tag_val]):
                     continue
 
                 fd = FarmData(
@@ -404,11 +412,10 @@ def farm_data_save():
 
             # Обновляем поля
             fd.email = email or None
-            fd.login = login_val or None
             fd.password = password_val or None
             fd.igg_id = igg_id or None
             fd.server = server_val or None
-            fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
+            fd.telegram_tag = telegram_tag_val or None
 
         db.session.commit()
     except Exception as exc:

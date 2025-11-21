@@ -33,6 +33,33 @@
             <div class="kpi-empty">Нет запланированных оплат</div>
         {% endif %}
     </div>
+
+    <div class="kpi-card kpi-status-card">
+        <div class="kpi-label">Статус</div>
+        {% set status = farmdata_status %}
+
+        {% if status and status.has_issues %}
+            <div class="status-chip status-chip--warning">Требуется внимание</div>
+            <div class="status-list status-list--scrollable">
+                {% if status.missing_details %}
+                    {% for item in status.missing_details %}
+                        <div class="status-item status-item--warn">
+                            <div class="status-item-title">{{ item.farm_name }}</div>
+                            <div class="status-item-text">Не заполнено: {{ item.missing_fields|join(', ') }}</div>
+                        </div>
+                    {% endfor %}
+                {% elif status.missing_accounts %}
+                    <div class="status-item status-item--warn">
+                        Заполните данные ферм: {{ status.missing_accounts|join(', ') }}
+                    </div>
+                {% endif %}
+            </div>
+            <div class="status-note">Проблемы по логам будут отображаться здесь позже.</div>
+        {% else %}
+            <div class="status-chip status-chip--ok">Все Отлично</div>
+            <div class="status-note status-note--ok">Новых проблем не обнаружено.</div>
+        {% endif %}
+    </div>
 </div>
 
 
