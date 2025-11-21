@@ -297,6 +297,15 @@ def _decode_json_if_str(value: Any) -> Any:
     return value
 
 
+def _decode_manage_block(value: Any) -> Any:
+    """Декодирует строки JSON и отдельные элементы списков для manage."""
+
+    value = _decode_json_if_str(value)
+    if isinstance(value, list):
+        return [_decode_json_if_str(item) for item in value]
+    return value
+
+
 def _unwrap_manage_payload(data: Any) -> Any:
     """Извлекает полезную нагрузку настроек из разных оболочек."""
 
@@ -339,18 +348,13 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
 
     url = f"{base}/manage/account/{remote_id}/settings"
     data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
-    if isinstance(data, dict):
-        nested = data.get("data") or data.get("settings") or data.get("payload")
-        if isinstance(nested, dict):
-            data = nested
+    data = _unwrap_manage_payload(data)
 
+    if isinstance(data, list):
+        data = {"Data": data}
+    if isinstance(data, dict):
         for key in ("Data", "MenuData"):
-            raw_value = data.get(key)
-            if isinstance(raw_value, str):
-                try:
-                    data[key] = json.loads(raw_value)
-                except json.JSONDecodeError:
-                    pass
+            data[key] = _decode_manage_block(data.get(key))
     if data is None:
         print(f"[remote_api] WARNING: не удалось получить настройки аккаунта {remote_id} с {url}")
     return data
