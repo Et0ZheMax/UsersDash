@@ -286,6 +286,33 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
     return result
 
 
+def _decode_json_if_str(value: Any) -> Any:
+    """Возвращает распарсенный JSON, если передана строка."""
+
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _unwrap_manage_payload(data: Any) -> Any:
+    """Извлекает полезную нагрузку настроек из разных оболочек."""
+
+    # Если пришла строка — пробуем распарсить JSON
+    data = _decode_json_if_str(data)
+
+    # Могут быть вложенные data/settings/payload
+    if isinstance(data, dict):
+        for key in ("data", "settings", "payload"):
+            nested = data.get(key)
+            if nested is not None:
+                # рекурсивно распаковываем, чтобы достать финальный словарь
+                return _unwrap_manage_payload(nested)
+    return data
+
+
 def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
     """
     Получаем настройки конкретного аккаунта (фермы) через
