@@ -122,6 +122,288 @@ def _build_manage_view_steps(raw_settings):
     return view_steps
 
 
+def _build_manage_view_steps(raw_settings):
+    steps = raw_settings.get("Data") or []
+    view_steps = []
+
+    script_labels = {
+        "vikingbot.base.gathervip": "Сбор ресурсов",
+        "vikingbot.base.dailies": "Ежедневные задания",
+        "vikingbot.base.alliancedonation": "Техи и подарки племени",
+        "vikingbot.base.mail": "Почта",
+        "vikingbot.base.buffs": "Баффы",
+        "vikingbot.base.recruitment": "Найм войск",
+        "vikingbot.base.upgrade": "Стройка",
+        "vikingbot.base.research": "Исследования",
+        "vikingbot.base.divinationshack": "Хижина Гадалки",
+        "vikingbot.base.exploration": "Экспедиции в поручениях (перья, яблоки)",
+        "vikingbot.base.commission": "Выполнять поручения",
+        "vikingbot.base.dragoncave": "Пещера дракона",
+        "vikingbot.base.stagingpost": "Пост разгрузки",
+        "vikingbot.base.build": "Строить новые здания (молоток)",
+        "vikingbot.base.villages": "Сбор наград с орлов",
+        "vikingbot.base.heal": "Лечение",
+        "vikingbot.base.eaglenest": "Орлиное гнездо",
+    }
+
+    def _fmt_schedule_rule(rule):
+        if not isinstance(rule, dict):
+            return None
+
+        start = (
+            rule.get("StartAt")
+            or rule.get("Start")
+            or rule.get("From")
+            or rule.get("TimeFrom")
+        )
+        end = (
+            rule.get("EndAt")
+            or rule.get("End")
+            or rule.get("To")
+            or rule.get("TimeTo")
+        )
+        every = rule.get("Every") or rule.get("Interval") or rule.get("EveryMinutes")
+        days = rule.get("Days") or rule.get("WeekDays") or rule.get("Weekdays")
+        label = rule.get("Label") or rule.get("Name")
+
+        parts = []
+        if days:
+            if isinstance(days, (list, tuple)):
+                parts.append("Дни: " + ", ".join(map(str, days)))
+            else:
+                parts.append(f"Дни: {days}")
+        if start or end:
+            parts.append(f"{start or '00:00'} — {end or '24:00'}")
+        if every:
+            parts.append(f"каждые {every}")
+        if label:
+            parts.append(str(label))
+
+        return ", ".join(parts) if parts else None
+
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step = {}
+
+        cfg = step.get("Config") or {}
+        script_id = step.get("ScriptId")
+        name = (
+            cfg.get("Name")
+            or cfg.get("name")
+            or script_labels.get(script_id)
+            or script_id
+            or f"Шаг {idx + 1}"
+        )
+        description = cfg.get("Description") or cfg.get("description") or ""
+
+        schedule_rules = step.get("ScheduleRules") or []
+        summaries = [s for s in (_fmt_schedule_rule(r) for r in schedule_rules) if s]
+        schedule_summary = "; ".join(summaries) if summaries else None
+
+        view_steps.append(
+            {
+                "index": idx,
+                "name": name,
+                "script_id": script_id,
+                "config": cfg,
+                "description": description,
+                "is_active": bool(step.get("IsActive", True)),
+                "schedule_summary": schedule_summary,
+                "schedule_rules_count": len(schedule_rules),
+            }
+        )
+
+    return view_steps
+
+
+def _build_manage_view_steps(raw_settings):
+    steps = raw_settings.get("Data") or []
+    view_steps = []
+
+    script_labels = {
+        "vikingbot.base.gathervip": "Сбор ресурсов",
+        "vikingbot.base.dailies": "Ежедневные задания",
+        "vikingbot.base.alliancedonation": "Техи и подарки племени",
+        "vikingbot.base.mail": "Почта",
+        "vikingbot.base.buffs": "Баффы",
+        "vikingbot.base.recruitment": "Найм войск",
+        "vikingbot.base.upgrade": "Стройка",
+        "vikingbot.base.research": "Исследования",
+        "vikingbot.base.divinationshack": "Хижина Гадалки",
+        "vikingbot.base.exploration": "Экспедиции в поручениях (перья, яблоки)",
+        "vikingbot.base.commission": "Выполнять поручения",
+        "vikingbot.base.dragoncave": "Пещера дракона",
+        "vikingbot.base.stagingpost": "Пост разгрузки",
+        "vikingbot.base.build": "Строить новые здания (молоток)",
+        "vikingbot.base.villages": "Сбор наград с орлов",
+        "vikingbot.base.heal": "Лечение",
+        "vikingbot.base.eaglenest": "Орлиное гнездо",
+    }
+
+    def _fmt_schedule_rule(rule):
+        if not isinstance(rule, dict):
+            return None
+
+        start = (
+            rule.get("StartAt")
+            or rule.get("Start")
+            or rule.get("From")
+            or rule.get("TimeFrom")
+        )
+        end = (
+            rule.get("EndAt")
+            or rule.get("End")
+            or rule.get("To")
+            or rule.get("TimeTo")
+        )
+        every = rule.get("Every") or rule.get("Interval") or rule.get("EveryMinutes")
+        days = rule.get("Days") or rule.get("WeekDays") or rule.get("Weekdays")
+        label = rule.get("Label") or rule.get("Name")
+
+        parts = []
+        if days:
+            if isinstance(days, (list, tuple)):
+                parts.append("Дни: " + ", ".join(map(str, days)))
+            else:
+                parts.append(f"Дни: {days}")
+        if start or end:
+            parts.append(f"{start or '00:00'} — {end or '24:00'}")
+        if every:
+            parts.append(f"каждые {every}")
+        if label:
+            parts.append(str(label))
+
+        return ", ".join(parts) if parts else None
+
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step = {}
+
+        cfg = step.get("Config") or {}
+        script_id = step.get("ScriptId")
+        name = (
+            cfg.get("Name")
+            or cfg.get("name")
+            or script_labels.get(script_id)
+            or script_id
+            or f"Шаг {idx + 1}"
+        )
+        description = cfg.get("Description") or cfg.get("description") or ""
+
+        schedule_rules = step.get("ScheduleRules") or []
+        summaries = [s for s in (_fmt_schedule_rule(r) for r in schedule_rules) if s]
+        schedule_summary = "; ".join(summaries) if summaries else None
+
+        view_steps.append(
+            {
+                "index": idx,
+                "name": name,
+                "script_id": script_id,
+                "config": cfg,
+                "description": description,
+                "is_active": bool(step.get("IsActive", True)),
+                "schedule_summary": schedule_summary,
+                "schedule_rules_count": len(schedule_rules),
+            }
+        )
+
+    return view_steps
+
+
+def _build_manage_view_steps(raw_settings):
+    steps = raw_settings.get("Data") or []
+    view_steps = []
+
+    script_labels = {
+        "vikingbot.base.gathervip": "Сбор ресурсов",
+        "vikingbot.base.dailies": "Ежедневные задания",
+        "vikingbot.base.alliancedonation": "Техи и подарки племени",
+        "vikingbot.base.mail": "Почта",
+        "vikingbot.base.buffs": "Баффы",
+        "vikingbot.base.recruitment": "Найм войск",
+        "vikingbot.base.upgrade": "Стройка",
+        "vikingbot.base.research": "Исследования",
+        "vikingbot.base.divinationshack": "Хижина Гадалки",
+        "vikingbot.base.exploration": "Экспедиции в поручениях (перья, яблоки)",
+        "vikingbot.base.commission": "Выполнять поручения",
+        "vikingbot.base.dragoncave": "Пещера дракона",
+        "vikingbot.base.stagingpost": "Пост разгрузки",
+        "vikingbot.base.build": "Строить новые здания (молоток)",
+        "vikingbot.base.villages": "Сбор наград с орлов",
+        "vikingbot.base.heal": "Лечение",
+        "vikingbot.base.eaglenest": "Орлиное гнездо",
+    }
+
+    def _fmt_schedule_rule(rule):
+        if not isinstance(rule, dict):
+            return None
+
+        start = (
+            rule.get("StartAt")
+            or rule.get("Start")
+            or rule.get("From")
+            or rule.get("TimeFrom")
+        )
+        end = (
+            rule.get("EndAt")
+            or rule.get("End")
+            or rule.get("To")
+            or rule.get("TimeTo")
+        )
+        every = rule.get("Every") or rule.get("Interval") or rule.get("EveryMinutes")
+        days = rule.get("Days") or rule.get("WeekDays") or rule.get("Weekdays")
+        label = rule.get("Label") or rule.get("Name")
+
+        parts = []
+        if days:
+            if isinstance(days, (list, tuple)):
+                parts.append("Дни: " + ", ".join(map(str, days)))
+            else:
+                parts.append(f"Дни: {days}")
+        if start or end:
+            parts.append(f"{start or '00:00'} — {end or '24:00'}")
+        if every:
+            parts.append(f"каждые {every}")
+        if label:
+            parts.append(str(label))
+
+        return ", ".join(parts) if parts else None
+
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step = {}
+
+        cfg = step.get("Config") or {}
+        script_id = step.get("ScriptId")
+        name = (
+            cfg.get("Name")
+            or cfg.get("name")
+            or script_labels.get(script_id)
+            or script_id
+            or f"Шаг {idx + 1}"
+        )
+        description = cfg.get("Description") or cfg.get("description") or ""
+
+        schedule_rules = step.get("ScheduleRules") or []
+        summaries = [s for s in (_fmt_schedule_rule(r) for r in schedule_rules) if s]
+        schedule_summary = "; ".join(summaries) if summaries else None
+
+        view_steps.append(
+            {
+                "index": idx,
+                "name": name,
+                "script_id": script_id,
+                "config": cfg,
+                "description": description,
+                "is_active": bool(step.get("IsActive", True)),
+                "schedule_summary": schedule_summary,
+                "schedule_rules_count": len(schedule_rules),
+            }
+        )
+
+    return view_steps
+
+
 
 @client_bp.route("/dashboard")
 @login_required
@@ -216,6 +498,177 @@ def dashboard():
 @client_bp.route("/manage", endpoint="manage_page")
 @login_required
 def manage_page():
+    """Полноценная страница manage с выбором всех ферм пользователя."""
+
+    if getattr(current_user, "role", None) == "admin":
+        return redirect(url_for("admin.admin_dashboard"))
+
+    accounts = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(owner_id=current_user.id, is_active=True)
+        .order_by(Account.name.asc())
+        .all()
+    )
+
+    selected_account = None
+    selected_id = request.args.get("account_id")
+    if selected_id:
+        try:
+            selected_id_int = int(selected_id)
+        except (TypeError, ValueError):
+            selected_id_int = None
+    else:
+        selected_id_int = accounts[0].id if accounts else None
+
+    for acc in accounts:
+        if selected_id_int and acc.id == selected_id_int:
+            selected_account = acc
+            break
+    if not selected_account and accounts:
+        selected_account = accounts[0]
+
+    view_steps = []
+    steps_error = None
+    raw_steps = []
+    menu_data = None
+    if selected_account:
+        raw_settings = fetch_account_settings(selected_account)
+        if raw_settings and "Data" in raw_settings:
+            view_steps = _build_manage_view_steps(raw_settings)
+            raw_steps = raw_settings.get("Data") or []
+            menu_data = raw_settings.get("MenuData") or {}
+        else:
+            steps_error = "Не удалось загрузить настройки этой фермы."
+
+    return render_template(
+        "client/manage.html",
+        accounts=accounts,
+        selected_account=selected_account,
+        view_steps=view_steps,
+        raw_steps=raw_steps,
+        menu_data=menu_data,
+        steps_error=steps_error,
+    )
+
+
+@client_bp.route("/manage", endpoint="manage_page")
+@login_required
+def manage():
+    """Полноценная страница manage с выбором всех ферм пользователя."""
+
+    if getattr(current_user, "role", None) == "admin":
+        return redirect(url_for("admin.admin_dashboard"))
+
+    accounts = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(owner_id=current_user.id, is_active=True)
+        .order_by(Account.name.asc())
+        .all()
+    )
+
+    selected_account = None
+    selected_id = request.args.get("account_id")
+    if selected_id:
+        try:
+            selected_id_int = int(selected_id)
+        except (TypeError, ValueError):
+            selected_id_int = None
+    else:
+        selected_id_int = accounts[0].id if accounts else None
+
+    for acc in accounts:
+        if selected_id_int and acc.id == selected_id_int:
+            selected_account = acc
+            break
+    if not selected_account and accounts:
+        selected_account = accounts[0]
+
+    view_steps = []
+    steps_error = None
+    raw_steps = []
+    menu_data = None
+    if selected_account:
+        raw_settings = fetch_account_settings(selected_account)
+        if raw_settings and "Data" in raw_settings:
+            view_steps = _build_manage_view_steps(raw_settings)
+            raw_steps = raw_settings.get("Data") or []
+            menu_data = raw_settings.get("MenuData") or {}
+        else:
+            steps_error = "Не удалось загрузить настройки этой фермы."
+
+    return render_template(
+        "client/manage.html",
+        accounts=accounts,
+        selected_account=selected_account,
+        view_steps=view_steps,
+        raw_steps=raw_steps,
+        menu_data=menu_data,
+        steps_error=steps_error,
+    )
+
+
+@client_bp.route("/manage")
+@login_required
+def manage():
+    """Полноценная страница manage с выбором всех ферм пользователя."""
+
+    if getattr(current_user, "role", None) == "admin":
+        return redirect(url_for("admin.admin_dashboard"))
+
+    accounts = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(owner_id=current_user.id, is_active=True)
+        .order_by(Account.name.asc())
+        .all()
+    )
+
+    selected_account = None
+    selected_id = request.args.get("account_id")
+    if selected_id:
+        try:
+            selected_id_int = int(selected_id)
+        except (TypeError, ValueError):
+            selected_id_int = None
+    else:
+        selected_id_int = accounts[0].id if accounts else None
+
+    for acc in accounts:
+        if selected_id_int and acc.id == selected_id_int:
+            selected_account = acc
+            break
+    if not selected_account and accounts:
+        selected_account = accounts[0]
+
+    view_steps = []
+    steps_error = None
+    raw_steps = []
+    menu_data = None
+    if selected_account:
+        raw_settings = fetch_account_settings(selected_account)
+        if raw_settings and "Data" in raw_settings:
+            view_steps = _build_manage_view_steps(raw_settings)
+            raw_steps = raw_settings.get("Data") or []
+            menu_data = raw_settings.get("MenuData") or {}
+        else:
+            steps_error = "Не удалось загрузить настройки этой фермы."
+
+    return render_template(
+        "client/manage.html",
+        accounts=accounts,
+        selected_account=selected_account,
+        view_steps=view_steps,
+        raw_steps=raw_steps,
+        menu_data=menu_data,
+        steps_error=steps_error,
+    )
+
+
+@client_bp.route("/manage")
+@login_required
+def manage():
     """Полноценная страница manage с выбором всех ферм пользователя."""
 
     if getattr(current_user, "role", None) == "admin":
