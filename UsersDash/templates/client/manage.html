@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки бота{% endblock %}
+
+{% block content %}
+<div class="manage-header">
+    <div>
+        <div class="page-kicker">Панель управления</div>
+        <h1 class="page-title">Настройки бота</h1>
+        <div class="page-subtitle">Выберите ферму слева и настройте шаги выполнения</div>
+    </div>
+    <div class="manage-summary">
+        <div class="summary-label">Активных ферм</div>
+        <div class="summary-value">{{ accounts|length }}</div>
+    </div>
+</div>
+
+<div class="manage-layout">
+    <div class="manage-accounts" data-role="manage-accounts">
+        {% if accounts %}
+            {% for acc in accounts %}
+                <button class="manage-account-item {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                        data-account-id="{{ acc.id }}"
+                        data-account-name="{{ acc.name }}"
+                        data-server-name="{{ acc.server.name if acc.server else 'N/A' }}">
+                    <div class="manage-account-name">{{ acc.name }}</div>
+                    <div class="manage-account-meta">{{ acc.server.name if acc.server else 'N/A' }}</div>
+                </button>
+            {% endfor %}
+        {% else %}
+            <div class="manage-empty">У вас нет активных ферм.</div>
+        {% endif %}
+    </div>
+
+    <div class="manage-content">
+        <div class="manage-content-header">
+            {% if selected_account %}
+                <div>
+                    <div class="content-kicker">Выбранная ферма</div>
+                    <div class="content-title">{{ selected_account.name }}</div>
+                    <div class="content-subtitle">{{ selected_account.server.name if selected_account.server else 'Сервер не указан' }}</div>
+                </div>
+            {% else %}
+                <div class="content-title">Нет выбранной фермы</div>
+            {% endif %}
+            <div class="content-actions">
+                <a href="{{ url_for('client.dashboard') }}" class="btn btn-outline">← Назад к фермам</a>
+            </div>
+        </div>
+
+        <div class="manage-panels">
+            <div class="manage-steps" data-role="manage-steps"></div>
+            <div class="manage-config" data-role="manage-config"></div>
+        </div>
+
+        {% if steps_error %}
+            <div class="manage-error">{{ steps_error }}</div>
+        {% endif %}
+    </div>
+</div>
+
+<script>
+    window.manageInitialState = {
+        selectedAccountId: {{ selected_account.id if selected_account else 'null' }},
+        selectedAccountName: {{ (selected_account.name if selected_account else '')|tojson }},
+        selectedServerName: {{ (selected_account.server.name if selected_account and selected_account.server else '')|tojson }},
+        steps: {{ view_steps|tojson }},
+        rawSteps: {{ raw_steps|tojson }},
+        raw_steps: {{ raw_steps|tojson }},
+        menu: {{ menu_data|tojson }},
+        detailsUrlTemplate: "{{ url_for('client.manage_account_details', account_id=0) }}".replace('/0/', '/__ACCOUNT__/')
+    };
+</script>
+<script src="{{ url_for('static', filename='js/manage.js') }}"></script>
+{% endblock %}
