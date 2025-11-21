@@ -276,7 +276,7 @@
                         {% for item in items %}
                             {% set acc = item.account %}
                             {% set fd = item.farmdata %}
-                            {% set has_data = fd and (fd.email or fd.password or fd.igg_id or fd.server or fd.telegram_tag) %}
+                            {% set has_required = fd and fd.email and fd.password and fd.igg_id and fd.server and fd.telegram_tag %}
                             <tr data-account-id="{{ acc.id }}">
                                 <td class="farmdata-name-cell">
                                     <div class="farmdata-name-main">
@@ -345,10 +345,10 @@
                                            value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
                                 </td>
                                 <td>
-                                    {% if has_data %}
+                                    {% if has_required %}
                                         <span class="farmdata-status-badge farmdata-status-ok">Заполнено</span>
                                     {% else %}
-                                        <span class="farmdata-status-badge farmdata-status-empty">Нет данных</span>
+                                        <span class="farmdata-status-badge farmdata-status-empty">Нужно заполнить</span>
                                     {% endif %}
                                 </td>
                             </tr>
