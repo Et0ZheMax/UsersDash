@@ -4,9 +4,17 @@
 # - /api/serverStatus     — health-check (для админского лога)
 # - /api/manage/account/... — настройки шагов (manage)
 
-from typing import Dict, Any, List, Tuple, Optional
+import json
+import logging
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
+from requests import RequestException
+
+from UsersDash.models import Server
+
+log = logging.getLogger(__name__)
 
 
 # Таймауты для HTTP-запросов (в секундах)
@@ -285,6 +293,47 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
     return result
 
 
+def _decode_json_if_str(value: Any) -> Any:
+    """Возвращает распарсенный JSON, если передана строка."""
+
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _deep_decode_manage(value: Any) -> Any:
+    """Рекурсивно декодирует строковый JSON внутри manage-пэйлоада."""
+
+    value = _decode_json_if_str(value)
+
+    if isinstance(value, list):
+        return [_deep_decode_manage(item) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _deep_decode_manage(val) for key, val in value.items()}
+
+    return value
+
+
+def _unwrap_manage_payload(data: Any) -> Any:
+    """Извлекает полезную нагрузку настроек из разных оболочек."""
+
+    # Если пришла строка — пробуем распарсить JSON
+    data = _decode_json_if_str(data)
+
+    # Могут быть вложенные data/settings/payload
+    if isinstance(data, dict):
+        for key in ("data", "settings", "payload"):
+            nested = data.get(key)
+            if nested is not None:
+                # рекурсивно распаковываем, чтобы достать финальный словарь
+                return _unwrap_manage_payload(nested)
+    return data
+
+
 def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
     """
     Получаем настройки конкретного аккаунта (фермы) через
@@ -311,6 +360,13 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
 
     url = f"{base}/manage/account/{remote_id}/settings"
     data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _unwrap_manage_payload(data)
+
+    if isinstance(data, list):
+        data = {"Data": data}
+    if isinstance(data, dict):
+        for key in ("Data", "MenuData"):
+            data[key] = _deep_decode_manage(data.get(key))
     if data is None:
         print(f"[remote_api] WARNING: не удалось получить настройки аккаунта {remote_id} с {url}")
     return data
@@ -355,17 +411,6 @@ def update_account_step_settings(account, step_idx: int, payload: Dict[str, Any]
     except Exception as exc:
         print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
         return False, str(exc)
-
-import logging
-from typing import List, Dict, Tuple
-
-import requests
-from requests import RequestException
-
-from UsersDash.models import Server
-
-log = logging.getLogger(__name__)
-
 
 def _build_server_base_url(server: Server) -> str:
     """
