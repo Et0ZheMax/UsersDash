@@ -106,13 +106,12 @@
                 </td>
               
                 <td class="actions-cell">
-                    <a href="{{ url_for('client.account_settings', account_id=acc.id) }}"
-                    class="btn btn-small btn-secondary btn-icon">
+                    <a href="{{ url_for('client.manage', account_id=acc.id) }}" class="action-pill">
                         <span class="btn-icon-symbol">⚙</span>
                         <span class="btn-text">Настройки</span>
                     </a>
 
-                    <button class="btn btn-small"
+                    <button class="action-pill action-pill--ghost"
                             data-action="refresh-account"
                             data-account-id="{{ acc.id }}">
                         <span class="btn-text">Обновить</span>
