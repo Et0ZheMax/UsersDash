@@ -2556,6 +2556,19 @@ def api_manage_accounts():
     # Возвращаем как есть
     return jsonify(data)
 
+
+def _parse_json_field(raw_value, default):
+    """
+    Аккуратно парсим JSON из строки, возвращаем default при ошибке.
+    Если значение уже dict/list — возвращаем как есть.
+    """
+    if isinstance(raw_value, (dict, list)):
+        return raw_value
+    try:
+        return json.loads(raw_value)
+    except Exception:
+        return default
+
 def _strip_start(logs):
     """
     Для промежуточных FIX’ов обрезает всё от запуска GnBots.exe и дальше,
@@ -2582,8 +2595,8 @@ def api_manage_account_settings(acc_id):
         return jsonify({"error": "acc not found"}), 404
 
     # Парсим строку Data в JSON
-    settings = json.loads(acc.get("Data", "[]"))
-    menu     = json.loads(acc.get("MenuData", "{}"))
+    settings = _parse_json_field(acc.get("Data", "[]"), [])
+    menu     = _parse_json_field(acc.get("MenuData", "{}"), {})
     return jsonify({"Data": settings, "MenuData": menu})
 
 @app.route("/api/manage/account/<acc_id>/settings/<int:step_idx>", methods=["PUT"])
@@ -2607,7 +2620,9 @@ def api_manage_account_setting_step(acc_id, step_idx):
     # 2) ищем нужный аккаунт
     for acc in all_accs:
         if acc.get("Id") == acc_id:
-            data_list = json.loads(acc.get("Data", "[]"))
+            data_list = _parse_json_field(acc.get("Data", "[]"), [])
+            if not isinstance(data_list, list):
+                return jsonify({"error": "invalid data format"}), 400
 
             # проверяем step_idx
             if step_idx < 0 or step_idx >= len(data_list):
