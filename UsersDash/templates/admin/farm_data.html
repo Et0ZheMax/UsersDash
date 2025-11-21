@@ -506,6 +506,13 @@
                 </button>
 
                 <button type="button"
+                        class="btn btn-secondary"
+                        data-role="auto-create-clients">
+                    Создать клиентов по именам
+                    <span class="btn-spinner" data-role="auto-create-spinner" hidden></span>
+                </button>
+
+                <button type="button"
                         class="btn btn-primary"
                         data-role="farmdata-save">
                     Сохранить
@@ -794,6 +801,8 @@ document.addEventListener("DOMContentLoaded", function () {
     const pullBtn = document.querySelector('[data-role="farmdata-pull"]');
     const pullSpinner = document.querySelector('[data-role="farmdata-pull-spinner"]');
     const pullApplyBtn = document.querySelector('[data-role="pull-apply"]');
+    const autoCreateBtn = document.querySelector('[data-role="auto-create-clients"]');
+    const autoCreateSpinner = document.querySelector('[data-role="auto-create-spinner"]');
 
     if (syncBtn) {
         syncBtn.addEventListener("click", async function () {
@@ -868,6 +877,51 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    if (autoCreateBtn) {
+        autoCreateBtn.addEventListener("click", async function () {
+            if (!confirm("Создать/переназначить клиентов по именам всех ферм?")) {
+                return;
+            }
+
+            setBtnLoading(autoCreateBtn, true, autoCreateSpinner);
+
+            try {
+                const resp = await fetch("/admin/farm-data/autocreate-clients", {
+                    method: "POST",
+                    headers: { "Accept": "application/json" }
+                });
+
+                if (!resp.ok) {
+                    showToast("Ошибка автосоздания клиентов.", "error");
+                    return;
+                }
+
+                const data = await resp.json();
+                if (!data.ok) {
+                    showToast(data.error || "Ошибка автосоздания клиентов.", "error");
+                    return;
+                }
+
+                const parts = [];
+                parts.push(`Создано клиентов: ${data.created_clients || 0}`);
+                parts.push(`Переназначено ферм: ${data.reassigned_accounts || 0}`);
+                parts.push(`Всего ферм: ${data.total_accounts || 0}`);
+                showToast(parts.join(" | "), "success");
+
+                if (Array.isArray(data.warnings) && data.warnings.length) {
+                    showToast(data.warnings.join(" | "), "info");
+                }
+
+                window.location.reload();
+            } catch (e) {
+                console.error("autocreate-clients error:", e);
+                showToast("Ошибка автосоздания (см. консоль).", "error");
+            } finally {
+                setBtnLoading(autoCreateBtn, false, autoCreateSpinner);
+            }
+        });
+    }
+
     if (pullBtn) {
         pullBtn.addEventListener("click", async function () {
             setBtnLoading(pullBtn, true, pullSpinner);
@@ -916,8 +970,13 @@ document.addEventListener("DOMContentLoaded", function () {
 
                     const remote = item.remote || {};
                     const local = item.local || {};
-                    const canApply = !!item.can_apply && !!item.account_id;
-                    const statusText = canApply ? "Найден в UsersDash" : "Аккаунт не найден";
+                    const isNew = !!item.is_new;
+                    const canApply = !!item.can_apply;
+                    const statusText = isNew
+                        ? "Будет создан"
+                        : item.account_id
+                            ? "Найден в UsersDash"
+                            : "Аккаунт не найден";
 
                     const localSummary = [
                         local.email ? `Email: ${local.email}` : "",
@@ -938,7 +997,7 @@ document.addEventListener("DOMContentLoaded", function () {
                           <input type="checkbox"
                                  data-role="pull-row-check"
                                  data-index="${idx}"
-                                 ${canApply ? "checked" : "disabled"}>
+                                 ${canApply ? (isNew ? "checked" : "") : "disabled"}>
                         </td>
                         <td>${statusText}</td>
                         <td>${escapeHtml(item.server_name || "")}</td>
@@ -1075,6 +1134,10 @@ document.addEventListener("DOMContentLoaded", function () {
 
                     itemsToApply.push({
                         account_id: item.account_id,
+                        server_id: item.server_id,
+                        farm_name: item.farm_name,
+                        internal_id: item.internal_id,
+                        is_new: item.is_new,
                         email: remote.email || "",
                         password: remote.password || "",
                         igg_id: remote.igg_id || "",

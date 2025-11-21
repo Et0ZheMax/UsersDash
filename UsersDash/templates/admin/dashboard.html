@@ -29,4 +29,67 @@
 </div>
 
 <p>Используйте верхнее меню для управления пользователями, серверами и фермами.</p>
+
+{% if accounts_data %}
+    <h2 style="margin-top: 32px;">Ресурсы ферм</h2>
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Имя фермы</th>
+            <th>Сервер</th>
+            <th>Владелец</th>
+            <th>Ресурсы (Food / Wood / Stone / Gold)</th>
+            <th>Прирост за сегодня</th>
+            <th>Обновлено</th>
+            <th>Действия</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for item in accounts_data %}
+            {% set acc = item.account %}
+            <tr data-account-id="{{ acc.id }}">
+                <td>{{ acc.name }}</td>
+                <td>{{ acc.server.name if acc.server else "N/A" }}</td>
+                <td>{{ acc.owner.username if acc.owner else "—" }}</td>
+                <td data-role="resources">
+                    {% if item.has_data %}
+                        {{ item.resources_brief|safe }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td data-role="today-gain">
+                    {% if item.today_gain %}
+                        {{ item.today_gain }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td data-role="last-updated">
+                    {% if item.last_updated %}
+                        {{ item.last_updated }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td class="actions-cell">
+                    <a href="{{ url_for('admin.manage', account_id=acc.id) }}" class="action-pill">
+                        <span class="btn-icon-symbol">⚙</span>
+                        <span class="btn-text">Настройки</span>
+                    </a>
+
+                    <button class="action-pill action-pill--ghost"
+                            data-action="refresh-account"
+                            data-account-id="{{ acc.id }}">
+                        <span class="btn-text">Обновить</span>
+                        <span class="btn-spinner" hidden></span>
+                    </button>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p>Активные фермы не найдены.</p>
+{% endif %}
 {% endblock %}

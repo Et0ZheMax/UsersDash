@@ -5,9 +5,9 @@
 {% block content %}
 <div class="manage-header">
     <div>
-        <div class="page-kicker">Панель управления</div>
+        <div class="page-kicker">Админ-панель</div>
         <h1 class="page-title">Настройки бота</h1>
-        <div class="page-subtitle">Выберите ферму слева и настройте шаги выполнения</div>
+        <div class="page-subtitle">Просматривайте и меняйте manage для любых активных ферм</div>
     </div>
     <div class="manage-summary">
         <div class="summary-label">Активных ферм</div>
@@ -19,16 +19,19 @@
     <div class="manage-accounts" data-role="manage-accounts">
         {% if accounts %}
             {% for acc in accounts %}
-                <button class="manage-account-item {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                <a class="manage-account-item {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                        href="{{ url_for('admin.manage', account_id=acc.id) }}"
                         data-account-id="{{ acc.id }}"
                         data-account-name="{{ acc.name }}"
                         data-server-name="{{ acc.server.name if acc.server else 'N/A' }}">
                     <div class="manage-account-name">{{ acc.name }}</div>
-                    <div class="manage-account-meta">{{ acc.server.name if acc.server else 'N/A' }}</div>
-                </button>
+                    <div class="manage-account-meta">
+                        {{ acc.server.name if acc.server else 'N/A' }} — {{ acc.owner.username if acc.owner else '—' }}
+                    </div>
+                </a>
             {% endfor %}
         {% else %}
-            <div class="manage-empty">У вас нет активных ферм.</div>
+            <div class="manage-empty">Активных ферм нет.</div>
         {% endif %}
     </div>
 
@@ -44,7 +47,7 @@
                 <div class="content-title">Нет выбранной фермы</div>
             {% endif %}
             <div class="content-actions">
-                <a href="{{ url_for('client.dashboard') }}" class="btn btn-outline">← Назад к фермам</a>
+                <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline">← В дашборд</a>
             </div>
         </div>
 
