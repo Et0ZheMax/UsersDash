@@ -28,6 +28,71 @@ from UsersDash.services.remote_api import (
 client_bp = Blueprint("client", __name__, url_prefix="")
 
 
+def _build_manage_view_steps(raw_settings):
+    steps = raw_settings.get("Data") or []
+    view_steps = []
+
+    def _fmt_schedule_rule(rule):
+        if not isinstance(rule, dict):
+            return None
+
+        start = (
+            rule.get("StartAt")
+            or rule.get("Start")
+            or rule.get("From")
+            or rule.get("TimeFrom")
+        )
+        end = (
+            rule.get("EndAt")
+            or rule.get("End")
+            or rule.get("To")
+            or rule.get("TimeTo")
+        )
+        every = rule.get("Every") or rule.get("Interval") or rule.get("EveryMinutes")
+        days = rule.get("Days") or rule.get("WeekDays") or rule.get("Weekdays")
+        label = rule.get("Label") or rule.get("Name")
+
+        parts = []
+        if days:
+            if isinstance(days, (list, tuple)):
+                parts.append("Дни: " + ", ".join(map(str, days)))
+            else:
+                parts.append(f"Дни: {days}")
+        if start or end:
+            parts.append(f"{start or '00:00'} — {end or '24:00'}")
+        if every:
+            parts.append(f"каждые {every}")
+        if label:
+            parts.append(str(label))
+
+        return ", ".join(parts) if parts else None
+
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            step = {}
+
+        cfg = step.get("Config") or {}
+        name = cfg.get("Name") or cfg.get("name") or f"Шаг {idx + 1}"
+        description = cfg.get("Description") or cfg.get("description") or ""
+
+        schedule_rules = step.get("ScheduleRules") or []
+        summaries = [s for s in (_fmt_schedule_rule(r) for r in schedule_rules) if s]
+        schedule_summary = "; ".join(summaries) if summaries else None
+
+        view_steps.append(
+            {
+                "index": idx,
+                "name": name,
+                "description": description,
+                "is_active": bool(step.get("IsActive", True)),
+                "schedule_summary": schedule_summary,
+                "schedule_rules_count": len(schedule_rules),
+            }
+        )
+
+    return view_steps
+
+
 
 @client_bp.route("/dashboard")
 @login_required
@@ -119,6 +184,57 @@ def dashboard():
     )
 
 
+@client_bp.route("/manage")
+@login_required
+def manage():
+    """Полноценная страница manage с выбором всех ферм пользователя."""
+
+    if getattr(current_user, "role", None) == "admin":
+        return redirect(url_for("admin.admin_dashboard"))
+
+    accounts = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(owner_id=current_user.id, is_active=True)
+        .order_by(Account.name.asc())
+        .all()
+    )
+
+    selected_account = None
+    selected_id = request.args.get("account_id")
+    if selected_id:
+        try:
+            selected_id_int = int(selected_id)
+        except (TypeError, ValueError):
+            selected_id_int = None
+    else:
+        selected_id_int = accounts[0].id if accounts else None
+
+    for acc in accounts:
+        if selected_id_int and acc.id == selected_id_int:
+            selected_account = acc
+            break
+    if not selected_account and accounts:
+        selected_account = accounts[0]
+
+    view_steps = []
+    steps_error = None
+    if selected_account:
+        raw_settings = fetch_account_settings(selected_account)
+        if raw_settings and "Data" in raw_settings:
+            view_steps = _build_manage_view_steps(raw_settings)
+        else:
+            steps_error = "Не удалось загрузить настройки этой фермы."
+
+    return render_template(
+        "client/manage.html",
+        accounts=accounts,
+        selected_account=selected_account,
+        view_steps=view_steps,
+        steps_error=steps_error,
+    )
+
+
 @client_bp.route("/account/<int:account_id>/settings")
 @login_required
 def account_settings(account_id: int):
@@ -176,6 +292,37 @@ def account_settings(account_id: int):
         steps=steps,
         view_steps=view_steps,
         menu=menu,
+    )
+
+
+@client_bp.route("/manage/account/<int:account_id>/details")
+@login_required
+def manage_account_details(account_id: int):
+    account = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(id=account_id, owner_id=current_user.id, is_active=True)
+        .first()
+    )
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    raw_settings = fetch_account_settings(account)
+    if not raw_settings or "Data" not in raw_settings:
+        return jsonify({"ok": False, "error": "failed to load settings"}), 500
+
+    steps = _build_manage_view_steps(raw_settings)
+
+    return jsonify(
+        {
+            "ok": True,
+            "account": {
+                "id": account.id,
+                "name": account.name,
+                "server": account.server.name if account.server else None,
+            },
+            "steps": steps,
+        }
     )
 
 
