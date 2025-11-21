@@ -199,7 +199,9 @@ h1 {
 }
 
 .kpi-status-card {
-    flex: 1 1 240px;
+    flex: 0 1 340px;
+    max-width: 400px;
+    align-self: flex-start;
 }
 
 .kpi-label {
@@ -239,6 +241,21 @@ h1 {
     gap: 6px;
 }
 
+.status-list--scrollable {
+    max-height: 240px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.status-list--scrollable::-webkit-scrollbar {
+    width: 6px;
+}
+
+.status-list--scrollable::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.4);
+    border-radius: 999px;
+}
+
 .status-item {
     padding: 8px 10px;
     border-radius: 8px;
@@ -249,6 +266,16 @@ h1 {
 .status-item--warn {
     border: 1px solid rgba(250, 204, 21, 0.3);
     color: #eab308;
+}
+
+.status-item-title {
+    font-weight: 600;
+}
+
+.status-item-text {
+    margin-top: 4px;
+    font-size: 0.86rem;
+    color: #fcd34d;
 }
 
 .status-note {
