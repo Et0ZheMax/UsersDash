@@ -27,6 +27,7 @@
                 {% else %}
                     <nav class="nav">
                         <a href="{{ url_for('client.dashboard') }}" class="nav-link">Мои фермы</a>
+                        <a href="{{ url_for('client.manage_page') }}" class="nav-link">Настройка бота</a>
                         <a href="{{ url_for('client.farm_data') }}"
                            class="nav-link {% if farmdata_required %}nav-link-attention{% endif %}">
                             Данные ферм
