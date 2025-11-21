@@ -82,6 +82,10 @@ class Account(db.Model):
     # Активна ли ферма
     is_active = db.Column(db.Boolean, default=True, nullable=False)
 
+    # Игровое королевство (мир) и заметки по ферме
+    game_world = db.Column(db.Text, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+
     # Дата и сумма ближайшей оплаты по этой ферме
     next_payment_at = db.Column(db.DateTime, nullable=True)          # дата следующей оплаты
     next_payment_amount = db.Column(db.Integer, nullable=True)       # сумма в рублях
