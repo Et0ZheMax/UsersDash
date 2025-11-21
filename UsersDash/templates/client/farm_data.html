@@ -262,7 +262,6 @@
                     <tr>
                         <th>Ферма</th>
                         <th>E-mail</th>
-                        <th>Логин</th>
                         <th>Пароль</th>
                         <th>IGG ID</th>
                         <th>Сервер аккаунта</th>
@@ -277,7 +276,7 @@
                         {% for item in items %}
                             {% set acc = item.account %}
                             {% set fd = item.farmdata %}
-                            {% set has_data = fd and (fd.email or fd.login or fd.password or fd.igg_id or fd.server) %}
+                            {% set has_data = fd and (fd.email or fd.password or fd.igg_id or fd.server or fd.telegram_tag) %}
                             <tr data-account-id="{{ acc.id }}">
                                 <td class="farmdata-name-cell">
                                     <div class="farmdata-name-main">
@@ -293,13 +292,6 @@
                                            name="email"
                                            placeholder="email@example.com"
                                            value="{{ fd.email if fd and fd.email else '' }}">
-                                </td>
-                                <td>
-                                    <input class="farmdata-input"
-                                           type="text"
-                                           name="login"
-                                           placeholder="Логин (если отличается от e-mail)"
-                                           value="{{ fd.login if fd and fd.login else '' }}">
                                 </td>
                                 <td>
                                     <input class="farmdata-input"
