@@ -477,6 +477,9 @@
     function handleAccountClick(event) {
         const btn = event.target.closest('[data-account-id]');
         if (!btn) return;
+        if (event.preventDefault) {
+            event.preventDefault();
+        }
         const accountId = btn.dataset.accountId;
         if (!accountId || String(accountId) === String(state.selectedAccountId)) return;
         loadSteps(accountId);
