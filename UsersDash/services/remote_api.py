@@ -65,7 +65,15 @@ def _safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[Dict[st
     try:
         resp = requests.get(url, timeout=timeout)
         resp.raise_for_status()
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError:
+            # На некоторых хостах content-type может быть text/plain — пробуем сами
+            try:
+                return json.loads(resp.text)
+            except Exception as exc:
+                print(f"[remote_api] ERROR: GET {url} JSON decode failed: {exc}")
+                return None
     except Exception as exc:
         print(f"[remote_api] ERROR: GET {url} failed: {exc}")
         return None
@@ -364,7 +372,16 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
 
     # Сначала подтягиваем ресурсы по серверу, чтобы определить remote_id
     server_resources = fetch_resources_for_server(server)
-    remote_id, _ = _resolve_remote_account(account, server_resources)
+    remote_id = None
+    if server_resources:
+        remote_id, _ = _resolve_remote_account(account, server_resources)
+
+    # Если ресурсы не достались или не сопоставились — пробуем прямой fallback
+    if not remote_id:
+        fallback_remote = getattr(account, "internal_id", None) or getattr(account, "name", None)
+        if fallback_remote:
+            remote_id = str(fallback_remote)
+
     if not remote_id:
         print(f"[remote_api] WARNING: не удалось определить remote_id для аккаунта {account}")
         return None
