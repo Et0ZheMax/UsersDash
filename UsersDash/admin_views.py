@@ -44,19 +44,28 @@ def admin_required():
 
 def _get_unassigned_user():
     """
-    Возвращает "служебного" пользователя для новых импортированных ферм,
-    у которых пока не выбран клиент. Если его нет — создаёт неактивного
-    клиента с предсказуемым логином и паролем.
-    """
-    placeholder = User.query.filter_by(username="unassigned").first()
-    if placeholder:
-        return placeholder
+    Возвращает клиента с базовым именем фермы (без числового суффикса).
 
-    placeholder = User(
-        username="unassigned",
+    Примеры:
+    - "Ivan" или "Ivan1" или "Ivan2" -> клиент "Ivan".
+    - Если клиента ещё нет, создаёт его с дефолтным паролем.
+    """
+    base_name = (farm_name or "").strip()
+    if not base_name:
+        return _get_unassigned_user()
+
+    match = re.match(r"^(.*?)(\d+)?$", base_name)
+    username = (match.group(1) if match else base_name).strip(" _-") or base_name
+
+    existing = User.query.filter_by(username=username).first()
+    if existing:
+        return (existing, False) if return_created else existing
+
+    user = User(
+        username=username,
         role="client",
-        is_active=False,
-        password_hash=generate_password_hash("changeme"),
+        is_active=True,
+        password_hash=generate_password_hash("123456789m"),
     )
     db.session.add(placeholder)
     db.session.commit()
