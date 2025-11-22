@@ -7,7 +7,7 @@ import ssl  # для создания контекста без проверки
 
 # === Настройки ===
 
-TELEGRAM_TOKEN = '7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc'
+TELEGRAM_TOKEN = ''
 CHAT_ID = '275483461'
 
 # Профили для OpenVPN GUI, в порядке приоритета
