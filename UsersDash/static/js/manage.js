@@ -495,6 +495,14 @@
     function extractStepsAndMenu(payload) {
         if (!payload) return { steps: [], menu: {} };
 
+        const asListFromMapping = (obj) => {
+            const keys = Object.keys(obj || {});
+            if (keys.length && keys.every((k) => /^\d+$/.test(k))) {
+                return keys.sort((a, b) => Number(a) - Number(b)).map((k) => obj[k]);
+            }
+            return null;
+        };
+
         const safeMenu = (obj, fallback = {}) => {
             if (!obj || typeof obj !== "object") return fallback || {};
             const menu = obj.MenuData || obj.menu || obj.menu_data || fallback || {};
@@ -506,6 +514,18 @@
             if (val && typeof val === "object") {
                 const nested = val.Data || val.data || val.steps || val.Steps;
                 if (Array.isArray(nested)) return nested;
+                if (nested && typeof nested === "object") {
+                    const mapped = asListFromMapping(nested);
+                    if (mapped) return mapped;
+                }
+
+                // одиночный шаг без обёртки
+                if ("Config" in val || "config" in val || "ScriptId" in val || "script_id" in val) {
+                    return [val];
+                }
+
+                const mappedSelf = asListFromMapping(val);
+                if (mappedSelf) return mappedSelf;
             }
             return [];
         };
