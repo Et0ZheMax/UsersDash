@@ -103,6 +103,32 @@
         });
     }
 
+    function setupNavToggle() {
+        const navs = Array.from(document.querySelectorAll('[data-role="primary-nav"]'));
+        const toggleBtn = document.querySelector('[data-action="toggle-nav"]');
+
+        if (!toggleBtn || navs.length === 0) return;
+
+        const setExpanded = (isOpen) => {
+            navs.forEach((nav) => nav.classList.toggle("is-open", isOpen));
+            toggleBtn.setAttribute("aria-expanded", String(isOpen));
+            toggleBtn.setAttribute("aria-label", isOpen ? "Закрыть меню" : "Открыть меню");
+        };
+
+        toggleBtn.addEventListener("click", () => {
+            const isOpen = toggleBtn.getAttribute("aria-expanded") === "true";
+            setExpanded(!isOpen);
+        });
+
+        navs.forEach((nav) => {
+            nav.addEventListener("click", (evt) => {
+                if (evt.target.closest("a")) {
+                    setExpanded(false);
+                }
+            });
+        });
+    }
+
     // ---------- Действия ----------
 
     async function handleRefreshAccount(btn) {
@@ -344,10 +370,10 @@
             }
         }
 
-
-
-
-    document.addEventListener("DOMContentLoaded", autoHideFlashMessages);
+    document.addEventListener("DOMContentLoaded", function () {
+        autoHideFlashMessages();
+        setupNavToggle();
+    });
 
     // ---------- Делегированный обработчик кликов ----------
 
