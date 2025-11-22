@@ -246,9 +246,12 @@ def manage():
     steps_error = None
     raw_steps = []
     menu_data = None
+    debug_info = None
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
-        raw_steps, menu_data = _extract_steps_and_menu(raw_settings)
+        raw_steps, menu_data, debug_info = _extract_steps_and_menu(
+            raw_settings, return_debug=True
+        )
         if raw_steps:
             view_steps = _build_manage_view_steps(raw_settings)
         else:
@@ -262,6 +265,7 @@ def manage():
         raw_steps=raw_steps,
         menu_data=menu_data,
         steps_error=steps_error,
+        debug_info=debug_info,
     )
 
 
