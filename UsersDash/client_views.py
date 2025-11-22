@@ -49,12 +49,46 @@ def _extract_steps_and_menu(raw_settings):
         return menu if isinstance(menu, dict) else {}
 
     def _safe_steps(val: Any):
+        """Возвращает список шагов независимо от структуры.
+
+        Поддерживает варианты:
+        - список шагов;
+        - словарь с полем Data/data/steps;
+        - словарь с числовыми ключами ("0", "1", ...);
+        - объект одного шага (если прилетел без списка).
+        """
+
+        # 1) Уже список
         if isinstance(val, list):
             return val
+
+        # 2) Один шаг без обёртки
+        if isinstance(val, dict) and (
+            "Config" in val
+            or "config" in val
+            or "ScriptId" in val
+            or "script_id" in val
+        ):
+            return [val]
+
         if isinstance(val, dict):
             nested = val.get("Data") or val.get("data") or val.get("steps") or val.get("Steps")
+
+            # 3) Data — сразу список
             if isinstance(nested, list):
                 return nested
+
+            # 4) Data — словарь с числовыми ключами
+            if isinstance(nested, dict):
+                keys = list(nested.keys())
+                if keys and all(str(k).isdigit() for k in keys):
+                    return [nested[k] for k in sorted(nested.keys(), key=lambda x: int(x))]
+
+            # 5) Сам объект — словарь с числовыми ключами
+            keys = list(val.keys())
+            if keys and all(str(k).isdigit() for k in keys):
+                return [val[k] for k in sorted(val.keys(), key=lambda x: int(x))]
+
         return []
 
     if isinstance(raw_settings, list):
