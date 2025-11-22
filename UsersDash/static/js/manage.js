@@ -175,6 +175,10 @@
     const stepsSubtitleEl = document.querySelector('[data-role="steps-subtitle"]');
     const configTitleEl = document.querySelector('[data-role="config-title"]');
     const configSubtitleEl = document.querySelector('[data-role="config-subtitle"]');
+    const sidebarToggleBtn = document.querySelector('[data-role="toggle-accounts"]');
+    const stepsScrollBtn = document.querySelector('[data-role="scroll-steps"]');
+    const overlay = document.querySelector('[data-role="manage-overlay"]');
+    const sidebar = document.querySelector('.manage-modern__sidebar');
 
     function escapeHtml(str) {
         return (str || "").replace(/[&<>"]+/g, (ch) => ({
@@ -640,6 +644,9 @@
             name: btn.dataset.accountName,
             server: btn.dataset.serverName,
         });
+        if (isMobile()) {
+            closeSidebar();
+        }
     }
 
     function handleStepsClick(event) {
@@ -664,6 +671,38 @@
         renderConfig();
     }
 
+    function isMobile() {
+        return window.matchMedia('(max-width: 960px)').matches;
+    }
+
+    function closeSidebar() {
+        if (sidebar) sidebar.classList.remove('is-open');
+        if (overlay) overlay.classList.remove('is-active');
+    }
+
+    function toggleSidebar() {
+        if (!sidebar) return;
+        const willOpen = !sidebar.classList.contains('is-open');
+        sidebar.classList.toggle('is-open', willOpen);
+        if (overlay) overlay.classList.toggle('is-active', willOpen);
+    }
+
+    function handleOverlayClick() {
+        closeSidebar();
+    }
+
+    function scrollToSteps() {
+        if (stepsRoot) {
+            stepsRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
+    function handleResize() {
+        if (!isMobile()) {
+            closeSidebar();
+        }
+    }
+
     function init() {
         if (accountsRoot) {
             accountsRoot.addEventListener('click', handleAccountClick);
@@ -671,6 +710,17 @@
         if (stepsRoot) {
             stepsRoot.addEventListener('click', handleStepsClick);
         }
+        if (sidebarToggleBtn) {
+            sidebarToggleBtn.addEventListener('click', toggleSidebar);
+        }
+        if (stepsScrollBtn) {
+            stepsScrollBtn.addEventListener('click', scrollToSteps);
+        }
+        if (overlay) {
+            overlay.addEventListener('click', handleOverlayClick);
+        }
+
+        window.addEventListener('resize', handleResize);
 
         if (state.rawSteps === undefined && state.raw_steps) {
             state.rawSteps = state.raw_steps;

@@ -21,6 +21,11 @@
         <button class="btn btn-outline" onclick="window.location.reload()">Обновить</button>
     </div>
 
+    <div class="manage-modern__mobile-actions">
+        <button class="btn btn-secondary" type="button" data-role="toggle-accounts">Фермы</button>
+        <button class="btn btn-outline" type="button" data-role="scroll-steps">Шаги</button>
+    </div>
+
     <div class="manage-modern__layout">
         <div class="manage-modern__sidebar manage-accounts" data-role="manage-accounts">
             {% if accounts %}
@@ -50,6 +55,8 @@
             </div>
         </div>
     </div>
+
+    <div class="manage-modern__overlay" data-role="manage-overlay"></div>
 </div>
 
 <div id="globalLoader">
