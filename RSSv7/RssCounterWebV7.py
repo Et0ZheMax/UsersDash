@@ -919,6 +919,7 @@ SERVER = "F99"                                       # имя сервера
 BACKUP_CONFIG_SRC      = r"C:\LDPlayer\LDPlayer9\vms\config"
 BACKUP_CONFIG_DST_ROOT = r"C:\LD_backup\configs"
 BACKUP_ACCS_DST_ROOT   = r"C:\LD_backup\accs_data"
+BACKUP_PROFILES_DST_ROOT = r"C:\LD_backup\bot_acc_configs"
 FIX_BACKUP_ROOT = r"C:\LD_backup\fix_backup"   # ← NEW
 
 
@@ -926,6 +927,16 @@ FIX_BACKUP_ROOT = r"C:\LD_backup\fix_backup"   # ← NEW
 def _ensure_dir(path: str):
     """Создаёт каталог *path* вместе со всеми промежуточными."""
     os.makedirs(path, exist_ok=True)
+
+
+def _try_copy_file(src: str, dst: str) -> bool:
+    """Пытается скопировать файл и возвращает успех/неуспех."""
+    try:
+        shutil.copy2(src, dst)
+        return True
+    except Exception as e:
+        print(f"[BACKUP] error copying {src} → {dst}: {e}", flush=True)
+        return False
 
 
 # ────────────────────── новый хелпер ────────────────────────
@@ -1092,18 +1103,46 @@ def backup_accounts_csv() -> None:
             w.writerow(row)
     print(f"[BACKUP] accounts.csv  →  {csv_path}")
 
+
+def backup_profiles_json() -> None:
+    r"""
+    Делает копию файла профилей из PROFILE_PATH в
+      C:\\LD_backup\\bot_acc_configs\\<ДД__ММ__ГГГГ>\\profiles.json
+    Создаёт папку, если её нет, и тихо пропускает, если исходный файл не найден.
+    """
+    if not PROFILE_PATH:
+        print("[BACKUP] PROFILE_PATH не задан — пропускаем backup_profiles_json()", flush=True)
+        return
+    if not os.path.isfile(PROFILE_PATH):
+        print(f"[BACKUP] profiles.json не найден: {PROFILE_PATH}", flush=True)
+        return
+
+    today_stamp = datetime.now().strftime("%d__%m__%Y")
+    dst_dir = os.path.join(BACKUP_PROFILES_DST_ROOT, today_stamp)
+    _ensure_dir(dst_dir)
+
+    dst = os.path.join(dst_dir, os.path.basename(PROFILE_PATH) or "profiles.json")
+    if _try_copy_file(PROFILE_PATH, dst):
+        print(f"[BACKUP] profiles.json  →  {dst}", flush=True)
+
 # ─────────────────── проверка «уже есть ли за сегодня» ───────────────────
 def ensure_today_backups() -> None:
     """При старте приложения проверяет, есть ли бэкап за сегодня; если нет — делает."""
     today_stamp = datetime.now().strftime("%d__%m__%Y")
     cfg_dir  = os.path.join(BACKUP_CONFIG_DST_ROOT,  today_stamp)
     acc_dir  = os.path.join(BACKUP_ACCS_DST_ROOT, f"{SERVER}_{today_stamp}")
+    profiles_path = os.path.join(BACKUP_PROFILES_DST_ROOT,
+                                 today_stamp,
+                                 os.path.basename(PROFILE_PATH) or "profiles.json")
     cfg_ok   = os.path.isdir(cfg_dir) and os.listdir(cfg_dir)
     acc_ok   = os.path.isfile(os.path.join(acc_dir, "accounts.csv"))
+    profiles_ok = os.path.isfile(profiles_path)
     if not cfg_ok:
         backup_configs()
     if not acc_ok:
         backup_accounts_csv()
+    if not profiles_ok:
+        backup_profiles_json()
 
 # ─────────────────── ежедневное расписание 00:00 ─────────────────────────
 def _schedule_daily_backups() -> None:
@@ -1117,6 +1156,7 @@ def _schedule_daily_backups() -> None:
             try:
                 backup_configs()
                 backup_accounts_csv()
+                backup_profiles_json()
             except Exception as e:
                 print("[BACKUP] error:", e, flush=True)
     threading.Thread(target=_worker, daemon=True).start()
