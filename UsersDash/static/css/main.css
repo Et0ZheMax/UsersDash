@@ -943,11 +943,13 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .manage-modern__toolbar {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .manage-modern__layout {
@@ -1030,6 +1032,97 @@ h1 {
   background: #0f111a;
   border-left: 1px solid rgba(148, 163, 184, 0.15);
   overflow-y: auto;
+}
+
+.manage-modern__mobile-actions {
+  display: none;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.manage-modern__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.55);
+  z-index: 29;
+  display: none;
+}
+
+.manage-modern__overlay.is-active {
+  display: block;
+}
+
+@media (max-width: 960px) {
+  .manage-modern {
+    gap: 10px;
+  }
+
+  .manage-modern__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .manage-modern__toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .manage-modern__mobile-actions {
+    display: flex;
+  }
+
+  .manage-modern__layout {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    background: none;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+  }
+
+  .manage-modern__sidebar {
+    position: fixed;
+    inset: 110px 12px auto 12px;
+    max-height: 60vh;
+    width: auto;
+    z-index: 30;
+    display: none;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(148, 163, 184, 0.35);
+    border-radius: 12px;
+  }
+
+  .manage-modern__sidebar.is-open {
+    display: flex;
+  }
+
+  .manage-modern__resizer,
+  .manage-modern__resizer--vert {
+    display: none;
+  }
+
+  .manage-modern__pane {
+    display: flex;
+    flex-direction: column;
+    background: none;
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .manage-modern__tabs {
+    border-right: none;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    max-height: 340px;
+  }
+
+  .manage-modern__config {
+    border-left: none;
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    padding: 12px;
+  }
 }
 
 #globalLoader {
