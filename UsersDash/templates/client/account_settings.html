@@ -11,47 +11,49 @@
 </p>
 
 {% if view_steps and view_steps|length %}
-    <table class="table">
-        <thead>
-        <tr>
-            <th>#</th>
-            <th>Шаг</th>
-            <th>Статус</th>
-            <th>Действия</th>
-        </tr>
-        </thead>
-        <tbody>
-        {% for step in view_steps %}
-            <tr data-step-index="{{ step.index }}">
-                <td>{{ loop.index }}</td>
-                <td>{{ step.name }}</td>
-                <td data-role="step-status">
-                    {% if step.is_active %}
-                        Включен
-                    {% else %}
-                        Выключен
-                    {% endif %}
-                </td>
-                <td>
-                    <button class="btn btn-small"
-                            data-action="toggle-step"
-                            data-account-id="{{ account.id }}"
-                            data-step-idx="{{ step.index }}"
-                            data-current-active="{{ 1 if step.is_active else 0 }}">
-                        <span class="btn-text">
-                            {% if step.is_active %}
-                                Отключить
-                            {% else %}
-                                Включить
-                            {% endif %}
-                        </span>
-                        <span class="btn-spinner" hidden></span>
-                    </button>
-                </td>
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>#</th>
+                <th>Шаг</th>
+                <th>Статус</th>
+                <th>Действия</th>
             </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+            {% for step in view_steps %}
+                <tr data-step-index="{{ step.index }}">
+                    <td>{{ loop.index }}</td>
+                    <td>{{ step.name }}</td>
+                    <td data-role="step-status">
+                        {% if step.is_active %}
+                            Включен
+                        {% else %}
+                            Выключен
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button class="btn btn-small"
+                                data-action="toggle-step"
+                                data-account-id="{{ account.id }}"
+                                data-step-idx="{{ step.index }}"
+                                data-current-active="{{ 1 if step.is_active else 0 }}">
+                            <span class="btn-text">
+                                {% if step.is_active %}
+                                    Отключить
+                                {% else %}
+                                    Включить
+                                {% endif %}
+                            </span>
+                            <span class="btn-spinner" hidden></span>
+                        </button>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
 {% else %}
     <p>Не найдено шагов настроек для этого аккаунта.</p>
 {% endif %}
