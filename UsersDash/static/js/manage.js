@@ -155,6 +155,7 @@
         selectedServerName: "",
         steps: [],
         rawSteps: [],
+        debugInfo: null,
         menu: {},
         isLoading: false,
         detailsUrlTemplate: "",
@@ -174,6 +175,15 @@
     const stepsSubtitleEl = document.querySelector('[data-role="steps-subtitle"]');
     const configTitleEl = document.querySelector('[data-role="config-title"]');
     const configSubtitleEl = document.querySelector('[data-role="config-subtitle"]');
+
+    function escapeHtml(str) {
+        return (str || "").replace(/[&<>"]+/g, (ch) => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            '"': "&quot;",
+        }[ch] || ch));
+    }
 
     function replaceTemplate(str, accountId) {
         return (str || "").replace("__ACCOUNT__", accountId);
@@ -244,8 +254,13 @@
         });
     }
 
-    function renderEmptyState(message) {
-        if (stepsRoot) stepsRoot.innerHTML = `<div class="manage-empty">${message || "Нет данных по шагам."}</div>`;
+    function renderEmptyState(message, debug) {
+        let extra = "";
+        if (debug) {
+            const asJson = escapeHtml(JSON.stringify(debug, null, 2));
+            extra = `<details class="manage-debug"><summary>Диагностика загрузки</summary><pre>${asJson}</pre></details>`;
+        }
+        if (stepsRoot) stepsRoot.innerHTML = `<div class="manage-empty">${message || "Нет данных по шагам."}${extra}</div>`;
         if (configRoot) configRoot.innerHTML = "";
         updateHeaderText();
     }
@@ -283,7 +298,7 @@
         }
 
         if (!state.rawSteps || !state.rawSteps.length) {
-            renderEmptyState("Шаги для этой фермы не найдены.");
+            renderEmptyState("Шаги для этой фермы не найдены.", state.debugInfo);
             return;
         }
 
@@ -575,6 +590,15 @@
             const viewSteps = data.steps || data.view_steps || buildViewStepsFromRaw(rawSteps);
             const menu = data.menu || data.MenuData || data.menu_data || normalized.menu;
             const account = data.account || {};
+            const debug = data.debug || null;
+
+            console.debug("Manage: ответ settings", {
+                accountId,
+                status: resp.status,
+                payloadKeys: data ? Object.keys(data) : [],
+                debug,
+                normalizedSteps: Array.isArray(rawSteps) ? rawSteps.length : 0,
+            });
 
             state.selectedAccountId = accountId;
             state.selectedAccountName = account.name || state.selectedAccountName || meta.name || "";
@@ -582,13 +606,23 @@
             state.steps = viewSteps || [];
             state.rawSteps = rawSteps || [];
             state.menu = menu;
+            state.debugInfo = debug || {
+                http_status: resp.status,
+                payload_keys: data ? Object.keys(data) : [],
+                normalized_steps: Array.isArray(rawSteps) ? rawSteps.length : 0,
+            };
             state.selectedStepIndex = state.rawSteps.length ? 0 : null;
-            renderSteps();
-            renderConfig();
-            updateHeaderText();
+            if (!state.rawSteps.length) {
+                renderEmptyState("Настройки не найдены в ответе сервера.", state.debugInfo);
+            } else {
+                renderSteps();
+                renderConfig();
+                updateHeaderText();
+            }
         } catch (err) {
             console.error(err);
-            renderEmptyState(err.message);
+            state.debugInfo = state.debugInfo || { error: err && err.message };
+            renderEmptyState(err.message, state.debugInfo);
         } finally {
             state.isLoading = false;
         }

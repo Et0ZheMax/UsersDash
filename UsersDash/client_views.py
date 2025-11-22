@@ -29,7 +29,7 @@ from UsersDash.services.remote_api import (
 client_bp = Blueprint("client", __name__, url_prefix="")
 
 
-def _extract_steps_and_menu(raw_settings):
+def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
     """Returns steps list and menu data from manage payload with fallbacks.
 
     Rssv7 может возвращать данные как в поле "Data", так и в нижнем регистре
@@ -48,7 +48,7 @@ def _extract_steps_and_menu(raw_settings):
         )
         return menu if isinstance(menu, dict) else {}
 
-    def _safe_steps(val: Any):
+    def _safe_steps(val: Any, ctx: str = ""):
         """Возвращает список шагов независимо от структуры.
 
         Поддерживает варианты:
@@ -60,7 +60,7 @@ def _extract_steps_and_menu(raw_settings):
 
         # 1) Уже список
         if isinstance(val, list):
-            return val
+            return val, ctx or "list"
 
         # 2) Один шаг без обёртки
         if isinstance(val, dict) and (
@@ -69,50 +69,75 @@ def _extract_steps_and_menu(raw_settings):
             or "ScriptId" in val
             or "script_id" in val
         ):
-            return [val]
+            return [val], ctx or "single-step"
 
         if isinstance(val, dict):
             nested = val.get("Data") or val.get("data") or val.get("steps") or val.get("Steps")
 
             # 3) Data — сразу список
             if isinstance(nested, list):
-                return nested
+                return nested, ctx or "nested-list"
 
             # 4) Data — словарь с числовыми ключами
             if isinstance(nested, dict):
                 keys = list(nested.keys())
                 if keys and all(str(k).isdigit() for k in keys):
-                    return [nested[k] for k in sorted(nested.keys(), key=lambda x: int(x))]
+                    return [nested[k] for k in sorted(nested.keys(), key=lambda x: int(x))], ctx or "nested-numeric-map"
 
             # 5) Сам объект — словарь с числовыми ключами
             keys = list(val.keys())
             if keys and all(str(k).isdigit() for k in keys):
-                return [val[k] for k in sorted(val.keys(), key=lambda x: int(x))]
+                return [val[k] for k in sorted(val.keys(), key=lambda x: int(x))], ctx or "numeric-map"
 
-        return []
+        return [], ctx or "unknown"
+
+    debug_info = {
+        "payload_type": type(raw_settings).__name__,
+        "payload_keys": list(raw_settings.keys()) if isinstance(raw_settings, dict) else None,
+        "steps_source": None,
+        "steps_count": 0,
+        "menu_keys": None,
+    }
 
     if isinstance(raw_settings, list):
+        if return_debug:
+            debug_info.update({"steps_source": "root-list", "steps_count": len(raw_settings)})
+            return raw_settings, {}, debug_info
         return raw_settings, {}
 
     if isinstance(raw_settings, dict):
         primary = raw_settings.get("Data") or raw_settings.get("data") or raw_settings
+        debug_info.update({
+            "primary_type": type(primary).__name__,
+            "primary_keys": list(primary.keys()) if isinstance(primary, dict) else None,
+        })
 
         # В некоторых окружениях Data может быть объектом, в котором снова лежит Data/MenuData
         if isinstance(primary, dict) and not isinstance(primary, list):
-            steps = _safe_steps(primary)
+            steps, src = _safe_steps(primary, "primary")
             menu_data = _safe_menu(primary, _safe_menu(raw_settings))
             if not steps:
                 # Может быть ещё один уровень вложенности Data -> {Data: [...], MenuData: {...}}
                 nested = primary.get("Data") or primary.get("data")
-                steps = _safe_steps(nested)
+                steps, src = _safe_steps(nested, "nested-Data")
                 if not menu_data:
                     menu_data = _safe_menu(nested, _safe_menu(raw_settings))
         else:
-            steps = _safe_steps(primary)
+            steps, src = _safe_steps(primary, "primary-fallback")
             menu_data = _safe_menu(raw_settings)
 
+        debug_info.update({
+            "steps_source": src,
+            "steps_count": len(steps),
+            "menu_keys": list(menu_data.keys()) if isinstance(menu_data, dict) else None,
+        })
+
+        if return_debug:
+            return steps, menu_data, debug_info
         return steps, menu_data
 
+    if return_debug:
+        return [], {}, debug_info
     return [], {}
 
 
@@ -338,9 +363,10 @@ def manage_page():
     steps_error = None
     raw_steps = []
     menu_data = None
+    debug_info = None
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
-        raw_steps, menu_data = _extract_steps_and_menu(raw_settings)
+        raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
         if raw_steps:
             view_steps = _build_manage_view_steps(raw_settings)
         else:
@@ -354,6 +380,7 @@ def manage_page():
         raw_steps=raw_steps,
         menu_data=menu_data,
         steps_error=steps_error,
+        debug_info=debug_info,
     )
 
 
@@ -438,9 +465,9 @@ def manage_account_details(account_id: int):
         return jsonify({"ok": False, "error": "account not found"}), 404
 
     raw_settings = fetch_account_settings(account)
-    raw_steps, menu_data = _extract_steps_and_menu(raw_settings)
+    raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
     if not raw_steps:
-        return jsonify({"ok": False, "error": "failed to load settings"}), 500
+        return jsonify({"ok": False, "error": "failed to load settings", "debug": debug_info}), 500
 
     steps = _build_manage_view_steps(raw_settings)
 
@@ -455,6 +482,7 @@ def manage_account_details(account_id: int):
             "steps": steps,
             "raw_steps": raw_steps,
             "menu": menu_data,
+            "debug": debug_info,
         }
     )
 
