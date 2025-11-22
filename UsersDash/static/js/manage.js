@@ -511,9 +511,9 @@
                 throw new Error((data && data.error) || "Не удалось загрузить настройки.");
             }
 
-            const rawSteps = data.raw_steps || data.rawSteps || data.Data || [];
+            const rawSteps = data.raw_steps || data.rawSteps || data.Data || data.data || [];
             const viewSteps = data.steps || data.view_steps || buildViewStepsFromRaw(rawSteps);
-            const menu = data.menu || data.MenuData || {};
+            const menu = data.menu || data.MenuData || data.menu_data || {};
             const account = data.account || {};
 
             state.selectedAccountId = accountId;
