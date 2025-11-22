@@ -213,7 +213,7 @@ def manage():
 
     admin_required()
 
-    from UsersDash.client_views import _build_manage_view_steps
+    from UsersDash.client_views import _build_manage_view_steps, _extract_steps_and_menu
 
     accounts = (
         Account.query.options(
@@ -248,10 +248,9 @@ def manage():
     menu_data = None
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
-        if raw_settings and "Data" in raw_settings:
+        raw_steps, menu_data = _extract_steps_and_menu(raw_settings)
+        if raw_steps:
             view_steps = _build_manage_view_steps(raw_settings)
-            raw_steps = raw_settings.get("Data") or []
-            menu_data = raw_settings.get("MenuData") or {}
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
 
