@@ -614,8 +614,16 @@ def load_profiles():
     if not os.path.exists(PROFILE_PATH):
         print(f"PROFILE not found: {PROFILE_PATH}")
         return []
-    with open(PROFILE_PATH,"r",encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            if not raw:
+                print(f"PROFILE is empty: {PROFILE_PATH}")
+                return []
+            data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"PROFILE has invalid JSON: {exc}")
+        return []
     return [acc for acc in data if acc.get("Active")]
 
 # вверху, рядом с load_profiles()
@@ -624,8 +632,14 @@ def load_active_names():
     json_path = PROFILE_PATH            # ← вместо BASE_DIR …
     if not os.path.exists(json_path):
         return []
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+            if not raw:
+                return []
+            data = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
     return [(a["Id"], a.get("Name","")) for a in data if a.get("Active")]
 
 
