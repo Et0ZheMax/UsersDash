@@ -10,6 +10,7 @@ import time
 import shutil
 import ctypes
 import socket
+import typing as t
 import paramiko
 import requests
 from io import BytesIO
@@ -579,7 +580,12 @@ def init_accounts_db():
 # ───────────────────  SYNC account_meta  ───────────────────
 def sync_account_meta():
     """Держит account_meta = текущее множество активных Id."""
-    active_ids = {p["Id"] for p in load_profiles()}
+    profiles, ok = load_profiles(return_status=True)
+    if not ok and not profiles:
+        print("PROFILE read failed — skip sync_account_meta")
+        return
+
+    active_ids = {p["Id"] for p in profiles}
 
     conn = open_db(RESOURCES_DB)
     c    = conn.cursor()
@@ -610,37 +616,49 @@ def sync_account_meta():
 # Работа с профилями
 ##############################
 
-def load_profiles():
+PROFILE_CACHE: list[dict[str, t.Any]] | None = None
+
+
+def load_profiles(*, return_status: bool = False):
+    """
+    Возвращает список активных аккаунтов из PROFILE_PATH.
+
+    :param return_status: True → вернуть (profiles, ok),
+                          False → вернуть только profiles.
+    """
+
+    def _result(profiles: list[dict[str, t.Any]], ok: bool):
+        return (profiles, ok) if return_status else profiles
+
+    global PROFILE_CACHE
+
     if not os.path.exists(PROFILE_PATH):
         print(f"PROFILE not found: {PROFILE_PATH}")
-        return []
+        return _result(PROFILE_CACHE or [], False)
     try:
         with open(PROFILE_PATH, "r", encoding="utf-8") as f:
             raw = f.read().strip()
             if not raw:
                 print(f"PROFILE is empty: {PROFILE_PATH}")
-                return []
+                return _result(PROFILE_CACHE or [], False)
             data = json.loads(raw)
     except json.JSONDecodeError as exc:
         print(f"PROFILE has invalid JSON: {exc}")
-        return []
-    return [acc for acc in data if acc.get("Active")]
+        return _result(PROFILE_CACHE or [], False)
+
+    if not isinstance(data, list):
+        print(f"PROFILE data is not a list: type={type(data)}")
+        return _result(PROFILE_CACHE or [], False)
+
+    active_profiles = [acc for acc in data if acc.get("Active")]
+    PROFILE_CACHE = active_profiles
+    return _result(active_profiles, True)
 
 # вверху, рядом с load_profiles()
 def load_active_names():
     """возвращает [(Id, Name)] активных аккаунтов"""
-    json_path = PROFILE_PATH            # ← вместо BASE_DIR …
-    if not os.path.exists(json_path):
-        return []
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            raw = f.read().strip()
-            if not raw:
-                return []
-            data = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    return [(a["Id"], a.get("Name","")) for a in data if a.get("Active")]
+    profiles, _ = load_profiles(return_status=True)
+    return [(a["Id"], a.get("Name","")) for a in profiles]
 
 
 
