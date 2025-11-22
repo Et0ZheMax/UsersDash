@@ -754,6 +754,38 @@
         setMobileView(state.mobileView || 'accounts');
     }
 
+    function isMobile() {
+        return window.matchMedia('(max-width: 960px)').matches;
+    }
+
+    function closeSidebar() {
+        if (sidebar) sidebar.classList.remove('is-open');
+        if (overlay) overlay.classList.remove('is-active');
+    }
+
+    function toggleSidebar() {
+        if (!sidebar) return;
+        const willOpen = !sidebar.classList.contains('is-open');
+        sidebar.classList.toggle('is-open', willOpen);
+        if (overlay) overlay.classList.toggle('is-active', willOpen);
+    }
+
+    function handleOverlayClick() {
+        closeSidebar();
+    }
+
+    function scrollToSteps() {
+        if (stepsRoot) {
+            stepsRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
+    function handleResize() {
+        if (!isMobile()) {
+            closeSidebar();
+        }
+    }
+
     function init() {
         if (accountsRoot) {
             accountsRoot.addEventListener('click', handleAccountClick);
