@@ -492,6 +492,45 @@
         }
     }
 
+    function extractStepsAndMenu(payload) {
+        if (!payload) return { steps: [], menu: {} };
+
+        const safeMenu = (obj, fallback = {}) => {
+            if (!obj || typeof obj !== "object") return fallback || {};
+            const menu = obj.MenuData || obj.menu || obj.menu_data || fallback || {};
+            return (menu && typeof menu === "object") ? menu : {};
+        };
+
+        const safeSteps = (val) => {
+            if (Array.isArray(val)) return val;
+            if (val && typeof val === "object") {
+                const nested = val.Data || val.data || val.steps || val.Steps;
+                if (Array.isArray(nested)) return nested;
+            }
+            return [];
+        };
+
+        if (Array.isArray(payload)) {
+            return { steps: payload, menu: {} };
+        }
+
+        if (payload && typeof payload === "object") {
+            const primary = payload.Data || payload.data || payload;
+            let steps = safeSteps(primary);
+            let menu = safeMenu(primary, safeMenu(payload));
+            if (!steps.length && primary && typeof primary === "object") {
+                const nested = primary.Data || primary.data;
+                steps = safeSteps(nested);
+                if (!Object.keys(menu || {}).length) {
+                    menu = safeMenu(nested, menu);
+                }
+            }
+            return { steps, menu };
+        }
+
+        return { steps: [], menu: {} };
+    }
+
     async function loadSteps(accountId, meta = {}) {
         if (!accountId || state.isLoading) return;
         state.isLoading = true;
@@ -511,9 +550,10 @@
                 throw new Error((data && data.error) || "Не удалось загрузить настройки.");
             }
 
-            const rawSteps = data.raw_steps || data.rawSteps || data.Data || data.data || [];
+            const normalized = extractStepsAndMenu(data.raw_steps || data.rawSteps || data.Data || data.data || data);
+            const rawSteps = normalized.steps;
             const viewSteps = data.steps || data.view_steps || buildViewStepsFromRaw(rawSteps);
-            const menu = data.menu || data.MenuData || data.menu_data || {};
+            const menu = data.menu || data.MenuData || data.menu_data || normalized.menu;
             const account = data.account || {};
 
             state.selectedAccountId = accountId;

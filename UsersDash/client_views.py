@@ -37,17 +37,48 @@ def _extract_steps_and_menu(raw_settings):
     варианты.
     """
 
-    if isinstance(raw_settings, list):
-        steps = raw_settings
-        menu_data = {}
-    elif isinstance(raw_settings, dict):
-        steps = raw_settings.get("Data") or raw_settings.get("data") or []
-        menu_data = raw_settings.get("MenuData") or raw_settings.get("menu") or {}
-    else:
-        steps = []
-        menu_data = {}
+    def _safe_menu(data: Any, fallback: Any = None):
+        menu = (
+            (data.get("MenuData") if isinstance(data, dict) else None)
+            or (data.get("menu") if isinstance(data, dict) else None)
+            or (data.get("menu_data") if isinstance(data, dict) else None)
+            or fallback
+            or {}
+        )
+        return menu if isinstance(menu, dict) else {}
 
-    return steps, menu_data
+    def _safe_steps(val: Any):
+        if isinstance(val, list):
+            return val
+        if isinstance(val, dict):
+            nested = val.get("Data") or val.get("data") or val.get("steps") or val.get("Steps")
+            if isinstance(nested, list):
+                return nested
+        return []
+
+    if isinstance(raw_settings, list):
+        return raw_settings, {}
+
+    if isinstance(raw_settings, dict):
+        primary = raw_settings.get("Data") or raw_settings.get("data") or raw_settings
+
+        # В некоторых окружениях Data может быть объектом, в котором снова лежит Data/MenuData
+        if isinstance(primary, dict) and not isinstance(primary, list):
+            steps = _safe_steps(primary)
+            menu_data = _safe_menu(primary, _safe_menu(raw_settings))
+            if not steps:
+                # Может быть ещё один уровень вложенности Data -> {Data: [...], MenuData: {...}}
+                nested = primary.get("Data") or primary.get("data")
+                steps = _safe_steps(nested)
+                if not menu_data:
+                    menu_data = _safe_menu(nested, _safe_menu(raw_settings))
+        else:
+            steps = _safe_steps(primary)
+            menu_data = _safe_menu(raw_settings)
+
+        return steps, menu_data
+
+    return [], {}
 
 
 def _build_manage_view_steps(raw_settings):
