@@ -28,8 +28,30 @@ from UsersDash.services.remote_api import (
 client_bp = Blueprint("client", __name__, url_prefix="")
 
 
+def _extract_steps_and_menu(raw_settings):
+    """Returns steps list and menu data from manage payload with fallbacks.
+
+    Rssv7 может возвращать данные как в поле "Data", так и в нижнем регистре
+    "data". Также некоторые окружения могут присылать сразу список шагов без
+    обёртки. Чтобы интерфейс всегда получал настройки, поддерживаем все эти
+    варианты.
+    """
+
+    if isinstance(raw_settings, list):
+        steps = raw_settings
+        menu_data = {}
+    elif isinstance(raw_settings, dict):
+        steps = raw_settings.get("Data") or raw_settings.get("data") or []
+        menu_data = raw_settings.get("MenuData") or raw_settings.get("menu") or {}
+    else:
+        steps = []
+        menu_data = {}
+
+    return steps, menu_data
+
+
 def _build_manage_view_steps(raw_settings):
-    steps = raw_settings.get("Data") or []
+    steps, _ = _extract_steps_and_menu(raw_settings)
     view_steps = []
 
     script_labels = {
@@ -252,10 +274,9 @@ def manage_page():
     menu_data = None
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
-        if raw_settings and "Data" in raw_settings:
+        raw_steps, menu_data = _extract_steps_and_menu(raw_settings)
+        if raw_steps:
             view_steps = _build_manage_view_steps(raw_settings)
-            raw_steps = raw_settings.get("Data") or []
-            menu_data = raw_settings.get("MenuData") or {}
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
 
@@ -298,14 +319,12 @@ def account_settings(account_id: int):
         abort(404)
 
     raw_settings = fetch_account_settings(account)
-    if not raw_settings or "Data" not in raw_settings:
+    steps, menu = _extract_steps_and_menu(raw_settings)
+    if not steps:
         return render_template(
             "client/account_settings_error.html",
             account=account,
         )
-
-    steps = raw_settings.get("Data") or []
-    menu = raw_settings.get("MenuData") or {}
 
     view_steps = []
     for idx, step in enumerate(steps):
@@ -353,12 +372,11 @@ def manage_account_details(account_id: int):
         return jsonify({"ok": False, "error": "account not found"}), 404
 
     raw_settings = fetch_account_settings(account)
-    if not raw_settings or "Data" not in raw_settings:
+    raw_steps, menu_data = _extract_steps_and_menu(raw_settings)
+    if not raw_steps:
         return jsonify({"ok": False, "error": "failed to load settings"}), 500
 
     steps = _build_manage_view_steps(raw_settings)
-    raw_steps = raw_settings.get("Data") or []
-    menu_data = raw_settings.get("MenuData") or {}
 
     return jsonify(
         {
