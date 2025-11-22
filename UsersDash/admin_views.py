@@ -42,34 +42,25 @@ def admin_required():
         abort(403)
 
 
-def _get_unassigned_user():
-    """
-    Возвращает клиента с базовым именем фермы (без числового суффикса).
+def _get_unassigned_user(return_created: bool = False):
+    """Возвращает (или создаёт) плейсхолдер-клиента для безымянных ферм."""
 
-    Примеры:
-    - "Ivan" или "Ivan1" или "Ivan2" -> клиент "Ivan".
-    - Если клиента ещё нет, создаёт его с дефолтным паролем.
-    """
-    base_name = (farm_name or "").strip()
-    if not base_name:
-        return _get_unassigned_user()
+    username = "Unassigned"
+    user = User.query.filter_by(username=username).first()
+    created = False
 
-    match = re.match(r"^(.*?)(\d+)?$", base_name)
-    username = (match.group(1) if match else base_name).strip(" _-") or base_name
+    if not user:
+        user = User(
+            username=username,
+            role="client",
+            is_active=False,
+            password_hash=generate_password_hash("generated"),
+        )
+        db.session.add(user)
+        db.session.flush()
+        created = True
 
-    existing = User.query.filter_by(username=username).first()
-    if existing:
-        return (existing, False) if return_created else existing
-
-    user = User(
-        username=username,
-        role="client",
-        is_active=True,
-        password_hash=generate_password_hash("123456789m"),
-    )
-    db.session.add(placeholder)
-    db.session.commit()
-    return placeholder
+    return (user, created) if return_created else user
 
 
 def _get_or_create_client_for_farm(
@@ -84,7 +75,7 @@ def _get_or_create_client_for_farm(
     """
     base_name = (farm_name or "").strip()
     if not base_name:
-        return _get_unassigned_user()
+        return _get_unassigned_user(return_created=return_created)
 
     match = re.match(r"^(.*?)(\d+)?$", base_name)
     username = (match.group(1) if match else base_name).strip(" _-") or base_name
