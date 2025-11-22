@@ -84,6 +84,25 @@
         }, 3500);
     }
 
+    function autoHideFlashMessages() {
+        const container = document.querySelector(".flash-container");
+        if (!container) return;
+
+        const toasts = Array.from(container.querySelectorAll(".toast"));
+        toasts.forEach((toast) => {
+            toast.style.transition = "opacity 0.3s ease";
+            setTimeout(() => {
+                toast.style.opacity = "0";
+                setTimeout(() => {
+                    toast.remove();
+                    if (!container.querySelector(".toast")) {
+                        container.remove();
+                    }
+                }, 300);
+            }, 1500);
+        });
+    }
+
     // ---------- Действия ----------
 
     async function handleRefreshAccount(btn) {
@@ -327,6 +346,8 @@
 
 
 
+
+    document.addEventListener("DOMContentLoaded", autoHideFlashMessages);
 
     // ---------- Делегированный обработчик кликов ----------
 
