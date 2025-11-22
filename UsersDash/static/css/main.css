@@ -54,6 +54,28 @@ body {
     border-radius: 2px;
 }
 
+.nav-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: rgba(76, 127, 255, 0.12);
+    border: 1px solid rgba(76, 127, 255, 0.35);
+    cursor: pointer;
+    padding: 6px;
+}
+
+.nav-toggle-bar {
+    width: 20px;
+    height: 2px;
+    background: #e4e7ff;
+    border-radius: 2px;
+}
+
 .user-label {
     margin-right: 4px;
     opacity: 0.9;
@@ -85,6 +107,15 @@ body {
 .content {
     padding: 20px;
     flex: 1;
+}
+
+.table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+    border: 1px solid #23263a;
+    background: #151828;
 }
 
 .table-responsive {
