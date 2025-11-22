@@ -64,65 +64,67 @@
 
 
 {% if accounts_data %}
-    <table class="table">
-        <thead>
-        <tr>
-            <th>Имя фермы</th>
-            <th>Сервер</th>
-            <th>Активна</th>
-            <th>Ресурсы (Food / Wood / Stone / Gold)</th>
-            <th>Прирост за сегодня</th>
-            <th>Обновлено</th>
-            <th>Действия</th>
-        </tr>
-        </thead>
-        <tbody>
-        {% for item in accounts_data %}
-            {% set acc = item.account %}
-            <tr data-account-id="{{ acc.id }}">
-                <td>{{ acc.name }}</td>
-                <td>{{ acc.server.name if acc.server else "N/A" }}</td>
-                <td>{{ "Да" if acc.is_active else "Нет" }}</td>
-                <td data-role="resources">
-                    {% if item.has_data %}
-                        {{ item.resources_brief|safe }}
-                    {% else %}
-                        —
-                    {% endif %}
-                </td>
-                <td data-role="today-gain">
-                    {% if item.today_gain %}
-                        {{ item.today_gain }}
-                    {% else %}
-                        —
-                    {% endif %}
-                </td>
-                <td data-role="last-updated">
-                    {% if item.last_updated %}
-                        {{ item.last_updated }}
-                    {% else %}
-                        —
-                    {% endif %}
-                </td>
-              
-                <td class="actions-cell">
-                    <a href="{{ url_for('client.manage_page', account_id=acc.id) }}" class="action-pill">
-                        <span class="btn-icon-symbol">⚙</span>
-                        <span class="btn-text">Настройки</span>
-                    </a>
-
-                    <button class="action-pill action-pill--ghost"
-                            data-action="refresh-account"
-                            data-account-id="{{ acc.id }}">
-                        <span class="btn-text">Обновить</span>
-                        <span class="btn-spinner" hidden></span>
-                    </button>
-                </td>
-
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Имя фермы</th>
+                <th>Сервер</th>
+                <th>Активна</th>
+                <th>Ресурсы (Food / Wood / Stone / Gold)</th>
+                <th>Прирост за сегодня</th>
+                <th>Обновлено</th>
+                <th>Действия</th>
             </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+            {% for item in accounts_data %}
+                {% set acc = item.account %}
+                <tr data-account-id="{{ acc.id }}">
+                    <td>{{ acc.name }}</td>
+                    <td>{{ acc.server.name if acc.server else "N/A" }}</td>
+                    <td>{{ "Да" if acc.is_active else "Нет" }}</td>
+                    <td data-role="resources">
+                        {% if item.has_data %}
+                            {{ item.resources_brief|safe }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td data-role="today-gain">
+                        {% if item.today_gain %}
+                            {{ item.today_gain }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                    <td data-role="last-updated">
+                        {% if item.last_updated %}
+                            {{ item.last_updated }}
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+
+                    <td class="actions-cell">
+                        <a href="{{ url_for('client.manage_page', account_id=acc.id) }}" class="action-pill">
+                            <span class="btn-icon-symbol">⚙</span>
+                            <span class="btn-text">Настройки</span>
+                        </a>
+
+                        <button class="action-pill action-pill--ghost"
+                                data-action="refresh-account"
+                                data-account-id="{{ acc.id }}">
+                            <span class="btn-text">Обновить</span>
+                            <span class="btn-spinner" hidden></span>
+                        </button>
+                    </td>
+
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
 {% else %}
     <p>У вас пока нет привязанных ферм. Обратитесь к администратору.</p>
 {% endif %}
