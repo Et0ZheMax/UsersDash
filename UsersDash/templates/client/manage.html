@@ -3,60 +3,113 @@
 {% block title %}Настройки бота{% endblock %}
 
 {% block content %}
-<div class="manage-header">
-    <div>
-        <div class="page-kicker">Панель управления</div>
-        <h1 class="page-title">Настройки бота</h1>
-        <div class="page-subtitle">Выберите ферму слева и настройте шаги выполнения</div>
+<div class="manage-modern">
+    <div class="manage-modern__header">
+        <div>
+            <div class="page-kicker">Панель управления</div>
+            <h1 class="page-title">Настройки бота</h1>
+            <div class="page-subtitle">Выберите ферму слева и настройте шаги выполнения</div>
+        </div>
+        <div class="manage-summary">
+            <div class="summary-label">Активных ферм</div>
+            <div class="summary-value">{{ accounts|length }}</div>
+        </div>
     </div>
-    <div class="manage-summary">
-        <div class="summary-label">Активных ферм</div>
-        <div class="summary-value">{{ accounts|length }}</div>
+
+    <div class="manage-modern__toolbar">
+        <button class="btn btn-primary" onclick="goBack()">← Назад</button>
+        <button class="btn btn-outline" onclick="window.location.reload()">Обновить</button>
+    </div>
+
+    <div class="manage-modern__layout">
+        <div class="manage-modern__sidebar manage-accounts" data-role="manage-accounts">
+            {% if accounts %}
+                {% for acc in accounts %}
+                    <button class="manage-modern__account {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                            data-account-id="{{ acc.id }}"
+                            data-account-name="{{ acc.name }}"
+                            data-server-name="{{ acc.server.name if acc.server else 'N/A' }}">
+                        <div class="manage-modern__account-name">{{ acc.name }}</div>
+                        <div class="manage-modern__account-meta">{{ acc.server.name if acc.server else 'N/A' }}</div>
+                    </button>
+                {% endfor %}
+            {% else %}
+                <div class="manage-empty">У вас нет активных ферм.</div>
+            {% endif %}
+        </div>
+
+        <div class="manage-modern__resizer" aria-hidden="true"></div>
+
+        <div class="manage-modern__pane">
+            <div class="manage-modern__tabs manage-steps" data-role="manage-steps">
+                <!-- steps will be rendered by manage.js -->
+            </div>
+            <div class="manage-modern__resizer manage-modern__resizer--vert" aria-hidden="true"></div>
+            <div class="manage-modern__config manage-config" data-role="manage-config">
+                <!-- config will be rendered by manage.js -->
+            </div>
+        </div>
     </div>
 </div>
 
-<div class="manage-layout">
-    <div class="manage-accounts" data-role="manage-accounts">
-        {% if accounts %}
-            {% for acc in accounts %}
-                <button class="manage-account-item {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
-                        data-account-id="{{ acc.id }}"
-                        data-account-name="{{ acc.name }}"
-                        data-server-name="{{ acc.server.name if acc.server else 'N/A' }}">
-                    <div class="manage-account-name">{{ acc.name }}</div>
-                    <div class="manage-account-meta">{{ acc.server.name if acc.server else 'N/A' }}</div>
-                </button>
-            {% endfor %}
-        {% else %}
-            <div class="manage-empty">У вас нет активных ферм.</div>
-        {% endif %}
-    </div>
-
-    <div class="manage-steps-column">
-        <div class="manage-content-header">
-            <div>
-                <div class="content-kicker">Шаги фермы</div>
-                <div class="content-title" data-role="steps-title">{{ selected_account.name if selected_account else 'Выберите ферму' }}</div>
-                <div class="content-subtitle" data-role="steps-subtitle">{{ selected_account.server.name if selected_account and selected_account.server else 'Выберите ферму, чтобы увидеть шаги' }}</div>
-            </div>
-            <div class="content-actions">
-                <a href="{{ url_for('client.dashboard') }}" class="btn btn-outline">← Назад к фермам</a>
-            </div>
-        </div>
-        <div class="manage-steps" data-role="manage-steps"></div>
-    </div>
-
-    <div class="manage-config-column">
-        <div class="manage-content-header">
-            <div>
-                <div class="content-kicker">Конфигурация шага</div>
-                <div class="content-title" data-role="config-title">Выберите шаг</div>
-                <div class="content-subtitle" data-role="config-subtitle">Параметры появятся после выбора шага</div>
-            </div>
-        </div>
-        <div class="manage-config" data-role="manage-config"></div>
+<div id="globalLoader">
+    <div class="box">
+        <div class="txt">Загружаем настройки…</div>
     </div>
 </div>
+
+<script>
+    (function () {
+        let loaderEl = null;
+        let active = 0;
+        let showTimer = null;
+        const SHOW_DELAY_MS = 120;
+
+        function el() {
+            return loaderEl || (loaderEl = document.getElementById('globalLoader'));
+        }
+
+        function reallyShow() {
+            const e = el();
+            if (e && e.classList) e.classList.add('show');
+        }
+
+        function show() {
+            active += 1;
+            if (active === 1) {
+                clearTimeout(showTimer);
+                showTimer = setTimeout(reallyShow, SHOW_DELAY_MS);
+            }
+        }
+
+        function hide() {
+            active = Math.max(0, active - 1);
+            if (active === 0) {
+                clearTimeout(showTimer);
+                const e = el();
+                if (e && e.classList) e.classList.remove('show');
+            }
+        }
+
+        window.EZFLoader = { show, hide };
+
+        const _fetch = window.fetch ? window.fetch.bind(window) : null;
+        if (_fetch) {
+            window.fetch = async function (input, init = {}) {
+                const headers = new Headers(init.headers || {});
+                const skip = headers.get('x-skip-loader') === '1';
+                if (!skip) show();
+                try {
+                    init.headers = headers;
+                    const res = await _fetch(input, init);
+                    return res;
+                } finally {
+                    if (!skip) hide();
+                }
+            };
+        }
+    })();
+    </script>
 
 {% if steps_error %}
     <div class="manage-error">{{ steps_error }}</div>
@@ -79,6 +132,10 @@
         toggleUrlTemplate: {{ toggle_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
         updateUrlTemplate: {{ update_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
     };
+
+    function goBack() {
+        window.location.href = {{ url_for('client.dashboard')|tojson }};
+    }
 </script>
 <script src="{{ url_for('static', filename='js/manage.js') }}"></script>
 {% endblock %}
