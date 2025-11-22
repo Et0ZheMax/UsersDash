@@ -1122,6 +1122,27 @@ h1 {
   color: #e5e7eb;
 }
 
+.manage-debug {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.manage-debug summary {
+  cursor: pointer;
+  color: #60a5fa;
+  margin-bottom: 4px;
+}
+
+.manage-debug pre {
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  padding: 8px;
+  overflow: auto;
+  max-height: 280px;
+  color: #e5e7eb;
+}
+
 .manage-error {
   margin-top: 10px;
   border: 1px solid rgba(220, 53, 69, 0.4);
