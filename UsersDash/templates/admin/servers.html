@@ -10,34 +10,36 @@
 </div>
 
 {% if servers %}
-    <table class="table">
-        <thead>
-        <tr>
-            <th>Имя</th>
-            <th>Host</th>
-            <th>API URL</th>
-            <th>Активен</th>
-            <th>Описание</th>
-            <th>Ферм</th>
-            <th></th>
-        </tr>
-        </thead>
-        <tbody>
-        {% for s in servers %}
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
             <tr>
-                <td>{{ s.name }}</td>
-                <td>{{ s.host }}</td>
-                <td>{{ s.api_base_url or "—" }}</td>
-                <td>{{ "Да" if s.is_active else "Нет" }}</td>
-                <td>{{ s.description or "—" }}</td>
-                <td>{{ s.accounts.count() }}</td>
-                <td>
-                    <a href="{{ url_for('admin.server_edit', server_id=s.id) }}" class="btn btn-small">Редактировать</a>
-                </td>
+                <th>Имя</th>
+                <th>Host</th>
+                <th>API URL</th>
+                <th>Активен</th>
+                <th>Описание</th>
+                <th>Ферм</th>
+                <th></th>
             </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+            {% for s in servers %}
+                <tr>
+                    <td>{{ s.name }}</td>
+                    <td>{{ s.host }}</td>
+                    <td>{{ s.api_base_url or "—" }}</td>
+                    <td>{{ "Да" if s.is_active else "Нет" }}</td>
+                    <td>{{ s.description or "—" }}</td>
+                    <td>{{ s.accounts.count() }}</td>
+                    <td>
+                        <a href="{{ url_for('admin.server_edit', server_id=s.id) }}" class="btn btn-small">Редактировать</a>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
 {% else %}
     <p>Серверов пока нет.</p>
 {% endif %}
