@@ -10,34 +10,36 @@
 </div>
 
 {% if users %}
-    <table class="table">
-        <thead>
-        <tr>
-            <th>Логин</th>
-            <th>Роль</th>
-            <th>Активен</th>
-            <th>Создан</th>
-            <th>Последний вход</th>
-            <th>Ферм</th>
-            <th></th>
-        </tr>
-        </thead>
-        <tbody>
-        {% for u in users %}
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
             <tr>
-                <td>{{ u.username }}</td>
-                <td>{{ u.role }}</td>
-                <td>{{ "Да" if u.is_active else "Нет" }}</td>
-                <td>{{ u.created_at or "" }}</td>
-                <td>{{ u.last_login_at or "—" }}</td>
-                <td>{{ u.accounts.count() }}</td>
-                <td>
-                    <a href="{{ url_for('admin.user_edit', user_id=u.id) }}" class="btn btn-small">Редактировать</a>
-                </td>
+                <th>Логин</th>
+                <th>Роль</th>
+                <th>Активен</th>
+                <th>Создан</th>
+                <th>Последний вход</th>
+                <th>Ферм</th>
+                <th></th>
             </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+            </thead>
+            <tbody>
+            {% for u in users %}
+                <tr>
+                    <td>{{ u.username }}</td>
+                    <td>{{ u.role }}</td>
+                    <td>{{ "Да" if u.is_active else "Нет" }}</td>
+                    <td>{{ u.created_at or "" }}</td>
+                    <td>{{ u.last_login_at or "—" }}</td>
+                    <td>{{ u.accounts.count() }}</td>
+                    <td>
+                        <a href="{{ url_for('admin.user_edit', user_id=u.id) }}" class="btn btn-small">Редактировать</a>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
 {% else %}
     <p>Пользователей пока нет.</p>
 {% endif %}
