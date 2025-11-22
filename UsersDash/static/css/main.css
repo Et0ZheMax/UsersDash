@@ -54,6 +54,28 @@ body {
     border-radius: 2px;
 }
 
+.nav-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: rgba(76, 127, 255, 0.12);
+    border: 1px solid rgba(76, 127, 255, 0.35);
+    cursor: pointer;
+    padding: 6px;
+}
+
+.nav-toggle-bar {
+    width: 20px;
+    height: 2px;
+    background: #e4e7ff;
+    border-radius: 2px;
+}
+
 .user-label {
     margin-right: 4px;
     opacity: 0.9;
@@ -85,6 +107,15 @@ body {
 .content {
     padding: 20px;
     flex: 1;
+}
+
+.table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+    border: 1px solid #23263a;
+    background: #151828;
 }
 
 .table-responsive {
@@ -1007,6 +1038,7 @@ h1 {
 .manage-modern__column {
   position: relative;
   overflow: hidden;
+  min-width: 0;
 }
 
 .manage-modern__column--accounts {
@@ -1079,6 +1111,17 @@ h1 {
   overflow-y: auto;
 }
 
+.manage-modern__account-name,
+.manage-modern__account-meta,
+.manage-modern__mobile-title,
+.manage-modern__mobile-subtitle,
+.step-title,
+.config-title,
+.config-subtitle {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 960px) {
   .manage-modern {
     gap: 10px;
@@ -1115,6 +1158,9 @@ h1 {
     transition: transform 0.28s ease;
     padding: 12px;
     border: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
   }
 
   .manage-modern__column--accounts {

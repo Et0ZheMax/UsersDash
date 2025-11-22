@@ -749,41 +749,10 @@
     function handleResize() {
         if (!isMobile()) {
             if (manageRoot) manageRoot.removeAttribute('data-mobile-view');
+            state.mobileView = null;
             return;
         }
         setMobileView(state.mobileView || 'accounts');
-    }
-
-    function isMobile() {
-        return window.matchMedia('(max-width: 960px)').matches;
-    }
-
-    function closeSidebar() {
-        if (sidebar) sidebar.classList.remove('is-open');
-        if (overlay) overlay.classList.remove('is-active');
-    }
-
-    function toggleSidebar() {
-        if (!sidebar) return;
-        const willOpen = !sidebar.classList.contains('is-open');
-        sidebar.classList.toggle('is-open', willOpen);
-        if (overlay) overlay.classList.toggle('is-active', willOpen);
-    }
-
-    function handleOverlayClick() {
-        closeSidebar();
-    }
-
-    function scrollToSteps() {
-        if (stepsRoot) {
-            stepsRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-    }
-
-    function handleResize() {
-        if (!isMobile()) {
-            closeSidebar();
-        }
     }
 
     function init() {
@@ -819,7 +788,7 @@
 
         if (state.selectedAccountId) {
             highlightAccount(state.selectedAccountId);
-            if (state.rawSteps && state.rawSteps.length && state.selectedStepIndex === null) {
+            if (state.rawSteps && state.rawSteps.length && state.selectedStepIndex === null && !isMobile()) {
                 state.selectedStepIndex = 0;
             }
             renderSteps();
@@ -828,10 +797,18 @@
             renderEmptyState("Выберите ферму слева, чтобы увидеть настройки.");
         }
 
-        const initialMobileView = state.selectedAccountId
-            ? (state.selectedStepIndex !== null ? 'config' : 'steps')
-            : 'accounts';
-        setMobileView(initialMobileView);
+        const initialMobileView = isMobile()
+            ? 'accounts'
+            : (state.selectedAccountId
+                ? (state.selectedStepIndex !== null ? 'config' : 'steps')
+                : 'accounts');
+
+        if (isMobile()) {
+            setMobileView(initialMobileView);
+        } else if (manageRoot) {
+            manageRoot.removeAttribute('data-mobile-view');
+            state.mobileView = null;
+        }
     }
 
     init();
