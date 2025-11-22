@@ -21,13 +21,17 @@
         <button class="btn btn-outline" onclick="window.location.reload()">Обновить</button>
     </div>
 
-    <div class="manage-modern__mobile-actions">
-        <button class="btn btn-secondary" type="button" data-role="toggle-accounts">Фермы</button>
-        <button class="btn btn-outline" type="button" data-role="scroll-steps">Шаги</button>
+    <div class="manage-modern__mobile-nav" data-role="mobile-nav">
+        <button class="manage-modern__mobile-back" type="button" data-role="mobile-back" aria-label="Назад">←</button>
+        <div class="manage-modern__mobile-titles">
+            <div class="manage-modern__mobile-title" data-role="mobile-title">Фермы</div>
+            <div class="manage-modern__mobile-subtitle" data-role="mobile-subtitle"></div>
+        </div>
+        <div class="manage-modern__mobile-placeholder" aria-hidden="true"></div>
     </div>
 
-    <div class="manage-modern__layout">
-        <div class="manage-modern__sidebar manage-accounts" data-role="manage-accounts">
+    <div class="manage-modern__layout" data-role="manage-layout">
+        <div class="manage-modern__column manage-modern__column--accounts manage-accounts" data-role="manage-accounts">
             {% if accounts %}
                 {% for acc in accounts %}
                     <button class="manage-modern__account {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
@@ -43,13 +47,13 @@
             {% endif %}
         </div>
 
-        <div class="manage-modern__resizer" aria-hidden="true"></div>
-
-        <div class="manage-modern__pane">
+        <div class="manage-modern__column manage-modern__column--steps">
             <div class="manage-modern__tabs manage-steps" data-role="manage-steps">
                 <!-- steps will be rendered by manage.js -->
             </div>
-            <div class="manage-modern__resizer manage-modern__resizer--vert" aria-hidden="true"></div>
+        </div>
+
+        <div class="manage-modern__column manage-modern__column--config">
             <div class="manage-modern__config manage-config" data-role="manage-config">
                 <!-- config will be rendered by manage.js -->
             </div>

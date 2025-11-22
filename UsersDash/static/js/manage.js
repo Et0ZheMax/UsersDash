@@ -175,10 +175,11 @@
     const stepsSubtitleEl = document.querySelector('[data-role="steps-subtitle"]');
     const configTitleEl = document.querySelector('[data-role="config-title"]');
     const configSubtitleEl = document.querySelector('[data-role="config-subtitle"]');
-    const sidebarToggleBtn = document.querySelector('[data-role="toggle-accounts"]');
-    const stepsScrollBtn = document.querySelector('[data-role="scroll-steps"]');
-    const overlay = document.querySelector('[data-role="manage-overlay"]');
-    const sidebar = document.querySelector('.manage-modern__sidebar');
+    const mobileNavTitle = document.querySelector('[data-role="mobile-title"]');
+    const mobileNavSubtitle = document.querySelector('[data-role="mobile-subtitle"]');
+    const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
+    const layoutRoot = document.querySelector('[data-role="manage-layout"]');
+    const manageRoot = document.querySelector('.manage-modern');
 
     function escapeHtml(str) {
         return (str || "").replace(/[&<>"]+/g, (ch) => ({
@@ -622,6 +623,9 @@
                 renderSteps();
                 renderConfig();
                 updateHeaderText();
+                if (isMobile()) {
+                    setMobileView(state.selectedStepIndex !== null ? 'config' : 'steps');
+                }
             }
         } catch (err) {
             console.error(err);
@@ -645,7 +649,7 @@
             server: btn.dataset.serverName,
         });
         if (isMobile()) {
-            closeSidebar();
+            setMobileView('steps');
         }
     }
 
@@ -669,6 +673,85 @@
         state.selectedStepIndex = idx;
         renderSteps();
         renderConfig();
+        if (isMobile()) {
+            setMobileView('config');
+        }
+    }
+
+    function isMobile() {
+        return window.matchMedia('(max-width: 960px)').matches;
+    }
+
+    function setMobileView(nextView) {
+        if (!manageRoot || !nextView) return;
+        state.mobileView = nextView;
+        manageRoot.setAttribute('data-mobile-view', nextView);
+        if (mobileNavTitle) {
+            if (nextView === 'accounts') {
+                mobileNavTitle.textContent = 'Фермы';
+            } else if (nextView === 'steps') {
+                mobileNavTitle.textContent = state.selectedAccountName || 'Шаги';
+            } else {
+                mobileNavTitle.textContent = 'Конфигурация';
+            }
+        }
+        if (mobileNavSubtitle) {
+            if (nextView === 'steps') {
+                mobileNavSubtitle.textContent = state.selectedServerName || '';
+            } else if (nextView === 'config') {
+                const step = state.rawSteps && state.rawSteps[state.selectedStepIndex];
+                mobileNavSubtitle.textContent = getScriptTitle(step) || '';
+            } else {
+                mobileNavSubtitle.textContent = '';
+            }
+        }
+        if (mobileBackBtn) {
+            mobileBackBtn.style.visibility = nextView === 'accounts' ? 'hidden' : 'visible';
+        }
+    }
+
+    function mobileBack() {
+        if (!state.mobileView) return;
+        if (state.mobileView === 'config') {
+            setMobileView('steps');
+        } else if (state.mobileView === 'steps') {
+            setMobileView('accounts');
+        }
+    }
+
+    function bindSwipeNavigation() {
+        if (!layoutRoot) return;
+        let startX = null;
+        let startY = null;
+
+        layoutRoot.addEventListener('touchstart', (event) => {
+            const touch = event.touches && event.touches[0];
+            if (!touch) return;
+            startX = touch.clientX;
+            startY = touch.clientY;
+        });
+
+        layoutRoot.addEventListener('touchend', (event) => {
+            if (startX === null || startY === null) return;
+            const touch = event.changedTouches && event.changedTouches[0];
+            if (!touch) return;
+            const deltaX = touch.clientX - startX;
+            const deltaY = Math.abs(touch.clientY - startY);
+            startX = null;
+            startY = null;
+            if (Math.abs(deltaX) < 60 || deltaY > 50) return;
+            if (deltaX > 0 && isMobile()) {
+                mobileBack();
+            }
+        });
+    }
+
+    function handleResize() {
+        if (!isMobile()) {
+            if (manageRoot) manageRoot.removeAttribute('data-mobile-view');
+            return;
+        }
+        setMobileView(state.mobileView || 'accounts');
     }
 
     function isMobile() {
@@ -710,16 +793,11 @@
         if (stepsRoot) {
             stepsRoot.addEventListener('click', handleStepsClick);
         }
-        if (sidebarToggleBtn) {
-            sidebarToggleBtn.addEventListener('click', toggleSidebar);
-        }
-        if (stepsScrollBtn) {
-            stepsScrollBtn.addEventListener('click', scrollToSteps);
-        }
-        if (overlay) {
-            overlay.addEventListener('click', handleOverlayClick);
+        if (mobileBackBtn) {
+            mobileBackBtn.addEventListener('click', mobileBack);
         }
 
+        bindSwipeNavigation();
         window.addEventListener('resize', handleResize);
 
         if (state.rawSteps === undefined && state.raw_steps) {
@@ -749,6 +827,11 @@
         } else {
             renderEmptyState("Выберите ферму слева, чтобы увидеть настройки.");
         }
+
+        const initialMobileView = state.selectedAccountId
+            ? (state.selectedStepIndex !== null ? 'config' : 'steps')
+            : 'accounts';
+        setMobileView(initialMobileView);
     }
 
     init();
