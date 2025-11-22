@@ -393,7 +393,7 @@
             if (typeof conf === "boolean") {
                 field.innerHTML = `
                     <label for="cfg_${key}">${label}</label>
-                    <input type="checkbox" id="cfg_${key}" name="${key}" ${conf ? "checked" : """>`;
+                    <input type="checkbox" id="cfg_${key}" name="${key}" ${conf ? "checked" : ""}>`;
             } else if (conf && typeof conf === "object" && Array.isArray(conf.options)) {
                 const options = conf.options
                     .map((opt) => {
