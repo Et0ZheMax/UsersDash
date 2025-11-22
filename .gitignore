@@ -3,3 +3,4 @@ __pycache__/
 RSSv7/logs_cache.db
 RSSv7/resources_web.db
 UsersDash/data/backups/*
+UsersDash/data/app.db
