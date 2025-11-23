@@ -163,6 +163,37 @@ h1 {
     margin-bottom: 16px;
 }
 
+.dashboard-filters {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 8px 0 12px;
+}
+
+.filter-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 260px;
+}
+
+.filter-label {
+    font-size: 0.85rem;
+    color: #bfc6ff;
+    letter-spacing: 0.01em;
+}
+
+.filter-input {
+    max-width: 360px;
+}
+
+.filter-hint {
+    font-size: 0.78rem;
+    color: #8f96c4;
+}
+
 /* Карточки / формы */
 
 .card {

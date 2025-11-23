@@ -129,6 +129,37 @@
         });
     }
 
+    function setupAccountSearch() {
+        const searchInput = document.querySelector('[data-role="account-search"]');
+        const rows = Array.from(document.querySelectorAll('[data-account-row]'));
+        const emptyRow = document.querySelector('[data-role="account-search-empty"]');
+
+        if (!searchInput || rows.length === 0) return;
+
+        const normalize = (str) => (str || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+        const applyFilter = () => {
+            const term = normalize(searchInput.value);
+            let visibleCount = 0;
+
+            rows.forEach((row) => {
+                const haystack = normalize(row.dataset.searchText || row.textContent);
+                const matches = !term || haystack.includes(term);
+                row.hidden = Boolean(term) && !matches;
+                if (matches) {
+                    visibleCount += 1;
+                }
+            });
+
+            if (emptyRow) {
+                emptyRow.hidden = visibleCount > 0;
+            }
+        };
+
+        searchInput.addEventListener("input", applyFilter);
+        applyFilter();
+    }
+
     // ---------- Действия ----------
 
     async function handleRefreshAccount(btn) {
@@ -373,6 +404,7 @@
     document.addEventListener("DOMContentLoaded", function () {
         autoHideFlashMessages();
         setupNavToggle();
+        setupAccountSearch();
     });
 
     // ---------- Делегированный обработчик кликов ----------
