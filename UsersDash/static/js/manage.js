@@ -396,9 +396,13 @@
             const label = CONFIG_LABELS[key] || key;
 
             if (typeof conf === "boolean") {
+                field.classList.add("config-field--boolean");
                 field.innerHTML = `
-                    <label for="cfg_${key}">${label}</label>
-                    <input type="checkbox" id="cfg_${key}" name="${key}" ${conf ? "checked" : ""}>`;
+                    <label class="config-checkbox" for="cfg_${key}">
+                        <input type="checkbox" class="config-checkbox__input" id="cfg_${key}" name="${key}" ${conf ? "checked" : ""}>
+                        <span class="config-checkbox__box" aria-hidden="true"></span>
+                        <span class="config-checkbox__label">${label}</span>
+                    </label>`;
             } else if (conf && typeof conf === "object" && Array.isArray(conf.options)) {
                 const options = conf.options
                     .map((opt) => {
@@ -616,15 +620,17 @@
                 payload_keys: data ? Object.keys(data) : [],
                 normalized_steps: Array.isArray(rawSteps) ? rawSteps.length : 0,
             };
-            state.selectedStepIndex = state.rawSteps.length ? 0 : null;
+
+            const startOnMobile = isMobile();
+            state.selectedStepIndex = (state.rawSteps.length && !startOnMobile) ? 0 : null;
             if (!state.rawSteps.length) {
                 renderEmptyState("Настройки не найдены в ответе сервера.", state.debugInfo);
             } else {
                 renderSteps();
                 renderConfig();
                 updateHeaderText();
-                if (isMobile()) {
-                    setMobileView(state.selectedStepIndex !== null ? 'config' : 'steps');
+                if (startOnMobile) {
+                    setMobileView('steps');
                 }
             }
         } catch (err) {

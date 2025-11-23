@@ -76,6 +76,28 @@ body {
     border-radius: 2px;
 }
 
+.nav-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: rgba(76, 127, 255, 0.12);
+    border: 1px solid rgba(76, 127, 255, 0.35);
+    cursor: pointer;
+    padding: 6px;
+}
+
+.nav-toggle-bar {
+    width: 20px;
+    height: 2px;
+    background: #e4e7ff;
+    border-radius: 2px;
+}
+
 .user-label {
     margin-right: 4px;
     opacity: 0.9;
@@ -107,6 +129,15 @@ body {
 .content {
     padding: 20px;
     flex: 1;
+}
+
+.table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+    border: 1px solid #23263a;
+    background: #151828;
 }
 
 .table-responsive {
@@ -939,6 +970,72 @@ h1 {
   gap: 10px;
 }
 
+.config-field--boolean {
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(76, 127, 255, 0.06));
+}
+
+.config-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #e5e7eb;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.config-checkbox__input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.config-checkbox__box {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #0c0e16;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  transition: all 0.16s ease;
+}
+
+.config-checkbox__box::after {
+  content: "";
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transform: rotate(-45deg);
+  transition: border-color 0.16s ease;
+}
+
+.config-checkbox__input:checked + .config-checkbox__box {
+  background: linear-gradient(145deg, #4c7fff, #6ba4ff);
+  border-color: rgba(76, 127, 255, 0.9);
+  box-shadow: 0 6px 18px rgba(76, 127, 255, 0.25);
+}
+
+.config-checkbox__input:checked + .config-checkbox__box::after {
+  border-color: #0b1020;
+}
+
+.config-checkbox__input:focus-visible + .config-checkbox__box {
+  outline: 2px solid rgba(76, 127, 255, 0.75);
+  outline-offset: 2px;
+}
+
+.config-checkbox__label {
+  flex: 1;
+  line-height: 1.35;
+}
+
 .config-field label {
   font-size: 0.9rem;
   color: #e5e7eb;
@@ -968,6 +1065,15 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.manage-modern,
+.manage-modern__layout,
+.manage-modern__column,
+.manage-modern__account,
+.manage-modern__tabs,
+.manage-modern__config {
+  box-sizing: border-box;
 }
 
 .manage-modern__header {
