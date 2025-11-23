@@ -32,6 +32,28 @@ body {
     gap: 12px;
 }
 
+.nav-toggle {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 4px;
+    width: 42px;
+    height: 42px;
+    border-radius: 10px;
+    background: rgba(76, 127, 255, 0.12);
+    border: 1px solid rgba(76, 127, 255, 0.35);
+    cursor: pointer;
+    padding: 6px;
+}
+
+.nav-toggle-bar {
+    width: 20px;
+    height: 2px;
+    background: #e4e7ff;
+    border-radius: 2px;
+}
+
 .user-label {
     margin-right: 4px;
     opacity: 0.9;
@@ -63,6 +85,15 @@ body {
 .content {
     padding: 20px;
     flex: 1;
+}
+
+.table-responsive {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+    border: 1px solid #23263a;
+    background: #151828;
 }
 
 h1 {
@@ -168,6 +199,7 @@ h1 {
     background: #151828;
     border-radius: 12px;
     overflow: hidden;
+    min-width: 720px;
 }
 
 .table th,
@@ -876,6 +908,72 @@ h1 {
   gap: 10px;
 }
 
+.config-field--boolean {
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.04), rgba(76, 127, 255, 0.06));
+}
+
+.config-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #e5e7eb;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.config-checkbox__input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.config-checkbox__box {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.55);
+  background: #0c0e16;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+  transition: all 0.16s ease;
+}
+
+.config-checkbox__box::after {
+  content: "";
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  transform: rotate(-45deg);
+  transition: border-color 0.16s ease;
+}
+
+.config-checkbox__input:checked + .config-checkbox__box {
+  background: linear-gradient(145deg, #4c7fff, #6ba4ff);
+  border-color: rgba(76, 127, 255, 0.9);
+  box-shadow: 0 6px 18px rgba(76, 127, 255, 0.25);
+}
+
+.config-checkbox__input:checked + .config-checkbox__box::after {
+  border-color: #0b1020;
+}
+
+.config-checkbox__input:focus-visible + .config-checkbox__box {
+  outline: 2px solid rgba(76, 127, 255, 0.75);
+  outline-offset: 2px;
+}
+
+.config-checkbox__label {
+  flex: 1;
+  line-height: 1.35;
+}
+
 .config-field label {
   font-size: 0.9rem;
   color: #e5e7eb;
@@ -907,26 +1005,102 @@ h1 {
   gap: 12px;
 }
 
+.manage-modern,
+.manage-modern__layout,
+.manage-modern__column,
+.manage-modern__account,
+.manage-modern__tabs,
+.manage-modern__config {
+  box-sizing: border-box;
+}
+
 .manage-modern__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .manage-modern__toolbar {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.manage-modern__mobile-nav {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0 2px;
+}
+
+.manage-modern__mobile-back {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e5e7eb;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.manage-modern__mobile-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.manage-modern__mobile-title {
+  font-weight: 700;
+}
+
+.manage-modern__mobile-subtitle {
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.manage-modern__mobile-placeholder {
+  width: 36px;
+  height: 36px;
 }
 
 .manage-modern__layout {
   display: grid;
-  grid-template-columns: 240px 4px 1fr;
+  grid-template-columns: 240px 320px 1fr;
   gap: 0;
   min-height: 520px;
   background: #141620;
   border: 1px solid rgba(148, 163, 184, 0.15);
   border-radius: 12px;
   overflow: hidden;
+}
+
+.manage-modern__column {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.manage-modern__column--accounts {
+  padding: 10px;
+  background: #0f111a;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  border-right: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.manage-modern__column--steps {
+  border-right: 1px solid rgba(148, 163, 184, 0.15);
+}
+
+.manage-modern__column--config {
+  background: #0f111a;
 }
 
 .manage-modern__sidebar {
@@ -970,34 +1144,127 @@ h1 {
   margin-top: 2px;
 }
 
-.manage-modern__resizer {
-  background: rgba(255, 255, 255, 0.08);
-  cursor: col-resize;
-}
-
-.manage-modern__resizer--vert {
-  background: rgba(255, 255, 255, 0.06);
-  cursor: col-resize;
-  width: 3px;
-}
-
-.manage-modern__pane {
-  display: grid;
-  grid-template-columns: 320px 3px 1fr;
-  background: #141620;
-}
-
 .manage-modern__tabs {
   padding: 12px;
-  border-right: 1px solid rgba(148, 163, 184, 0.15);
   overflow-y: auto;
 }
 
 .manage-modern__config {
   padding: 16px;
   background: #0f111a;
-  border-left: 1px solid rgba(148, 163, 184, 0.15);
   overflow-y: auto;
+}
+
+.manage-modern__account-name,
+.manage-modern__account-meta,
+.manage-modern__mobile-title,
+.manage-modern__mobile-subtitle,
+.step-title,
+.config-title,
+.config-subtitle {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 960px) {
+  .manage-modern {
+    gap: 10px;
+  }
+
+  .manage-modern__header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .manage-modern__toolbar {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .manage-modern__mobile-nav {
+    display: flex;
+  }
+
+  .manage-modern__layout {
+    position: relative;
+    display: block;
+    min-height: 60vh;
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    background: #0f111a;
+  }
+
+  .manage-modern__column {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    background: #0f111a;
+    transition: transform 0.28s ease;
+    padding: 12px;
+    border: none;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .manage-modern__column--accounts {
+    padding-top: 8px;
+    border-right: none;
+  }
+
+  .manage-modern__column--steps {
+    border-right: none;
+  }
+
+  .manage-modern__column--config {
+    border-left: none;
+  }
+
+  .manage-modern[data-mobile-view="accounts"] .manage-modern__column--accounts {
+    transform: translateX(0);
+  }
+
+  .manage-modern[data-mobile-view="accounts"] .manage-modern__column--steps {
+    transform: translateX(100%);
+  }
+
+  .manage-modern[data-mobile-view="accounts"] .manage-modern__column--config {
+    transform: translateX(200%);
+  }
+
+  .manage-modern[data-mobile-view="steps"] .manage-modern__column--accounts {
+    transform: translateX(-100%);
+  }
+
+  .manage-modern[data-mobile-view="steps"] .manage-modern__column--steps {
+    transform: translateX(0);
+  }
+
+  .manage-modern[data-mobile-view="steps"] .manage-modern__column--config {
+    transform: translateX(100%);
+  }
+
+  .manage-modern[data-mobile-view="config"] .manage-modern__column--accounts {
+    transform: translateX(-200%);
+  }
+
+  .manage-modern[data-mobile-view="config"] .manage-modern__column--steps {
+    transform: translateX(-100%);
+  }
+
+  .manage-modern[data-mobile-view="config"] .manage-modern__column--config {
+    transform: translateX(0);
+  }
+
+  .manage-modern__tabs {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+    max-height: none;
+  }
+
+  .manage-modern__config {
+    border-top: 1px solid rgba(148, 163, 184, 0.12);
+    padding: 12px;
+  }
 }
 
 #globalLoader {
@@ -1147,6 +1414,78 @@ h1 {
   margin-top: 10px;
   border: 1px solid rgba(220, 53, 69, 0.4);
   color: #f8d7da;
+}
+
+@media (max-width: 1024px) {
+  .header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .header-right {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+
+  .user-label {
+    order: 3;
+  }
+
+  .nav-toggle {
+    display: inline-flex;
+  }
+
+  .nav {
+    display: none;
+    width: 100%;
+    flex-direction: column;
+    gap: 8px;
+    background: #0f111a;
+    border: 1px solid #23263a;
+    border-radius: 12px;
+    padding: 10px;
+  }
+
+  .nav.is-open {
+    display: flex;
+  }
+
+  .nav-link {
+    width: 100%;
+    text-align: center;
+  }
+
+  .header-right .btn,
+  .header-right .user-label {
+    width: 100%;
+    text-align: center;
+  }
+
+  .kpi-row {
+    flex-direction: column;
+  }
+
+  .actions-cell {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .content {
+    padding: 14px;
+  }
+
+  .toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .toolbar .btn {
+    width: 100%;
+  }
 }
 
 @media (max-width: 1200px) {
