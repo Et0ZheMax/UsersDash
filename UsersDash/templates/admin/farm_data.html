@@ -80,13 +80,21 @@
         background: #7dd3fc;
     }
 
-    .farmdata-search-row {
+    .farmdata-toolbar {
         display: flex;
-        align-items: center;
+        align-items: flex-end;
         justify-content: space-between;
         gap: 0.75rem;
         margin-bottom: 0.75rem;
         flex-wrap: wrap;
+    }
+
+    .farmdata-search-block {
+        display: flex;
+        flex-direction: column;
+        gap: 0.35rem;
+        flex: 1 1 320px;
+        min-width: 260px;
     }
 
     .farmdata-search-label {
@@ -95,9 +103,6 @@
     }
 
     .farmdata-search-input {
-        min-width: 220px;
-        flex: 1 1 240px;
-        max-width: 360px;
         border-radius: 999px;
         border: 1px solid rgba(75, 85, 99, 0.9);
         padding: 0.35rem 0.9rem;
@@ -105,6 +110,8 @@
         color: #e5e7eb;
         font-size: 0.85rem;
         outline: none;
+        width: 100%;
+        box-sizing: border-box;
     }
 
     .farmdata-search-input::placeholder {
@@ -212,6 +219,12 @@
         flex-wrap: wrap;
     }
 
+    .farmdata-actions--toolbar {
+        margin-top: 0;
+        flex: 1 1 auto;
+        justify-content: flex-end;
+    }
+
     .btn.btn-primary {
         background: #2563eb;
         border-radius: 999px;
@@ -273,14 +286,41 @@
                 </div>
             </div>
 
-            <div class="farmdata-search-row">
-                <div class="farmdata-search-label">
-                    Поиск по клиенту, ферме, серверу, IGG, email…
+            <div class="farmdata-toolbar">
+                <div class="farmdata-search-block">
+                    <div class="farmdata-search-label">
+                        Поиск по клиенту, ферме, серверу, IGG, email…
+                    </div>
+                    <input type="text"
+                           class="farmdata-search-input"
+                           placeholder="Начните вводить имя фермы, клиента или IGG..."
+                           data-role="admin-farmdata-search">
                 </div>
-                <input type="text"
-                       class="farmdata-search-input"
-                       placeholder="Начните вводить имя фермы, клиента или IGG..."
-                       data-role="admin-farmdata-search">
+                <div class="farmdata-actions farmdata-actions--toolbar">
+                    <button type="button"
+                            class="btn btn-primary"
+                            data-role="farmdata-save">
+                        Сохранить
+                    </button>
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-role="farmdata-sync">
+                        Синхронизировать с RSSv7
+                        <span class="btn-spinner" data-role="farmdata-sync-spinner" hidden></span>
+                    </button>
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-role="farmdata-pull">
+                        Запрос данных
+                        <span class="btn-spinner" data-role="farmdata-pull-spinner" hidden></span>
+                    </button>
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-role="auto-create-clients">
+                        Создать клиентов по именам
+                        <span class="btn-spinner" data-role="auto-create-spinner" hidden></span>
+                    </button>
+                </div>
             </div>
 
             <div class="farmdata-table-wrapper">
@@ -489,34 +529,6 @@
 
                     </tbody>
                 </table>
-            </div>
-            <div class="farmdata-actions">
-                <button type="button"
-                        class="btn btn-secondary"
-                        data-role="farmdata-pull">
-                    Запрос данных
-                    <span class="btn-spinner" data-role="farmdata-pull-spinner" hidden></span>
-                </button>
-
-                <button type="button"
-                        class="btn btn-secondary"
-                        data-role="farmdata-sync">
-                    Синхронизировать с RSSv7
-                    <span class="btn-spinner" data-role="farmdata-sync-spinner" hidden></span>
-                </button>
-
-                <button type="button"
-                        class="btn btn-secondary"
-                        data-role="auto-create-clients">
-                    Создать клиентов по именам
-                    <span class="btn-spinner" data-role="auto-create-spinner" hidden></span>
-                </button>
-
-                <button type="button"
-                        class="btn btn-primary"
-                        data-role="farmdata-save">
-                    Сохранить
-                </button>
             </div>
         </div>
     </form>
