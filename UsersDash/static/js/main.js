@@ -327,79 +327,175 @@
             }
         }
 
-        async function handleFarmDataSave(btn) {
-            const table = document.querySelector('[data-role="farmdata-table"]');
-            if (!table) {
-                showToast("Таблица с фермами не найдена.", "error");
-                return;
+    const farmDataWatchedFields = new Set(["email", "password", "igg_id", "server", "telegram_tag"]);
+    let farmDataAutoSaveTimer = null;
+    let farmDataSaveInProgress = false;
+    let farmDataAutoSaveQueued = false;
+    let lastAutoSaveToastAt = 0;
+
+    function setFarmDataSavingState(isSaving, isAuto) {
+        const btn = document.querySelector('[data-action="farmdata-save"]');
+        const textEl = btn ? findBtnTextEl(btn) : null;
+
+        if (btn) {
+            if (isSaving && textEl) {
+                textEl.textContent = isAuto ? "Автосохранение..." : "Сохраняем...";
             }
-
-            const rows = table.querySelectorAll("tbody tr[data-account-id]");
-            if (!rows.length) {
-                showToast("Нет ферм для сохранения.", "info");
-                return;
-            }
-
-            const items = [];
-
-            rows.forEach(function (tr) {
-                const accountId = tr.dataset.accountId;
-                if (!accountId) return;
-
-                function val(selector) {
-                    const el = tr.querySelector(selector);
-                    return el && el.value ? el.value.trim() : "";
-                }
-
-                const item = {
-                    account_id: accountId,
-                    email: val('input[name="email"]'),
-                    password: val('input[name="password"]'),
-                    igg_id: val('input[name="igg_id"]'),
-                    server: val('input[name="server"]'),
-                    telegram_tag: val('input[name="telegram_tag"]')
-                    // ВНИМАНИЕ: дату оплаты и тариф клиент больше не меняет,
-                    // они изменяются только из админки.
-                };
-
-                items.push(item);
-            });
-
-            if (!items.length) {
-                showToast("Нет данных для сохранения.", "info");
-                return;
-            }
-
-            setButtonLoading(btn, true);
-            try {
-                const resp = await fetch("/farm-data/save", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({ items: items })
-                });
-
-                let data = {};
-                try {
-                    data = await resp.json();
-                } catch (_) {
-                    data = {};
-                }
-
-                if (!resp.ok || !data.ok) {
-                    throw new Error(data.error || "Ошибка при сохранении данных.");
-                }
-
-                applyFarmDataStatusUI(data.farmdata_status);
-                showToast("Данные ферм сохранены.", "success");
-            } catch (err) {
-                console.error(err);
-                showToast(err.message || "Ошибка при сохранении данных.", "error");
-            } finally {
-                setButtonLoading(btn, false);
+            setButtonLoading(btn, isSaving);
+            if (!isSaving && textEl) {
+                textEl.textContent = "Сохранить изменения";
             }
         }
+    }
+
+    function collectClientFarmDataItems() {
+        const table = document.querySelector('[data-role="farmdata-table"]');
+        if (!table) {
+            return { items: [], rows: [], missingTable: true };
+        }
+
+        const rows = Array.from(table.querySelectorAll("tbody tr[data-account-id]"));
+        const items = [];
+
+        rows.forEach(function (tr) {
+            const accountId = tr.dataset.accountId;
+            if (!accountId) return;
+
+            function val(selector) {
+                const el = tr.querySelector(selector);
+                return el && el.value ? el.value.trim() : "";
+            }
+
+            const item = {
+                account_id: accountId,
+                email: val('input[name="email"]'),
+                password: val('input[name="password"]'),
+                igg_id: val('input[name="igg_id"]'),
+                server: val('input[name="server"]'),
+                telegram_tag: val('input[name="telegram_tag"]')
+                // ВНИМАНИЕ: дату оплаты и тариф клиент больше не меняет,
+                // они изменяются только из админки.
+            };
+
+            items.push(item);
+        });
+
+        return { items, rows, missingTable: false };
+    }
+
+    async function handleFarmDataSave(btn, options = {}) {
+        const isAuto = Boolean(options.isAuto);
+        if (farmDataAutoSaveTimer) {
+            clearTimeout(farmDataAutoSaveTimer);
+            farmDataAutoSaveTimer = null;
+        }
+        const { items, rows, missingTable } = collectClientFarmDataItems();
+        if (missingTable) {
+            if (!isAuto) {
+                showToast("Таблица с фермами не найдена.", "error");
+            }
+            return;
+        }
+        if (!rows.length) {
+            if (!isAuto) {
+                showToast("Нет ферм для сохранения.", "info");
+            }
+            return;
+        }
+
+        if (!items.length) {
+            if (!isAuto) {
+                showToast("Нет данных для сохранения.", "info");
+            }
+            return;
+        }
+
+        if (isAuto) {
+            if (farmDataSaveInProgress) {
+                farmDataAutoSaveQueued = true;
+                return;
+            }
+            farmDataSaveInProgress = true;
+            setFarmDataSavingState(true, true);
+        } else {
+            setButtonLoading(btn, true);
+            const textEl = btn ? findBtnTextEl(btn) : null;
+            if (textEl) {
+                textEl.textContent = "Сохраняем...";
+            }
+        }
+        try {
+            const resp = await fetch("/farm-data/save", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ items: items })
+            });
+
+            let data = {};
+            try {
+                data = await resp.json();
+            } catch (_) {
+                data = {};
+            }
+
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Ошибка при сохранении данных.");
+            }
+
+            applyFarmDataStatusUI(data.farmdata_status);
+            const now = Date.now();
+            if (!isAuto || now - lastAutoSaveToastAt > 8000) {
+                showToast(isAuto ? "Изменения сохранены автоматически." : "Данные ферм сохранены.", "success");
+                if (isAuto) {
+                    lastAutoSaveToastAt = now;
+                }
+            }
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Ошибка при сохранении данных.", "error");
+        } finally {
+            if (isAuto) {
+                farmDataSaveInProgress = false;
+                setFarmDataSavingState(false);
+                if (farmDataAutoSaveQueued) {
+                    farmDataAutoSaveQueued = false;
+                    scheduleFarmDataAutoSave();
+                }
+            } else {
+                setButtonLoading(btn, false);
+                const textEl = btn ? findBtnTextEl(btn) : null;
+                if (textEl) {
+                    textEl.textContent = "Сохранить изменения";
+                }
+            }
+        }
+    }
+
+    function scheduleFarmDataAutoSave() {
+        if (farmDataAutoSaveTimer) {
+            clearTimeout(farmDataAutoSaveTimer);
+        }
+        farmDataAutoSaveTimer = setTimeout(function () {
+            farmDataAutoSaveTimer = null;
+            handleFarmDataSave(null, { isAuto: true });
+        }, 900);
+    }
+
+    function handleClientFarmDataChange(event) {
+        const target = event.target;
+        if (!target || target.tagName !== "INPUT") return;
+        if (!farmDataWatchedFields.has(target.name)) return;
+
+        const row = target.closest('[data-role="farmdata-table"] tbody tr[data-account-id]');
+        if (!row) return;
+
+        scheduleFarmDataAutoSave();
+    }
+
+    document.addEventListener("input", handleClientFarmDataChange);
+    document.addEventListener("change", handleClientFarmDataChange);
 
     document.addEventListener("DOMContentLoaded", function () {
         autoHideFlashMessages();
