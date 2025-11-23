@@ -32,6 +32,19 @@
 
 {% if accounts_data %}
     <h2 style="margin-top: 32px;">Ресурсы ферм</h2>
+    <div class="dashboard-filters">
+        <div class="filter-block">
+            <div class="filter-label">Быстрый поиск</div>
+            <input
+                type="search"
+                class="form-input filter-input"
+                placeholder="Имя фермы, сервер или владелец"
+                aria-label="Поиск ферм"
+                data-role="account-search"
+            />
+            <div class="filter-hint">Фильтрует список сразу по мере ввода</div>
+        </div>
+    </div>
     <div class="table-responsive">
         <table class="table">
             <thead>
@@ -48,7 +61,11 @@
             <tbody>
             {% for item in accounts_data %}
                 {% set acc = item.account %}
-                <tr data-account-id="{{ acc.id }}">
+                <tr
+                    data-account-id="{{ acc.id }}"
+                    data-account-row
+                    data-search-text="{{ (acc.name ~ ' ' ~ (acc.server.name if acc.server else '') ~ ' ' ~ (acc.owner.username if acc.owner else ''))|trim }}"
+                >
                     <td>{{ acc.name }}</td>
                     <td>{{ acc.server.name if acc.server else "N/A" }}</td>
                     <td>{{ acc.owner.username if acc.owner else "—" }}</td>
@@ -88,6 +105,9 @@
                     </td>
                 </tr>
             {% endfor %}
+            <tr data-role="account-search-empty" hidden>
+                <td colspan="7" class="muted">Ничего не найдено по текущему запросу.</td>
+            </tr>
             </tbody>
         </table>
     </div>
