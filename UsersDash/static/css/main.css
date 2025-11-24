@@ -419,7 +419,7 @@ h1 {
 /* KPI */
 
 .kpi-row {
-    --kpi-card-min-height: 100px;
+    --kpi-card-min-height: 80px;
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
@@ -1952,4 +1952,5 @@ h1 {
     min-height: 0;
   }
 }
+
 
