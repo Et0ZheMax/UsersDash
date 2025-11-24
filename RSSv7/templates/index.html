@@ -745,6 +745,16 @@
 
 .total-item { display:block; text-indent: 1.5em; }
 
+.udSyncBlock { margin: 10px 0; border: 1px solid #e5e5ea; border-radius: 8px; padding: 8px; background: #f9f9fb; }
+.dark .udSyncBlock { background: #1e1e1e; border-color: #333; }
+.udSyncControls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.udSyncStatus { font-size: 12px; color: #555; }
+.dark .udSyncStatus { color: #ccc; }
+.udSyncTableWrap { max-height: 220px; overflow: auto; margin-top: 6px; }
+#udSyncTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+#udSyncTable th, #udSyncTable td { border: 1px solid #ddd; padding: 4px 6px; text-align: left; }
+.dark #udSyncTable th, .dark #udSyncTable td { border-color: #444; }
+
   </style>
   <script>
     // Статичный список серверов
@@ -762,6 +772,7 @@
     let sortAsc = true;
     let lastUpdate = "";
     let darkMode = false;
+    let usersdashDiff = [];
 
     // Инициализация при загрузке страницы
     document.addEventListener("DOMContentLoaded", () => {
@@ -1019,6 +1030,8 @@
         });
 
         await refreshExpense();
+        renderUsersdashDiff();
+        setUdSyncStatus('');
         document.getElementById('metaOverlay').style.display = 'block';
         document.getElementById('metaModal').style.display = 'block';
       } catch (e) {
@@ -1212,6 +1225,137 @@
         showToast('Ошибка загрузки расходов', true);
       }
     }
+
+    function setUdSyncStatus(text, isError = false) {
+      const el = document.getElementById('udSyncStatus');
+      if (!el) return;
+      el.textContent = text || '';
+      el.style.color = isError ? '#c00' : '';
+    }
+
+    function renderUsersdashDiff() {
+      const tbl = document.getElementById('udSyncTable');
+      const applyBtn = document.getElementById('udSyncApplyBtn');
+      if (!tbl) return;
+
+      if (!usersdashDiff.length) {
+        tbl.innerHTML = '<tr><td style=\"text-align:center; padding:6px; color:#666;\" colspan=\"5\">Нет расхождений</td></tr>';
+        if (applyBtn) applyBtn.disabled = true;
+        return;
+      }
+
+      const titles = {
+        email: 'E-mail',
+        password: 'Пароль',
+        igg_id: 'IGG',
+        server: 'Сервер',
+        telegram: 'Telegram',
+        next_payment_at: 'Оплата',
+        tariff: 'Тариф',
+      };
+
+      tbl.innerHTML = `
+        <tr>
+          <th style=\"width:28px\"></th>
+          <th>Аккаунт</th>
+          <th>Поле</th>
+          <th>Локально</th>
+          <th>UsersDash</th>
+        </tr>
+      `;
+
+      usersdashDiff.forEach((ch, idx) => {
+        tbl.innerHTML += `
+          <tr>
+            <td><input type=\"checkbox\" class=\"udSyncCheck\" value=\"${idx}\" checked></td>
+            <td>${ch.name || ch.id || ''}</td>
+            <td>${titles[ch.field] || ch.field}</td>
+            <td>${(ch.local ?? '').toString()}</td>
+            <td>${(ch.remote ?? '').toString()}</td>
+          </tr>
+        `;
+      });
+
+      if (applyBtn) applyBtn.disabled = false;
+    }
+
+    async function loadUsersdashDiff() {
+      const btn = document.getElementById('udSyncPreviewBtn');
+      const applyBtn = document.getElementById('udSyncApplyBtn');
+      if (btn) btn.classList.add('loading');
+      if (applyBtn) applyBtn.disabled = true;
+      setUdSyncStatus('Загрузка...');
+
+      try {
+        const resp = await fetch('/api/usersdash_sync_preview');
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) {
+          throw new Error(data && data.error ? data.error : 'Ошибка загрузки UsersDash');
+        }
+
+        usersdashDiff = data.changes || [];
+        renderUsersdashDiff();
+
+        const errors = (data.errors || []).filter(Boolean);
+        if (errors.length) {
+          setUdSyncStatus(errors.join('; '), true);
+        } else {
+          setUdSyncStatus(`Найдено различий: ${usersdashDiff.length}`);
+        }
+      } catch (e) {
+        console.error('loadUsersdashDiff', e);
+        setUdSyncStatus(e && e.message ? e.message : 'Ошибка загрузки', true);
+        showToast(e && e.message ? e.message : 'Ошибка загрузки UsersDash', true);
+        usersdashDiff = [];
+        renderUsersdashDiff();
+      } finally {
+        if (btn) btn.classList.remove('loading');
+      }
+    }
+
+    async function applyUsersdashDiff() {
+      const btn = document.getElementById('udSyncApplyBtn');
+      if (btn) {
+        if (btn.classList.contains('loading')) return;
+        btn.classList.add('loading');
+      }
+
+      const selectedIdx = Array.from(document.querySelectorAll('#udSyncTable .udSyncCheck:checked'))
+        .map(cb => parseInt(cb.value, 10))
+        .filter(i => !isNaN(i));
+
+      const payload = selectedIdx.map(i => usersdashDiff[i]).filter(Boolean);
+      if (!payload.length) {
+        showToast('Выберите изменения для применения', true);
+        if (btn) btn.classList.remove('loading');
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/usersdash_sync_apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ changes: payload })
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) {
+          throw new Error(data && data.error ? data.error : 'Ошибка применения');
+        }
+
+        showToast('Изменения применены');
+        usersdashDiff = [];
+        renderUsersdashDiff();
+        setUdSyncStatus(`Применено: ${data.updated ?? payload.length}`);
+        await showMeta();
+      } catch (e) {
+        console.error('applyUsersdashDiff', e);
+        setUdSyncStatus(e && e.message ? e.message : 'Ошибка применения', true);
+        showToast(e && e.message ? e.message : 'Ошибка применения', true);
+      } finally {
+        if (btn) btn.classList.remove('loading');
+      }
+    }
+
 
     // Обновление заголовка доходов
     async function updateIncomeHeader() {
@@ -2417,6 +2561,16 @@
         <input type="number" id="expenseInp" placeholder="Сумма">
         <button class="btn" onclick="setExpense()">Добавить</button>
         <span id="expTotal">0 ₽</span>
+      </div>
+      <div class="udSyncBlock">
+        <div class="udSyncControls">
+          <button class="btn" id="udSyncPreviewBtn" onclick="loadUsersdashDiff()">Синхронизировать с UsersDash</button>
+          <button class="btn" id="udSyncApplyBtn" onclick="applyUsersdashDiff()" disabled>Применить выбранное</button>
+          <span id="udSyncStatus" class="udSyncStatus"></span>
+        </div>
+        <div class="udSyncTableWrap">
+          <table id="udSyncTable"></table>
+        </div>
       </div>
       <table id="metaTable"></table>
       <div style="margin-top:10px;">
