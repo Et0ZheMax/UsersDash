@@ -241,7 +241,6 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
     Подтягивает ресурсы сразу для списка аккаунтов (Account-моделей).
 
     Логика:
-    - группируем аккаунты по server_id;
     - для каждого сервера делаем ОДИН запрос /api/resources;
     - по каждому аккаунту вызываем _resolve_remote_account(...) —
       ищем совпадение либо по internal_id, либо по name;

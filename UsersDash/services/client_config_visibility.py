@@ -23,7 +23,6 @@ def get_record(
     script_id: str,
     config_key: str,
     scope: str = "global",
-    group_key: Optional[str] = None,
 ) -> Optional[ClientConfigVisibility]:
     """Возвращает одну запись по ключам."""
 
@@ -32,7 +31,6 @@ def get_record(
             script_id=script_id,
             config_key=config_key,
             scope=scope,
-            group_key=group_key,
         )
         .order_by(ClientConfigVisibility.id.asc())
         .first()
@@ -44,21 +42,19 @@ def upsert_record(
     script_id: str,
     config_key: str,
     scope: str = "global",
-    group_key: Optional[str] = None,
     client_visible: bool = True,
     client_label: Optional[str] = None,
     order_index: int = 0,
 ) -> ClientConfigVisibility:
     """Создаёт или обновляет запись о видимости конфигурации."""
 
-    record = get_record(script_id=script_id, config_key=config_key, scope=scope, group_key=group_key)
+    record = get_record(script_id=script_id, config_key=config_key, scope=scope)
 
     if record is None:
         record = ClientConfigVisibility(
             script_id=script_id,
             config_key=config_key,
             scope=scope,
-            group_key=group_key,
         )
 
     record.client_visible = client_visible
@@ -76,7 +72,6 @@ def delete_record(
     script_id: str,
     config_key: str,
     scope: str = "global",
-    group_key: Optional[str] = None,
 ) -> int:
     """Удаляет записи и возвращает количество удалённых."""
 
@@ -84,7 +79,6 @@ def delete_record(
         script_id=script_id,
         config_key=config_key,
         scope=scope,
-        group_key=group_key,
     )
     count = query.delete()
     db.session.commit()
@@ -100,7 +94,6 @@ DEFAULT_VISIBILITY_RULES = [
         "script_id": "vikingbot.base.gathervip",
         "config_key": "Farm",
         "scope": "global",
-        "group_key": "gathering",
         "client_label": "Сбор на карте",
         "client_visible": True,
         "order_index": 0,
@@ -109,7 +102,6 @@ DEFAULT_VISIBILITY_RULES = [
         "script_id": "vikingbot.base.alliancegather",
         "config_key": "Farm",
         "scope": "global",
-        "group_key": "gathering",
         "client_label": "Сбор альянса",
         "client_visible": True,
         "order_index": 0,
@@ -157,9 +149,9 @@ def merge_records_with_defaults(
 ) -> List[ClientConfigVisibility | SimpleNamespace]:
     """Дополняет записи правилами по умолчанию.
 
-    В БД могут отсутствовать предзаданные правила, которые нужны для
-    группировки шагов и кастомных меток. Возвращаем список, объединённый
-    с дефолтами, не дублируя существующие записи.
+    В БД могут отсутствовать предзаданные правила, которые нужны для меток.
+    Возвращаем список, объединённый с дефолтами, не дублируя существующие
+    записи.
     """
 
     merged = list(records or [])
@@ -181,7 +173,6 @@ def merge_records_with_defaults(
             SimpleNamespace(
                 script_id=rule.get("script_id"),
                 config_key=rule.get("config_key"),
-                group_key=rule.get("group_key"),
                 client_visible=rule.get("client_visible", True),
                 client_label=rule.get("client_label"),
                 order_index=rule.get("order_index", 0),
@@ -199,7 +190,6 @@ def defaults_for_script(script_id: str, scope: str = "global") -> list[dict]:
     return [
         {
             "config_key": rule.get("config_key"),
-            "group_key": rule.get("group_key"),
             "client_visible": rule.get("client_visible", True),
             "client_label": rule.get("client_label"),
             "order_index": rule.get("order_index", 0),
