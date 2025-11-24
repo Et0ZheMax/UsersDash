@@ -1716,6 +1716,56 @@ h1 {
   box-shadow: 0 0 0 1px rgba(76, 127, 255, 0.35);
 }
 
+.manage-step-card--group {
+  padding: 12px 12px 8px;
+}
+
+.step-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.step-group__item {
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #0b0f1a;
+}
+
+.step-group__item.is-selected {
+  border-color: rgba(76, 127, 255, 0.8);
+  box-shadow: 0 0 0 1px rgba(76, 127, 255, 0.35);
+}
+
+.step-group__item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.step-group__item-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.step-group__item-desc {
+  color: #9ca3af;
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+
+.step-group__item-schedule {
+  margin-top: 6px;
+}
+
+.manage-step-card--group .step-actions {
+  align-items: flex-end;
+}
+
 .manage-step-head {
   display: flex;
   justify-content: space-between;

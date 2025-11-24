@@ -267,7 +267,11 @@ def _build_visibility_map(raw_steps: list[dict]) -> dict:
         if not script_id or script_id in visibility_map:
             continue
 
-        records = client_config_visibility.list_for_script(script_id, scope="global")
+        records = client_config_visibility.merge_records_with_defaults(
+            client_config_visibility.list_for_script(script_id, scope="global"),
+            scope="global",
+            script_id=script_id,
+        )
         if not records:
             continue
 
