@@ -355,26 +355,8 @@
         return found ? found[prop] : undefined;
     }
 
-    function isStepHidden(scriptId, rawStep) {
-        if (rawStep && rawStep._hidden_for_client) return true;
-
-        return getVisibilityForScript(scriptId).some((item) => (
-            item
-            && item.config_key === "__step__"
-            && item.client_visible === false
-        ));
-    }
-
     function findViewStepByRawIndex(rawIdx) {
-        for (const group of state.steps || []) {
-            if (!group) continue;
-            if (group.raw_index === rawIdx) return group;
-            if (Array.isArray(group.items)) {
-                const found = group.items.find((item) => item && item.raw_index === rawIdx);
-                if (found) return group;
-            }
-        }
-        return undefined;
+        return (state.steps || []).find((item) => item && item.raw_index === rawIdx);
     }
 
     function formatScheduleRule(rule) {
@@ -897,21 +879,49 @@
     }
 
     function buildViewStepsFromRaw(rawSteps, visibilityMap) {
-        const grouped = [];
-        const groupsByKey = new Map();
         state.visibilityMap = visibilityMap || state.visibilityMap || {};
+
+        // Админка должна показывать шаги в исходном порядке без группировки,
+        // чтобы не терять визуальную последовательность их выполнения.
+        if (isAdminManage) {
+            return (rawSteps || []).map((step, idx) => {
+                const cfg = (step && step.Config) || {};
+                const scriptId = step && step.ScriptId;
+                const description = cfg.Description || cfg.description || "";
+                const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
+
+                return {
+                    index: idx,
+                    raw_index: idx,
+                    group_key: findVisibilityProp(scriptId, "group_key") || scriptId || `group-${idx}`,
+                    name: getScriptTitle(step) || `Шаг ${idx + 1}`,
+                    script_id: scriptId,
+                    config: cfg,
+                    description,
+                    is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
+                    schedule_summary: scheduleSummary(null, step) || undefined,
+                    schedule_rules_count: schedule_rules.length,
+                };
+            });
+        }
+
+        const grouped = [];
+        const seenGroups = new Set();
 
         (rawSteps || []).forEach((step, idx) => {
             const cfg = (step && step.Config) || {};
             const scriptId = step && step.ScriptId;
-            if (isStepHidden(scriptId, step)) return;
             const description = cfg.Description || cfg.description || "";
             const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
             const groupKey = findVisibilityProp(scriptId, "group_key") || scriptId || `group-${idx}`;
+
+            if (seenGroups.has(groupKey)) return;
+            seenGroups.add(groupKey);
+
             const nameOverride = findVisibilityProp(scriptId, "client_label");
             const name = nameOverride || getScriptTitle(step) || `Шаг ${idx + 1}`;
 
-            const item = {
+            grouped.push({
                 index: idx,
                 raw_index: idx,
                 group_key: groupKey,
@@ -922,35 +932,6 @@
                 is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
                 schedule_summary: scheduleSummary(null, step) || undefined,
                 schedule_rules_count: schedule_rules.length,
-            };
-
-            const group = groupsByKey.get(groupKey);
-            if (group) {
-                group.items.push(item);
-                if (!group.name && nameOverride) {
-                    group.name = nameOverride;
-                }
-            } else {
-                groupsByKey.set(groupKey, {
-                    group_key: groupKey,
-                    name: nameOverride || name,
-                    items: [item],
-                });
-            }
-        });
-
-        groupsByKey.forEach((group) => {
-            const first = group.items[0] || {};
-            grouped.push({
-                group_key: group.group_key,
-                name: group.name || first.name,
-                raw_index: first.raw_index,
-                script_id: first.script_id,
-                description: first.description,
-                is_active: first.is_active,
-                schedule_summary: first.schedule_summary,
-                schedule_rules_count: first.schedule_rules_count,
-                items: group.items,
             });
         });
 
@@ -1005,27 +986,27 @@
             return;
         }
 
-        const renderSingleStep = (stepItem, titleOverride) => {
-            const rawStep = state.rawSteps[stepItem.raw_index] || {};
-            const desc = stepItem.description ? `<div class=\"step-desc\">${stepItem.description}</div>` : "";
-            const schedule = scheduleSummary(stepItem, rawStep);
+        const html = (state.steps || []).map((viewStep) => {
+            const rawStep = state.rawSteps[viewStep.raw_index] || {};
+            const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
+            const schedule = scheduleSummary(viewStep, rawStep);
             const scheduleSummaryHtml = (isAdminManage && schedule)
                 ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
                 : "";
             const scheduleHtml = scheduleSummaryHtml ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
-            const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${stepItem.raw_index}`;
-            const isSelected = state.selectedStepIndex === stepItem.raw_index;
-            const name = titleOverride || getScriptTitle(rawStep) || stepItem.name || `Шаг ${stepItem.index + 1}`;
+            const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${viewStep.raw_index}`;
+            const isSelected = state.selectedStepIndex === viewStep.raw_index;
+            const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${viewStep.index + 1}`;
             const scheduleButtonHtml = isAdminManage
                 ? [
                     '<div class="step-actions__schedule">',
-                    `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${stepItem.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
+                    `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${viewStep.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
                     '</div>',
                 ].join("\n")
                 : "";
 
             return `
-                <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${stepItem.raw_index}">
+                <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${viewStep.raw_index}">
                     <div class="manage-step-head">
                         <div>
                             <div class="step-title">${name}</div>
@@ -1039,8 +1020,8 @@
                                        class="ios-switch__input"
                                        data-role="step-toggle"
                                        data-account-id="${state.selectedAccountId}"
-                                       data-step-idx="${stepItem.raw_index}"
-                                       ${stepItem.is_active ? "checked" : ""}>
+                                       data-step-idx="${viewStep.raw_index}"
+                                       ${viewStep.is_active ? "checked" : ""}>
                                 <span class="ios-switch__slider" aria-hidden="true"></span>
                             </label>
                             ${scheduleButtonHtml}
@@ -1296,14 +1277,7 @@
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
             const viewStep = findViewStepByRawIndex(stepIdx);
-            if (viewStep) {
-                if (Array.isArray(viewStep.items)) {
-                    const target = viewStep.items.find((item) => item && item.raw_index === stepIdx);
-                    if (target) target.is_active = desiredState;
-                } else {
-                    viewStep.is_active = desiredState;
-                }
-            }
+            if (viewStep) viewStep.is_active = desiredState;
             if (state.rawSteps[stepIdx]) state.rawSteps[stepIdx].IsActive = desiredState;
             renderSteps();
             renderConfig();
