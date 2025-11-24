@@ -80,6 +80,15 @@
             <div class="status-note status-note--ok">Новых проблем не обнаружено.</div>
         {% endif %}
     </div>
+
+    <div class="kpi-card kpi-info-card">
+        <div class="kpi-label">Инфо</div>
+        {% if info_message %}
+            <div class="info-block-text">{{ info_message|replace('\n', '<br>')|safe }}</div>
+        {% else %}
+            <div class="kpi-empty">Нет сообщений</div>
+        {% endif %}
+    </div>
 </div>
 
 

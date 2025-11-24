@@ -31,6 +31,10 @@ from UsersDash.services.remote_api import (
     fetch_rssv7_accounts_meta,
 )
 from UsersDash.services.tariffs import TARIFF_PRICE_MAP
+from UsersDash.services.info_message import (
+    get_global_info_message,
+    set_global_info_message_text,
+)
 
 
 
@@ -204,6 +208,30 @@ def admin_dashboard():
         total_accounts=total_accounts,
         total_servers=total_servers,
         accounts_data=accounts_data,
+    )
+
+
+@admin_bp.route("/info-message", methods=["GET", "POST"], endpoint="info_message_page")
+@login_required
+def info_message_page():
+    """Управление общим сообщением «Инфо», отображаемым у всех клиентов."""
+
+    admin_required()
+
+    if request.method == "POST":
+        new_message = request.form.get("info_message", "")
+        set_global_info_message_text(new_message)
+        flash("Сообщение для клиентов обновлено.", "success")
+        return redirect(url_for("admin.info_message_page"))
+
+    message = get_global_info_message()
+    clients = User.query.filter_by(role="client").order_by(User.username.asc()).all()
+
+    return render_template(
+        "admin/info_message.html",
+        info_message=message.message_text or "",
+        info_message_updated_at=message.updated_at,
+        clients=clients,
     )
 
 
