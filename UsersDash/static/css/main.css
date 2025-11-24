@@ -311,12 +311,15 @@ h1 {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    position: relative;
+    align-items: flex-start;
 }
 
 .tariff-label {
     font-size: 0.8rem;
     color: #8f96c4;
     min-height: 18px;
+    cursor: default;
 }
 
 .tariff-label--premium {
@@ -325,6 +328,149 @@ h1 {
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+}
+
+.tariff-label--interactive {
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 8px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.tariff-label--interactive:hover {
+    background: rgba(79, 70, 229, 0.08);
+    color: #cdd4ff;
+}
+
+.tariff-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    z-index: 10;
+    min-width: 180px;
+}
+
+.tariff-dropdown__option {
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    color: #e5e7eb;
+    font-size: 0.88rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tariff-dropdown__option:hover {
+    background: rgba(99, 102, 241, 0.12);
+    color: #cdd4ff;
+}
+
+.tariff-dropdown__option.is-active {
+    background: rgba(79, 70, 229, 0.18);
+    color: #cdd4ff;
+}
+
+.tariff-dropdown__option-price {
+    font-weight: 600;
+}
+
+.tariff-dropdown__option-name {
+    font-size: 0.83rem;
+    color: #9ca3af;
+}
+
+.tariff-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    position: relative;
+    align-items: flex-start;
+}
+
+.tariff-label {
+    font-size: 0.8rem;
+    color: #8f96c4;
+    min-height: 18px;
+    cursor: default;
+}
+
+.tariff-label--premium {
+    font-weight: 700;
+    background: linear-gradient(90deg, #fbd38d, #f6ad55, #fbd38d);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.tariff-label--interactive {
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 8px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.tariff-label--interactive:hover {
+    background: rgba(79, 70, 229, 0.08);
+    color: #cdd4ff;
+}
+
+.tariff-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: #0f172a;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 10px;
+    box-shadow: 0 12px 35px rgba(0, 0, 0, 0.45);
+    overflow: hidden;
+    z-index: 10;
+    min-width: 180px;
+}
+
+.tariff-dropdown__option {
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    color: #e5e7eb;
+    font-size: 0.88rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease;
+}
+
+.tariff-dropdown__option:hover {
+    background: rgba(99, 102, 241, 0.12);
+    color: #cdd4ff;
+}
+
+.tariff-dropdown__option.is-active {
+    background: rgba(79, 70, 229, 0.18);
+    color: #cdd4ff;
+}
+
+.tariff-dropdown__option-price {
+    font-weight: 600;
+}
+
+.tariff-dropdown__option-name {
+    font-size: 0.83rem;
+    color: #9ca3af;
 }
 
 /* KPI */
@@ -373,6 +519,45 @@ h1 {
 .kpi-value {
     font-size: 1.4rem;
     margin-top: 4px;
+}
+
+.tariff-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tariff-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tariff-item:last-child {
+    border-bottom: none;
+}
+
+.tariff-name {
+    font-weight: 600;
+}
+
+.tariff-name--premium {
+    font-weight: 700;
+    background: linear-gradient(90deg, #fbd38d, #f6ad55, #fbd38d);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.tariff-count {
+    font-weight: 600;
+    color: #a9b4ff;
 }
 
 .tariff-list {
@@ -492,6 +677,15 @@ h1 {
     justify-content: flex-end;
     pointer-events: none;
     z-index: 11000;
+}
+
+.mini-toast-container--top {
+    top: 12px;
+    bottom: auto;
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    justify-content: center;
 }
 
 .mini-toast {
@@ -1650,6 +1844,16 @@ h1 {
   align-items: flex-end;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.step-actions__schedule {
+  width: 100%;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.step-actions__schedule .step-schedule__edit {
+  margin-left: 0;
 }
 
 .step-actions__schedule {
