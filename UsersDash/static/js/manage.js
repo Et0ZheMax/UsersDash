@@ -162,6 +162,7 @@
         toggleUrlTemplate: "",
         updateUrlTemplate: "",
         selectedStepIndex: null,
+        scheduleDrafts: {},
     }, window.manageInitialState || {});
 
     state.detailsUrlTemplate = state.detailsUrlTemplate || "/manage/account/__ACCOUNT__/details";
@@ -225,13 +226,7 @@
     }
 
     function openScheduleEditor(stepIdx) {
-        if (!isAdminManage) return;
-        const url = resolveScheduleEditorUrl(stepIdx);
-        if (url) {
-            window.open(url, "_blank", "noopener");
-        } else {
-            console.warn("Schedule editor URL is not configured");
-        }
+        openScheduleModal(stepIdx);
     }
 
     function getScriptTitle(step) {
@@ -282,6 +277,465 @@
         if (summaries.length) return summaries.join("; ");
         if (rules.length) return `${rules.length} правил расписания`;
         return "";
+    }
+
+    function convertTimeTo24(val) {
+        if (!val) return "";
+        if (typeof val !== "string") return val;
+        const normalized = val.trim();
+        if (!normalized) return "";
+        if (/am|pm/i.test(normalized)) {
+            const parsed = new Date(`1970-01-01 ${normalized}`);
+            if (!Number.isNaN(parsed.getTime())) {
+                const hh = String(parsed.getHours()).padStart(2, "0");
+                const mm = String(parsed.getMinutes()).padStart(2, "0");
+                return `${hh}:${mm}`;
+            }
+        }
+        return normalized;
+    }
+
+    function convertTimeTo12(val) {
+        if (!val) return "";
+        if (typeof val !== "string") return val;
+        const [rawHours, rawMinutes = "00"] = val.split(":");
+        const hours = Number(rawHours);
+        const minutes = Number(rawMinutes);
+        if (!Number.isFinite(hours)) return val;
+        const suffix = hours >= 12 ? "PM" : "AM";
+        const normalizedHours = ((hours + 11) % 12) + 1;
+        const normalizedMinutes = Number.isFinite(minutes) ? String(minutes).padStart(2, "0") : "00";
+        return `${normalizedHours}:${normalizedMinutes} ${suffix}`;
+    }
+
+    const DAY_OPTIONS = [
+        { value: "mon", label: "Пн" },
+        { value: "tue", label: "Вт" },
+        { value: "wed", label: "Ср" },
+        { value: "thu", label: "Чт" },
+        { value: "fri", label: "Пт" },
+        { value: "sat", label: "Сб" },
+        { value: "sun", label: "Вс" },
+    ];
+
+    const DAY_ALIASES = {
+        mon: "mon", monday: "mon", "понедельник": "mon", "пн": "mon",
+        tue: "tue", tuesday: "tue", "вторник": "tue", "вт": "tue",
+        wed: "wed", wednesday: "wed", "среда": "wed", "ср": "wed",
+        thu: "thu", thursday: "thu", "четверг": "thu", "чт": "thu",
+        fri: "fri", friday: "fri", "пятница": "fri", "пт": "fri",
+        sat: "sat", saturday: "sat", "суббота": "sat", "сб": "sat",
+        sun: "sun", sunday: "sun", "воскресенье": "sun", "вс": "sun",
+    };
+
+    function parseDaysValue(daysStr) {
+        if (!daysStr || typeof daysStr !== "string") return [];
+        const tokens = daysStr.split(/[,\s]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
+        const mapped = tokens.map((token) => DAY_ALIASES[token] || token).filter(Boolean);
+        return Array.from(new Set(mapped));
+    }
+
+    function stringifyDays(daysArr) {
+        if (!Array.isArray(daysArr) || !daysArr.length) return "";
+        return daysArr.join(", ");
+    }
+
+    function normalizeScheduleRule(rule) {
+        const raw = rule || {};
+        let days = raw.Days || raw.WeekDays || raw.Weekdays;
+        let start = raw.StartAt || raw.Start || raw.From || raw.TimeFrom;
+        let end = raw.EndAt || raw.End || raw.To || raw.TimeTo;
+        const every = raw.Every || raw.Interval || raw.EveryMinutes;
+        const label = raw.Label || raw.Name || "";
+        const hasLegacy = typeof raw.Val1 === "string";
+
+        if (hasLegacy) {
+            const [daysRaw, startRaw, endRaw] = raw.Val1.split("|").map((s) => (s || "").trim());
+            if (!days) days = daysRaw ? daysRaw.split(",").map((d) => d.trim()).filter(Boolean) : "";
+            if (!start) start = startRaw;
+            if (!end) end = endRaw;
+        }
+
+        const daysStr = Array.isArray(days) ? days.join(", ") : (days || "");
+
+        return {
+            days: daysStr,
+            start: convertTimeTo24(start),
+            end: convertTimeTo24(end),
+            every: every ?? "",
+            label: label || "",
+            raw,
+        };
+    }
+
+    function buildScheduleRulePayload(rawRule, draft) {
+        const base = rawRule && typeof rawRule === "object" ? { ...rawRule } : {};
+        const daysArr = draft.days ? parseDaysValue(draft.days) : [];
+        const start = draft.start || "";
+        const end = draft.end || "";
+        const every = draft.every === "" ? "" : draft.every;
+        const label = draft.label || "";
+
+        if (daysArr.length) {
+            base.Days = daysArr;
+        } else {
+            delete base.Days;
+            delete base.WeekDays;
+            delete base.Weekdays;
+        }
+
+        if (start) {
+            base.StartAt = start;
+            base.Start = start;
+            base.From = start;
+            base.TimeFrom = start;
+        } else {
+            delete base.StartAt;
+            delete base.Start;
+            delete base.From;
+            delete base.TimeFrom;
+        }
+
+        if (end) {
+            base.EndAt = end;
+            base.End = end;
+            base.To = end;
+            base.TimeTo = end;
+        } else {
+            delete base.EndAt;
+            delete base.End;
+            delete base.To;
+            delete base.TimeTo;
+        }
+
+        if (every !== "") {
+            base.Every = every;
+            base.Interval = every;
+            base.EveryMinutes = every;
+        } else {
+            delete base.Every;
+            delete base.Interval;
+            delete base.EveryMinutes;
+        }
+
+        if (label) {
+            base.Label = label;
+            base.Name = base.Name || label;
+        } else {
+            delete base.Label;
+        }
+
+        const val1Days = daysArr.join(",");
+        const val1Start = convertTimeTo12(start) || start || "";
+        const val1End = convertTimeTo12(end) || end || "";
+        base.Val1 = `${val1Days}|${val1Start}|${val1End}`;
+
+        return base;
+    }
+
+    function renderDaysPicker(triggerEl, row, inputEl) {
+        if (!triggerEl || !row || !inputEl) return;
+        const existing = document.querySelector(".schedule-days-modal");
+        if (existing) existing.remove();
+
+        const selected = Array.isArray(row._selectedDays)
+            ? [...row._selectedDays]
+            : parseDaysValue(inputEl.value || "");
+
+        const modal = document.createElement("div");
+        modal.className = "schedule-days-modal is-open";
+        modal.innerHTML = `
+            <div class="schedule-days-modal__backdrop" data-role="days-close"></div>
+            <div class="schedule-days-modal__dialog" role="dialog" aria-modal="true">
+                <div class="schedule-days-modal__header">
+                    <div>
+                        <div class="schedule-days-modal__title">Дни недели</div>
+                        <div class="schedule-days-modal__subtitle">Отметьте нужные дни или выберите все</div>
+                    </div>
+                    <button type="button" class="schedule-days-modal__close" data-role="days-close" aria-label="Закрыть">×</button>
+                </div>
+                <div class="schedule-days-modal__body" data-role="days-list"></div>
+                <div class="schedule-days-modal__footer">
+                    <label class="schedule-days-modal__select-all">
+                        <input type="checkbox" data-role="days-select-all">
+                        <span>Выбрать все дни</span>
+                    </label>
+                    <div class="schedule-days-modal__actions">
+                        <button type="button" class="btn btn-secondary btn-small" data-role="days-close">Отмена</button>
+                        <button type="button" class="btn btn-primary btn-small" data-role="days-apply">Применить</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const list = modal.querySelector('[data-role="days-list"]');
+        if (list) {
+            DAY_OPTIONS.forEach((opt) => {
+                const id = `day-${opt.value}-${Math.random().toString(36).slice(2, 8)}`;
+                const wrapper = document.createElement("label");
+                wrapper.className = "schedule-days-modal__item";
+                wrapper.innerHTML = `
+                    <input type="checkbox" value="${opt.value}" id="${id}" ${selected.includes(opt.value) ? "checked" : ""}>
+                    <span>${opt.label}</span>
+                `;
+                list.appendChild(wrapper);
+            });
+        }
+
+        const selectAll = modal.querySelector('[data-role="days-select-all"]');
+        const applyBtn = modal.querySelector('[data-role="days-apply"]');
+
+        const syncSelectAll = () => {
+            if (!selectAll) return;
+            const checkboxes = Array.from(modal.querySelectorAll('[data-role="days-list"] input[type="checkbox"]'));
+            if (!checkboxes.length) return;
+            selectAll.checked = checkboxes.every((cb) => cb.checked);
+        };
+
+        if (selectAll) {
+            selectAll.addEventListener("change", () => {
+                const checkboxes = modal.querySelectorAll('[data-role="days-list"] input[type="checkbox"]');
+                checkboxes.forEach((cb) => { cb.checked = selectAll.checked; });
+            });
+        }
+
+        modal.addEventListener("click", (event) => {
+            if (event.target.closest('[data-role="days-close"]')) {
+                modal.remove();
+            }
+        });
+
+        if (applyBtn) {
+            applyBtn.addEventListener("click", () => {
+                const chosen = Array.from(modal.querySelectorAll('[data-role="days-list"] input[type="checkbox"]'))
+                    .filter((cb) => cb.checked)
+                    .map((cb) => cb.value);
+                row._selectedDays = chosen;
+                inputEl.value = stringifyDays(chosen);
+                inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+                modal.remove();
+            });
+        }
+
+        modal.addEventListener("change", (event) => {
+            if (event.target.closest('[data-role="days-list"]')) {
+                syncSelectAll();
+            }
+        });
+
+        document.body.appendChild(modal);
+        syncSelectAll();
+    }
+
+    function createScheduleEditor(step) {
+        if (!isAdminManage) return null;
+        const rules = Array.isArray(step && step.ScheduleRules) ? step.ScheduleRules : [];
+
+        const container = document.createElement("div");
+        container.className = "config-schedule";
+        container.dataset.role = "schedule-editor";
+        container.innerHTML = `
+            <div class="config-schedule__header">
+                <div>
+                    <div class="config-schedule__title">Таймеры</div>
+                    <div class="config-schedule__subtitle">Настройте дни, интервал и время запуска шага</div>
+                </div>
+                <button type="button" class="btn btn-secondary btn-small" data-role="schedule-add">Добавить правило</button>
+            </div>
+            <div class="config-schedule__list" data-role="schedule-list"></div>
+        `;
+
+        const list = container.querySelector('[data-role="schedule-list"]');
+
+        const updateEmptyState = () => {
+            if (!list) return;
+            const hasRows = list.querySelector('[data-role="schedule-row"]');
+            if (!hasRows) {
+                list.innerHTML = '<div class="config-empty">Расписание не настроено.</div>';
+            }
+        };
+
+        const createRow = (rule) => {
+            const normalized = normalizeScheduleRule(rule);
+            const row = document.createElement("div");
+            row.className = "config-schedule__row";
+            row.dataset.role = "schedule-row";
+            row._rawRule = rule || {};
+            row._selectedDays = parseDaysValue(normalized.days);
+            row.innerHTML = `
+                <label class="config-schedule__field">
+                    <span>Дни</span>
+                    <div class="config-schedule__days-input">
+                        <input type="text" data-schedule-field="days" value="${escapeHtml(stringifyDays(parseDaysValue(normalized.days)) || normalized.days)}" placeholder="mon,tue,wed" readonly>
+                        <button type="button" class="config-schedule__days-trigger" data-role="schedule-days-trigger" aria-label="Выбрать дни недели">📅</button>
+                    </div>
+                </label>
+                <label class="config-schedule__field">
+                    <span>Начало</span>
+                    <input type="time" data-schedule-field="start" value="${escapeHtml(normalized.start)}" placeholder="08:00">
+                </label>
+                <label class="config-schedule__field">
+                    <span>Конец</span>
+                    <input type="time" data-schedule-field="end" value="${escapeHtml(normalized.end)}" placeholder="23:00">
+                </label>
+                <label class="config-schedule__field">
+                    <span>Интервал (мин)</span>
+                    <input type="text" data-schedule-field="every" value="${escapeHtml(normalized.every)}" placeholder="60">
+                </label>
+                <label class="config-schedule__field">
+                    <span>Название</span>
+                    <input type="text" data-schedule-field="label" value="${escapeHtml(normalized.label)}" placeholder="Ночь / фарм / ...">
+                </label>
+                <button type="button" class="btn btn-secondary btn-small config-schedule__remove" data-role="schedule-remove">Удалить</button>
+            `;
+
+            const removeBtn = row.querySelector('[data-role="schedule-remove"]');
+            if (removeBtn) {
+                removeBtn.addEventListener("click", () => {
+                    row.remove();
+                    updateEmptyState();
+                });
+            }
+
+            const daysTrigger = row.querySelector('[data-role="schedule-days-trigger"]');
+            const daysInput = row.querySelector('[data-schedule-field="days"]');
+            if (daysTrigger && daysInput) {
+                const openPicker = (event) => {
+                    event.preventDefault();
+                    renderDaysPicker(daysTrigger, row, daysInput);
+                };
+                daysTrigger.addEventListener("click", openPicker);
+                daysInput.addEventListener("click", openPicker);
+            }
+
+            return row;
+        };
+
+        rules.forEach((rule) => {
+            const row = createRow(rule);
+            if (row && list) list.appendChild(row);
+        });
+
+        updateEmptyState();
+
+        const addBtn = container.querySelector('[data-role="schedule-add"]');
+        if (addBtn && list) {
+            addBtn.addEventListener("click", () => {
+                const row = createRow({});
+                list.appendChild(row);
+            });
+        }
+
+        return container;
+    }
+
+    function ensureScheduleModalStyles() {
+        if (document.getElementById("schedule-modal-styles")) return;
+        const style = document.createElement("style");
+        style.id = "schedule-modal-styles";
+        style.textContent = `
+            .schedule-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 2000; }
+            .schedule-modal.is-open { display: flex; }
+            .schedule-modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+            .schedule-modal__dialog { position: relative; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); width: min(900px, 96vw); max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+            .schedule-modal__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            .schedule-modal__title { font-size: 20px; font-weight: 700; }
+            .schedule-modal__subtitle { color: #94a3b8; font-size: 14px; margin-top: 4px; }
+            .schedule-modal__body { overflow: auto; padding-right: 4px; }
+            .schedule-modal__footer { display: flex; justify-content: flex-end; gap: 10px; }
+            .schedule-modal__close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; }
+            .schedule-days-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 2100; }
+            .schedule-days-modal.is-open { display: flex; }
+            .schedule-days-modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+            .schedule-days-modal__dialog { position: relative; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); width: min(460px, 94vw); display: flex; flex-direction: column; gap: 12px; }
+            .schedule-days-modal__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            .schedule-days-modal__title { font-size: 18px; font-weight: 700; }
+            .schedule-days-modal__subtitle { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+            .schedule-days-modal__close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; }
+            .schedule-days-modal__body { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+            .schedule-days-modal__item { display: flex; align-items: center; gap: 8px; padding: 8px; background: #111827; border-radius: 8px; border: 1px solid #1e293b; cursor: pointer; }
+            .schedule-days-modal__item input { accent-color: #38bdf8; }
+            .schedule-days-modal__footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+            .schedule-days-modal__actions { display: flex; gap: 8px; }
+            .schedule-days-modal__select-all { display: flex; align-items: center; gap: 8px; color: #e2e8f0; }
+            .config-schedule__days-input { display: flex; align-items: center; gap: 6px; }
+            .config-schedule__days-input input[readonly] { cursor: pointer; background: #0b1224; border: 1px solid #1e293b; border-radius: 8px; padding-right: 36px; }
+            .config-schedule__days-trigger { min-width: 32px; height: 32px; border-radius: 8px; border: 1px solid #1e293b; background: #111827; color: #e2e8f0; cursor: pointer; }
+            .config-schedule__days-trigger:hover { background: #1f2937; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function closeScheduleModal(modal) {
+        if (!modal) return;
+        modal.classList.remove("is-open");
+    }
+
+    function openScheduleModal(stepIdx) {
+        if (!isAdminManage) return;
+        ensureScheduleModalStyles();
+        const existing = document.querySelector(`.schedule-modal[data-step-idx="${stepIdx}"]`);
+        const modal = existing || document.createElement("div");
+        modal.className = "schedule-modal";
+        modal.dataset.role = "schedule-modal";
+        modal.dataset.stepIdx = String(stepIdx);
+        modal.innerHTML = `
+            <div class="schedule-modal__backdrop" data-role="schedule-modal-close"></div>
+            <div class="schedule-modal__dialog" role="dialog" aria-modal="true">
+                <div class="schedule-modal__header">
+                    <div>
+                        <div class="schedule-modal__title">Настройка таймеров</div>
+                        <div class="schedule-modal__subtitle">Укажите дни, временные рамки и интервал срабатывания шага</div>
+                    </div>
+                    <button type="button" class="schedule-modal__close" data-role="schedule-modal-close" aria-label="Закрыть">×</button>
+                </div>
+                <div class="schedule-modal__body" data-role="schedule-modal-body"></div>
+                <div class="schedule-modal__footer">
+                    <button type="button" class="btn btn-secondary btn-small" data-role="schedule-modal-close">Отмена</button>
+                    <button type="button" class="btn btn-primary btn-small" data-role="schedule-modal-save">Сохранить таймеры</button>
+                </div>
+            </div>
+        `;
+
+        const body = modal.querySelector('[data-role="schedule-modal-body"]');
+        if (body) {
+            body.innerHTML = "";
+            const rawStep = state.rawSteps[stepIdx] || {};
+            const draft = (state.scheduleDrafts && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx))
+                ? state.scheduleDrafts[stepIdx]
+                : undefined;
+            const stepData = draft !== undefined ? { ...rawStep, ScheduleRules: draft } : rawStep;
+            const editor = createScheduleEditor(stepData);
+            if (editor) {
+                editor.dataset.stepIdx = String(stepIdx);
+                body.appendChild(editor);
+            }
+        }
+
+        if (!existing) {
+            modal.addEventListener("click", (event) => {
+                if (event.target.closest('[data-role="schedule-modal-close"]')) {
+                    closeScheduleModal(modal);
+                }
+            });
+
+            const saveBtn = modal.querySelector('[data-role="schedule-modal-save"]');
+            if (saveBtn) {
+                saveBtn.addEventListener("click", () => {
+                    const rules = collectScheduleRules(modal, state.rawSteps[stepIdx] && state.rawSteps[stepIdx].ScheduleRules, { ignoreDraft: true });
+                    state.scheduleDrafts[stepIdx] = rules;
+                    closeScheduleModal(modal);
+
+                    if (Number(state.selectedStepIndex) === Number(stepIdx) && currentConfigForm) {
+                        saveConfig(stepIdx, currentConfigForm, state.rawSteps[stepIdx] && state.rawSteps[stepIdx].Config);
+                    }
+                });
+            }
+
+            document.body.appendChild(modal);
+        }
+
+        modal.classList.add("is-open");
     }
 
     function buildViewStepsFromRaw(rawSteps) {
@@ -549,6 +1003,7 @@
         inputs.forEach((input) => {
             const key = input.name;
             if (!key) return;
+            if (input.closest('[data-role="schedule-editor"]')) return;
             const original = cfg[key];
             if (input.type === "checkbox") {
                 result[key] = input.checked;
@@ -567,6 +1022,38 @@
             }
         });
         return result;
+    }
+
+    function collectScheduleRules(rootEl, originalRules, options = {}) {
+        if (!rootEl || !isAdminManage) return null;
+
+        const stepIdx = Number(rootEl.dataset ? rootEl.dataset.stepIdx : NaN);
+        const hasDraft = !options.ignoreDraft
+            && Number.isFinite(stepIdx)
+            && state.scheduleDrafts
+            && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx);
+
+        if (hasDraft) {
+            return state.scheduleDrafts[stepIdx];
+        }
+
+        const editor = rootEl.querySelector('[data-role="schedule-editor"]');
+        if (!editor) return Array.isArray(originalRules) ? originalRules : [];
+        const rows = Array.from(editor.querySelectorAll('[data-role="schedule-row"]'));
+        if (!rows.length) return [];
+
+        return rows.map((row, idx) => {
+            const raw = row._rawRule || (Array.isArray(originalRules) ? originalRules[idx] : {});
+            const selectedDays = Array.isArray(row._selectedDays) ? row._selectedDays : null;
+            const draft = {
+                days: selectedDays ? stringifyDays(selectedDays) : ((row.querySelector('[data-schedule-field="days"]') || {}).value || ""),
+                start: (row.querySelector('[data-schedule-field="start"]') || {}).value || "",
+                end: (row.querySelector('[data-schedule-field="end"]') || {}).value || "",
+                every: (row.querySelector('[data-schedule-field="every"]') || {}).value || "",
+                label: (row.querySelector('[data-schedule-field="label"]') || {}).value || "",
+            };
+            return buildScheduleRulePayload(raw, draft);
+        });
     }
 
     function showMiniToast(message, type = "info") {
@@ -614,13 +1101,19 @@
             clearTimeout(configAutoSaveTimer);
             configAutoSaveTimer = null;
         }
+        const step = state.rawSteps && state.rawSteps[stepIdx];
         const payload = collectConfig(formEl, cfg || {});
+        const scheduleRules = collectScheduleRules(formEl, step && step.ScheduleRules);
+        const requestBody = { Config: payload };
+        if (scheduleRules !== null) {
+            requestBody.ScheduleRules = scheduleRules;
+        }
         try {
             const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
             const resp = await fetch(url, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
-                body: JSON.stringify({ Config: payload }),
+                body: JSON.stringify(requestBody),
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
@@ -643,7 +1136,15 @@
                 });
 
                 state.rawSteps[stepIdx].Config = mergedCfg;
+                if (scheduleRules !== null) {
+                    state.rawSteps[stepIdx].ScheduleRules = scheduleRules || [];
+                }
+                if (state.scheduleDrafts && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx)) {
+                    delete state.scheduleDrafts[stepIdx];
+                }
+                state.steps = buildViewStepsFromRaw(state.rawSteps);
             }
+            renderSteps();
             const now = Date.now();
             if (!isAuto || now - lastConfigToastAt > 4000) {
                 showMiniToast("Сохранено", "success");
@@ -726,6 +1227,7 @@
     async function loadSteps(accountId, meta = {}) {
         if (!accountId || state.isLoading) return;
         state.isLoading = true;
+        state.scheduleDrafts = {};
         if (meta.name) state.selectedAccountName = meta.name;
         if (meta.server) state.selectedServerName = meta.server;
         highlightAccount(accountId);
@@ -832,6 +1334,14 @@
             event.stopPropagation();
             const stepIdx = Number(scheduleBtn.dataset.stepIdx);
             if (!Number.isNaN(stepIdx)) {
+                if (state.selectedStepIndex !== stepIdx) {
+                    state.selectedStepIndex = stepIdx;
+                    renderSteps();
+                    renderConfig();
+                    if (isMobile()) {
+                        setMobileView('config');
+                    }
+                }
                 openScheduleEditor(stepIdx);
             }
             return;
