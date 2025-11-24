@@ -638,6 +638,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const TARIFF_PRICE_MAP = {{ tariff_price_map|tojson }};
     const PREMIUM_TARIFF_NAME = TARIFF_PRICE_MAP["1400"] || TARIFF_PRICE_MAP[1400] || "Премиум";
     const TARIFF_OPTIONS = [
+        { price: 0, name: TARIFF_PRICE_MAP["0"] || TARIFF_PRICE_MAP[0] || "Своя ферма" },
         { price: 500, name: TARIFF_PRICE_MAP["500"] || TARIFF_PRICE_MAP[500] || "Только Фарм" },
         { price: 1000, name: TARIFF_PRICE_MAP["1000"] || TARIFF_PRICE_MAP[1000] || "Расширенный" },
         { price: 1400, name: PREMIUM_TARIFF_NAME }
