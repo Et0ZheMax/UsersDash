@@ -149,6 +149,20 @@ class ClientConfigVisibility(db.Model):
         )
 
 
+class GlobalInfoMessage(db.Model):
+    """Единое сообщение, отображаемое в блоке «Инфо» у всех клиентов."""
+
+    __tablename__ = "global_info_messages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    message_text = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<GlobalInfoMessage id={self.id} updated_at={self.updated_at}>"
+
+
 class FarmData(db.Model):
     """
     Дополнительные данные по ферме, которые заполняет сам клиент:

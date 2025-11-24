@@ -60,7 +60,7 @@
 
         {% if status and status.has_issues %}
             <div class="status-chip status-chip--warning">Требуется внимание</div>
-            <div class="status-list status-list--scrollable">
+            <div class="status-list">
                 {% if status.missing_details %}
                     {% for item in status.missing_details %}
                         <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
@@ -78,6 +78,15 @@
         {% else %}
             <div class="status-chip status-chip--ok">Все Отлично</div>
             <div class="status-note status-note--ok">Новых проблем не обнаружено.</div>
+        {% endif %}
+    </div>
+
+    <div class="kpi-card kpi-info-card">
+        <div class="kpi-label">Инфо</div>
+        {% if info_message %}
+            <div class="info-block-text">{{ info_message|replace('\n', '<br>')|safe }}</div>
+        {% else %}
+            <div class="kpi-empty">Нет сообщений</div>
         {% endif %}
     </div>
 </div>

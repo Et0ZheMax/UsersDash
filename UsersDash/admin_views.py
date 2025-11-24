@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime
 import traceback
+from typing import Any
 
 from flask import (
     Blueprint,
@@ -30,6 +31,10 @@ from UsersDash.services.remote_api import (
     fetch_rssv7_accounts_meta,
 )
 from UsersDash.services.tariffs import TARIFF_PRICE_MAP
+from UsersDash.services.info_message import (
+    get_global_info_message,
+    set_global_info_message_text,
+)
 
 
 
@@ -206,6 +211,30 @@ def admin_dashboard():
     )
 
 
+@admin_bp.route("/info-message", methods=["GET", "POST"], endpoint="info_message_page")
+@login_required
+def info_message_page():
+    """Управление общим сообщением «Инфо», отображаемым у всех клиентов."""
+
+    admin_required()
+
+    if request.method == "POST":
+        new_message = request.form.get("info_message", "")
+        set_global_info_message_text(new_message)
+        flash("Сообщение для клиентов обновлено.", "success")
+        return redirect(url_for("admin.info_message_page"))
+
+    message = get_global_info_message()
+    clients = User.query.filter_by(role="client").order_by(User.username.asc()).all()
+
+    return render_template(
+        "admin/info_message.html",
+        info_message=message.message_text or "",
+        info_message_updated_at=message.updated_at,
+        clients=clients,
+    )
+
+
 # -------------------- Manage / настройки бота --------------------
 
 
@@ -365,14 +394,22 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
     config_labels = manage_meta.get("config_labels") or {}
     server_scripts: dict = server_meta.get("scripts") or {}
 
-    records_map: dict[tuple[str, str], ClientConfigVisibility] = {}
+    db_records_map: dict[tuple[str, str], ClientConfigVisibility] = {}
     for rec in db_records:
+        db_records_map[(rec.script_id, rec.config_key)] = rec
+
+    combined_records = client_config_visibility.merge_records_with_defaults(
+        db_records, scope="global"
+    )
+    records_map: dict[tuple[str, str], Any] = {}
+    for rec in combined_records:
         key = (rec.script_id, rec.config_key)
         if key not in records_map:
             records_map[key] = rec
 
     scripts = set(order_map.keys()) | set(script_labels.keys()) | set(server_scripts.keys())
     scripts.update(rec.script_id for rec in db_records)
+    scripts.update(rec.script_id for rec in combined_records)
 
     rows = []
     for script_id in sorted(scripts):
@@ -384,10 +421,11 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
                 config_keys.add(rec.config_key)
 
         for config_key in sorted(config_keys):
-            db_rec = records_map.get((script_id, config_key))
+            db_rec = db_records_map.get((script_id, config_key))
+            record = records_map.get((script_id, config_key))
             order_idx = 0
-            if db_rec:
-                order_idx = db_rec.order_index or 0
+            if record:
+                order_idx = record.order_index or 0
             elif config_key in order_map.get(script_id, []):
                 order_idx = order_map[script_id].index(config_key)
 
@@ -397,9 +435,9 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
                     "config_key": config_key,
                     "script_label": script_labels.get(script_id, script_id),
                     "default_label": config_labels.get(config_key, config_key),
-                    "client_label": db_rec.client_label if db_rec else None,
-                    "group_key": db_rec.group_key if db_rec else None,
-                    "client_visible": db_rec.client_visible if db_rec else True,
+                    "client_label": record.client_label if record else None,
+                    "group_key": record.group_key if record else None,
+                    "client_visible": record.client_visible if record else True,
                     "order_index": order_idx,
                     "from_js": config_key in config_labels,
                     "from_server": config_key in (server_cfg.get("config_keys") or set()),
