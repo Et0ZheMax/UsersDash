@@ -185,6 +185,15 @@ def _build_manage_view_steps(raw_settings):
         days = rule.get("Days") or rule.get("WeekDays") or rule.get("Weekdays")
         label = rule.get("Label") or rule.get("Name")
 
+        if not any([start, end, every, days, label]) and isinstance(rule.get("Val1"), str):
+            days_raw, start_raw, end_raw = (
+                (rule["Val1"].split("|") + ["", "", ""])[:3]
+            )
+            days_list = [d.strip() for d in days_raw.split(",") if d.strip()]
+            days = days_list or None
+            start = start_raw.strip() or None
+            end = end_raw.strip() or None
+
         parts = []
         if days:
             if isinstance(days, (list, tuple)):

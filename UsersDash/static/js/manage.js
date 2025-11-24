@@ -234,7 +234,19 @@
     function scheduleSummary(stepView, rawStep) {
         if (stepView && stepView.schedule_summary) return stepView.schedule_summary;
         const rules = (rawStep && rawStep.ScheduleRules) || [];
-        const summaries = rules.map(formatScheduleRule).filter(Boolean);
+        const summaries = rules.map((rule) => {
+            if (rule && typeof rule === "object" && typeof rule.Val1 === "string") {
+                const [daysRaw, startRaw, endRaw] = rule.Val1.split("|").map((s) => (s || "").trim());
+                const days = daysRaw ? daysRaw.split(",").map((d) => d.trim()).filter(Boolean) : null;
+                const legacyRule = {
+                    Days: days && days.length ? days : undefined,
+                    StartAt: startRaw || undefined,
+                    EndAt: endRaw || undefined,
+                };
+                return formatScheduleRule(legacyRule);
+            }
+            return formatScheduleRule(rule);
+        }).filter(Boolean);
         if (summaries.length) return summaries.join("; ");
         if (rules.length) return `${rules.length} правил расписания`;
         return "";
@@ -498,7 +510,12 @@
             if (input.type === "checkbox") {
                 result[key] = input.checked;
             } else if (input.tagName === "SELECT") {
-                result[key] = input.value;
+                const hasOptions = original && typeof original === "object" && Array.isArray(original.options);
+                if (hasOptions) {
+                    result[key] = { ...original, value: input.value };
+                } else {
+                    result[key] = input.value;
+                }
             } else if (typeof original === "number") {
                 const n = Number(input.value);
                 result[key] = Number.isFinite(n) ? n : original;
@@ -565,7 +582,24 @@
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
             if (state.rawSteps[stepIdx]) {
-                state.rawSteps[stepIdx].Config = Object.assign({}, state.rawSteps[stepIdx].Config, payload);
+                const currentCfg = state.rawSteps[stepIdx].Config || {};
+                const mergedCfg = { ...currentCfg };
+
+                Object.entries(payload).forEach(([key, value]) => {
+                    const existing = currentCfg[key];
+                    const hasOptions = existing && typeof existing === "object" && Array.isArray(existing.options);
+                    const payloadHasOptions = value && typeof value === "object" && Array.isArray(value.options);
+
+                    if (payloadHasOptions) {
+                        mergedCfg[key] = { ...existing, ...value };
+                    } else if (hasOptions) {
+                        mergedCfg[key] = { ...existing, value };
+                    } else {
+                        mergedCfg[key] = value;
+                    }
+                });
+
+                state.rawSteps[stepIdx].Config = mergedCfg;
             }
             const now = Date.now();
             if (!isAuto || now - lastConfigToastAt > 4000) {
