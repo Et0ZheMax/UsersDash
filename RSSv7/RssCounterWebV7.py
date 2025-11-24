@@ -1028,7 +1028,7 @@ def sync_account_meta():
         print("PROFILE read failed — skip sync_account_meta")
         return
 
-    active_ids = {p["Id"] for p in profiles}
+    active_ids = {str(p["Id"]) for p in profiles if p.get("Id") is not None}
 
     conn = open_db(RESOURCES_DB)
     c    = conn.cursor()
@@ -2245,7 +2245,12 @@ def api_screenshot():
     return jsonify({"data": f"data:image/png;base64,{b64}"})
 
 def apply_profile_updates(payload: list[dict]):
-    rec_map = {p["id"]: p for p in payload}
+    rec_map = {}
+    for p in payload:
+        pid = p.get("id")
+        if pid is None:
+            continue
+        rec_map[str(pid)] = p
 
     if not os.path.exists(PROFILE_PATH):
         raise FileNotFoundError(PROFILE_PATH)
@@ -2254,7 +2259,7 @@ def apply_profile_updates(payload: list[dict]):
         prof = json.load(f)
 
     for acc in prof:
-        rid = acc.get("Id")
+        rid = str(acc.get("Id")) if acc.get("Id") is not None else None
         if rid not in rec_map:      # не меняем
             continue
         upd = rec_map[rid]
@@ -2388,7 +2393,10 @@ def load_accounts_meta_full(ids: set[str] | None = None) -> list[dict]:
             for a in json.load(f):
                 if not a.get("Active"):
                     continue
-                if ids and a.get("Id") not in ids:
+                pid = a.get("Id")
+                if pid is None:
+                    continue
+                if ids and str(pid) not in ids:
                     continue
 
                 # --- E-mail / Pass / IGG из профиля ---
@@ -2403,7 +2411,7 @@ def load_accounts_meta_full(ids: set[str] | None = None) -> list[dict]:
                     pass
 
                 profile.append({
-                    "id": a.get("Id"),
+                    "id": str(pid),
                     "name": a.get("Name", ""),
                     "email": email,
                     "passwd": passwd,
@@ -2415,7 +2423,7 @@ def load_accounts_meta_full(ids: set[str] | None = None) -> list[dict]:
     conn = open_db(RESOURCES_DB)
     c = conn.cursor()
     meta = {
-        r[0]: {
+        str(r[0]): {
             "email":      r[1] or "",
             "passwd":     r[2] or "",
             "igg":        r[3] or "",
