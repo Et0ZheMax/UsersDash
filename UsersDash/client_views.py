@@ -142,7 +142,7 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
     return [], {}
 
 
-def _build_manage_view_steps(raw_settings):
+def _build_manage_view_steps(raw_settings, include_schedule: bool = True):
     steps, _ = _extract_steps_and_menu(raw_settings)
     view_steps = []
 
@@ -229,18 +229,24 @@ def _build_manage_view_steps(raw_settings):
         summaries = [s for s in (_fmt_schedule_rule(r) for r in schedule_rules) if s]
         schedule_summary = "; ".join(summaries) if summaries else None
 
-        view_steps.append(
-            {
-                "index": idx,
-                "name": name,
-                "script_id": script_id,
-                "config": cfg,
-                "description": description,
-                "is_active": bool(step.get("IsActive", True)),
-                "schedule_summary": schedule_summary,
-                "schedule_rules_count": len(schedule_rules),
-            }
-        )
+        step_view = {
+            "index": idx,
+            "name": name,
+            "script_id": script_id,
+            "config": cfg,
+            "description": description,
+            "is_active": bool(step.get("IsActive", True)),
+        }
+
+        if include_schedule:
+            step_view.update(
+                {
+                    "schedule_summary": schedule_summary,
+                    "schedule_rules_count": len(schedule_rules),
+                }
+            )
+
+        view_steps.append(step_view)
 
     return view_steps
 
@@ -376,6 +382,7 @@ def manage_page():
         selected_account = accounts[0]
 
     view_steps = []
+    is_admin = getattr(current_user, "role", None) == "admin"
     steps_error = None
     raw_steps = []
     menu_data = None
@@ -384,7 +391,7 @@ def manage_page():
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
         if raw_steps:
-            view_steps = _build_manage_view_steps(raw_settings)
+            view_steps = _build_manage_view_steps(raw_settings, include_schedule=is_admin)
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
 
@@ -485,7 +492,7 @@ def manage_account_details(account_id: int):
     if not raw_steps:
         return jsonify({"ok": False, "error": "failed to load settings", "debug": debug_info}), 500
 
-    steps = _build_manage_view_steps(raw_settings)
+    steps = _build_manage_view_steps(raw_settings, include_schedule=getattr(current_user, "role", None) == "admin")
 
     return jsonify(
         {
