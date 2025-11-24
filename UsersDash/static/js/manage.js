@@ -498,7 +498,12 @@
             if (input.type === "checkbox") {
                 result[key] = input.checked;
             } else if (input.tagName === "SELECT") {
-                result[key] = input.value;
+                const hasOptions = original && typeof original === "object" && Array.isArray(original.options);
+                if (hasOptions) {
+                    result[key] = { ...original, value: input.value };
+                } else {
+                    result[key] = input.value;
+                }
             } else if (typeof original === "number") {
                 const n = Number(input.value);
                 result[key] = Number.isFinite(n) ? n : original;
@@ -571,8 +576,11 @@
                 Object.entries(payload).forEach(([key, value]) => {
                     const existing = currentCfg[key];
                     const hasOptions = existing && typeof existing === "object" && Array.isArray(existing.options);
+                    const payloadHasOptions = value && typeof value === "object" && Array.isArray(value.options);
 
-                    if (hasOptions) {
+                    if (payloadHasOptions) {
+                        mergedCfg[key] = { ...existing, ...value };
+                    } else if (hasOptions) {
                         mergedCfg[key] = { ...existing, value };
                     } else {
                         mergedCfg[key] = value;
