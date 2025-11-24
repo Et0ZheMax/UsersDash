@@ -15,7 +15,7 @@
         <div class="kpi-label">Ближайшие оплаты</div>
 
         {% if upcoming_payments and upcoming_payments|length %}
-            <ul class="kpi-list">
+            <ul class="kpi-list kpi-list--scrollable">
                 {% for p in upcoming_payments %}
                     <li>
                         <strong>{{ p.account_name }}</strong>
