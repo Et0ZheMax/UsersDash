@@ -278,7 +278,6 @@ def _build_visibility_map(raw_steps: list[dict]) -> dict:
         visibility_map[script_id] = [
             {
                 "config_key": rec.config_key,
-                "group_key": rec.group_key,
                 "client_visible": rec.client_visible,
                 "client_label": rec.client_label,
                 "order_index": rec.order_index,
@@ -345,7 +344,6 @@ def _build_visibility_map(raw_steps: list[dict]) -> dict:
         visibility_map[script_id] = [
             {
                 "config_key": rec.config_key,
-                "group_key": rec.group_key,
                 "client_visible": rec.client_visible,
                 "client_label": rec.client_label,
                 "order_index": rec.order_index,

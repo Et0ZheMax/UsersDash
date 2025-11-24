@@ -26,7 +26,6 @@
                         <th>Скрипт</th>
                         <th>Ключ</th>
                         <th>Метка для клиента</th>
-                        <th>Группа</th>
                         <th>Порядок</th>
                         <th>Видно</th>
                         <th>Источник</th>
@@ -43,9 +42,6 @@
                             <td class="text-monospace">{{ row.config_key }}</td>
                             <td>
                                 <input type="text" class="form-control" name="label::{{ row.form_key }}" value="{{ row.client_label or row.default_label }}" placeholder="{{ row.default_label }}">
-                            </td>
-                            <td>
-                                <input type="text" class="form-control" name="group::{{ row.form_key }}" value="{{ row.group_key or '' }}" placeholder="Группа/секция">
                             </td>
                             <td style="width: 90px;">
                                 <input type="number" class="form-control" name="order::{{ row.form_key }}" value="{{ row.order_index }}" min="0">

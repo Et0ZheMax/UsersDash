@@ -436,7 +436,6 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
                     "script_label": script_labels.get(script_id, script_id),
                     "default_label": config_labels.get(config_key, config_key),
                     "client_label": record.client_label if record else None,
-                    "group_key": record.group_key if record else None,
                     "client_visible": record.client_visible if record else True,
                     "order_index": order_idx,
                     "from_js": config_key in config_labels,
@@ -470,7 +469,6 @@ def config_visibility_matrix():
         for row in rows:
             prefix = row["form_key"]
             label = request.form.get(f"label::{prefix}", "").strip() or None
-            group_key = request.form.get(f"group::{prefix}", "").strip() or None
             order_raw = request.form.get(f"order::{prefix}")
             try:
                 order_index = int(order_raw) if order_raw is not None else 0
@@ -489,14 +487,6 @@ def config_visibility_matrix():
                 None,
             )
 
-            if existing and existing.group_key != group_key:
-                client_config_visibility.delete_record(
-                    script_id=existing.script_id,
-                    config_key=existing.config_key,
-                    scope=existing.scope or "global",
-                    group_key=existing.group_key,
-                )
-
             client_config_visibility.upsert_record(
                 script_id=row["script_id"],
                 config_key=row["config_key"],
@@ -504,7 +494,6 @@ def config_visibility_matrix():
                 client_label=label,
                 order_index=order_index,
                 scope="global",
-                group_key=group_key,
             )
 
         flash("Настройки видимости сохранены.", "success")
