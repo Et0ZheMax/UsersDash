@@ -2679,12 +2679,13 @@ def api_usersdash_sync_apply():
             })
 
         cols = ["email","passwd","igg","pay_until","tariff_rub","server","tg_tag"]
+        placeholders = ",".join("?" for _ in range(len(cols) + 1))
         for rec in merged_rows:
             vals = [rec.get(k) for k in cols]
             c.execute(
                 f"""
                    INSERT INTO account_meta(id,{','.join(cols)})
-                   VALUES(?,?,?,?,?,?,?)
+                   VALUES({placeholders})
                    ON CONFLICT(id) DO UPDATE SET
                      {', '.join([f'{k}=excluded.{k}' for k in cols])}
                 """,
