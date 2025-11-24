@@ -34,6 +34,26 @@
         {% endif %}
     </div>
 
+    <div class="kpi-card">
+        {% set tariffs_title = 'Тарифы' if tariffs_total != 1 else 'Тариф' %}
+        <div class="kpi-label">{{ tariffs_title }}</div>
+
+        {% if tariffs_summary %}
+            <ul class="kpi-list tariff-list">
+                {% for tariff in tariffs_summary %}
+                    <li class="tariff-item">
+                        <span class="tariff-name {% if tariff.name == 'Премиум' %}tariff-name--premium{% endif %}">
+                            {{ tariff.name }}
+                        </span>
+                        <span class="tariff-count">×{{ tariff.count }}</span>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <div class="kpi-empty">Тарифы не заданы</div>
+        {% endif %}
+    </div>
+
     <div class="kpi-card kpi-status-card">
         <div class="kpi-label">Статус</div>
         {% set status = farmdata_status %}
