@@ -23,13 +23,14 @@ from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
 
 from UsersDash.config import Config
-from UsersDash.models import db, User, Server, Account, FarmData
+from UsersDash.models import db, User
 from UsersDash.auth import auth_bp
 from UsersDash.admin_views import admin_bp
 from UsersDash.client_views import client_bp
 from UsersDash.api_views import api_bp
 from UsersDash.services.db_backup import backup_database, ensure_backup_dir
 from UsersDash.services.farmdata_status import collect_farmdata_status
+from UsersDash.services.health_check import run_health_check
 
 
 # -------------------------------------------------
@@ -106,71 +107,6 @@ def load_user(user_id: str):
     except Exception as exc:
         print(f"[login_manager.user_loader] ERROR: {exc}")
         return None
-
-
-# -------------------------------------------------
-# Health-check при старте: проверяем БД и базовые сущности
-# -------------------------------------------------
-
-
-def run_health_check(app: Flask):
-    """
-    Выполняет базовые проверки:
-      - существует ли файл БД;
-      - можно ли выполнить простые запросы к таблицам;
-      - есть ли хотя бы один админ.
-    Все ошибки не валят приложение, а только логируются.
-    """
-    print("========== MULTI-TENANT DASHBOARD HEALTH-CHECK ==========")
-
-    try:
-        db_path = None
-        uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
-        if uri.startswith("sqlite:///"):
-            db_path = uri.replace("sqlite:///", "", 1)
-            if not os.path.isabs(db_path):
-                # Привязываем к BASE_DIR на всякий случай
-                db_path = str((Config.BASE_DIR / db_path).resolve())
-
-        if db_path:
-            if os.path.exists(db_path):
-                print(f"[OK] БД найдена: {db_path}")
-            else:
-                print(f"[WARN] Файл БД не найден: {db_path}")
-        else:
-            print("[WARN] Не удалось определить путь к БД из SQLALCHEMY_DATABASE_URI.")
-
-        # Пробуем выполнить простые запросы
-        from sqlalchemy import text
-
-        with app.app_context():
-            db.session.execute(text("SELECT 1"))
-            print("[OK] Подключение к БД установлено.")
-
-            # Считаем сущности. Если структуры таблиц не совпадают с моделями,
-            # это может выбросить OperationalError (мы его отловим).
-            users_count = User.query.count()
-            servers_count = Server.query.count()
-            accounts_count = Account.query.count()
-            farmdata_count = FarmData.query.count()
-
-            print(f"[OK] Пользователей в БД: {users_count}")
-            print(f"[OK] Серверов: {servers_count}")
-            print(f"[OK] Аккаунтов (ферм): {accounts_count}")
-            print(f"[OK] FarmData-записей: {farmdata_count}")
-
-            # Проверка наличия хотя бы одного админа
-            admin_exists = User.query.filter_by(role="admin").first() is not None
-            if admin_exists:
-                print("[OK] Найден хотя бы один администратор.")
-            else:
-                print("[WARN] Администраторов не найдено — будет создан дефолтный.")
-
-    except Exception as exc:
-        # Любая ошибка health-check не должна останавливать приложение
-        print(f"[ERROR] Ошибка при выполнении health-check: {exc}")
-
-    print("==========================================================")
 
 
 # -------------------------------------------------
