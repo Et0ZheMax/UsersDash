@@ -25,6 +25,7 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     update_account_step_settings,
 )
+from UsersDash.services.tariffs import summarize_tariffs
 
 client_bp = Blueprint("client", __name__, url_prefix="")
 
@@ -290,6 +291,8 @@ def dashboard():
     upcoming_payments = upcoming_all[:3]
     upcoming_more = max(0, len(upcoming_all) - len(upcoming_payments))
 
+    tariffs_summary, tariffs_total = summarize_tariffs(accounts)
+
     if not accounts:
         return render_template(
             "client/dashboard.html",
@@ -297,6 +300,8 @@ def dashboard():
             total_accounts=0,
             upcoming_payments=[],
             upcoming_more=0,
+            tariffs_summary=[],
+            tariffs_total=0,
             farmdata_status=farmdata_status,
         )
 
@@ -331,6 +336,8 @@ def dashboard():
         total_accounts=total_accounts,
         upcoming_payments=upcoming_payments,
         upcoming_more=upcoming_more,
+        tariffs_summary=tariffs_summary,
+        tariffs_total=tariffs_total,
         farmdata_status=farmdata_status,
     )
 
