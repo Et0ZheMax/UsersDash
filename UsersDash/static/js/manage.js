@@ -1747,7 +1747,10 @@
         if (!state.rawSteps && state.steps && state.steps.length && Array.isArray(state.raw_steps)) {
             state.rawSteps = state.raw_steps;
         }
-        state.steps = buildViewStepsFromRaw(state.rawSteps || [], state.visibilityMap);
+
+        if (Array.isArray(state.rawSteps) && state.rawSteps.length) {
+            state.steps = buildViewStepsFromRaw(state.rawSteps || [], state.visibilityMap);
+        }
 
         // Если ничего не подгружено сервером (или пришёл пустой массив),
         // подгружаем настройки через AJAX, чтобы правая часть не оставалась пустой.
