@@ -208,6 +208,75 @@
         return url;
     }
 
+    function unwrapValue(raw) {
+        let current = raw;
+        const visited = new Set();
+        while (
+            current
+            && typeof current === "object"
+            && Object.prototype.hasOwnProperty.call(current, "value")
+            && !visited.has(current)
+        ) {
+            visited.add(current);
+            current = current.value;
+        }
+        return current;
+    }
+
+    function normalizeOptionConfig(entry) {
+        if (!entry || typeof entry !== "object" || !Array.isArray(entry.options)) return null;
+
+        const options = entry.options.map((opt) => (typeof opt === "number" ? String(opt) : String(opt)));
+        let value = unwrapValue(entry.value);
+        if (value === undefined || value === null) value = "";
+        if (typeof value === "number") value = String(value);
+
+        return { value, options };
+    }
+
+    function normalizeConfigShape(cfg) {
+        const source = (cfg && typeof cfg === "object") ? cfg : {};
+        const normalized = {};
+
+        Object.entries(source).forEach(([key, val]) => {
+            const optionCfg = normalizeOptionConfig(val);
+            normalized[key] = optionCfg || val;
+        });
+
+        return normalized;
+    }
+
+    function normalizeManageSteps(rawSteps) {
+        return (rawSteps || []).map((step) => {
+            const cfg = (step && step.Config) || {};
+            const normalizedCfg = normalizeConfigShape(cfg);
+            return { ...step, Config: normalizedCfg };
+        });
+    }
+
+    function prepareConfigPayload(payload, originalCfg = {}) {
+        const result = {};
+
+        Object.entries(payload || {}).forEach(([key, val]) => {
+            const original = originalCfg ? originalCfg[key] : undefined;
+            let next = unwrapValue(val);
+
+            const shouldBeString = original
+                && typeof original === "object"
+                && Array.isArray(original.options);
+
+            if (shouldBeString && (next === null || next === undefined)) {
+                next = "";
+            } else if (shouldBeString && typeof next === "number") {
+                next = String(next);
+            }
+
+            result[key] = next;
+        });
+
+        return result;
+    }
+
     function resolveScheduleEditorUrl(stepIdx) {
         if (!state.selectedAccountId && state.selectedAccountId !== 0) return null;
         const menu = state.menu || {};
@@ -1036,7 +1105,7 @@
                 result[key] = input.value;
             }
         });
-        return result;
+        return prepareConfigPayload(result, cfg);
     }
 
     function collectScheduleRules(rootEl, originalRules, options = {}) {
@@ -1256,7 +1325,7 @@
             }
 
             const normalized = extractStepsAndMenu(data.raw_steps || data.rawSteps || data.Data || data.data || data);
-            const rawSteps = normalized.steps;
+            const rawSteps = normalizeManageSteps(normalized.steps);
             const viewSteps = data.steps || data.view_steps || buildViewStepsFromRaw(rawSteps);
             const menu = data.menu || data.MenuData || data.menu_data || normalized.menu;
             const account = data.account || {};
