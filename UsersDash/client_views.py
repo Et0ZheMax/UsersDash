@@ -25,7 +25,7 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     update_account_step_settings,
 )
-from UsersDash.services.tariffs import summarize_tariffs
+from UsersDash.services.tariffs import is_tariff_billable, summarize_tariffs
 
 client_bp = Blueprint("client", __name__, url_prefix="")
 
@@ -286,11 +286,16 @@ def dashboard():
     for acc in accounts:
         # поля next_payment_at / next_payment_amount добавим в Account (см. ниже)
         if getattr(acc, "next_payment_at", None):
+            tariff_amount = getattr(acc, "next_payment_amount", None)
+
+            if tariff_amount is not None and not is_tariff_billable(tariff_amount):
+                continue
+
             upcoming_all.append({
                 "account_name": acc.name,
                 "date": acc.next_payment_at,
                 "date_str": acc.next_payment_at.strftime("%d.%m.%Y"),
-                "amount": acc.next_payment_amount,
+                "amount": tariff_amount,
             })
 
     upcoming_all.sort(key=lambda x: x["date"])
