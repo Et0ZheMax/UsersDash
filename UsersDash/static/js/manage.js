@@ -313,9 +313,6 @@
             const schedule = scheduleSummary(viewStep, rawStep);
             const scheduleHtml = schedule ? `<div class=\"step-schedule\">⏱ ${schedule}</div>` : "";
             const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${idx}`;
-            const statusBadge = viewStep.is_active
-                ? '<span class="status-chip status-chip--ok">Активен</span>'
-                : '<span class="status-chip status-chip--warning">Выключен</span>';
             const isSelected = state.selectedStepIndex === idx;
             const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${idx + 1}`;
 
@@ -328,18 +325,16 @@
                             ${scheduleHtml}
                         </div>
                         <div class="step-actions">
-                            ${statusBadge}
                             <label class="ios-switch" for="${switchId}">
                                 <input type="checkbox"
                                        id="${switchId}"
                                        class="ios-switch__input"
                                        data-role="step-toggle"
-                                       data-account-id="${state.selectedAccountId}"
+                                        data-account-id="${state.selectedAccountId}"
                                        data-step-idx="${idx}"
                                        ${viewStep.is_active ? "checked" : ""}>
                                 <span class="ios-switch__slider" aria-hidden="true"></span>
                             </label>
-                            <span class="step-toggle__label">${viewStep.is_active ? "Активен" : "Выключен"}</span>
                         </div>
                     </div>
                 </div>`;
@@ -737,17 +732,23 @@
         }
     }
 
+    function handleStepToggleChange(event) {
+        const toggleInput = event.target.closest('input[data-role="step-toggle"]');
+        if (!toggleInput) return;
+        event.stopPropagation();
+        const stepIdx = Number(toggleInput.dataset.stepIdx);
+        if (Number.isNaN(stepIdx)) return;
+        toggleStep(
+            toggleInput.dataset.accountId,
+            stepIdx,
+            toggleInput.checked,
+            toggleInput
+        );
+    }
+
     function handleStepsClick(event) {
-        const toggleInput = event.target.closest('[data-role="step-toggle"]');
-        if (toggleInput) {
+        if (event.target.closest('.ios-switch')) {
             event.stopPropagation();
-            const stepIdx = Number(toggleInput.dataset.stepIdx);
-            toggleStep(
-                toggleInput.dataset.accountId,
-                stepIdx,
-                toggleInput.checked,
-                toggleInput
-            );
             return;
         }
 
@@ -846,6 +847,7 @@
         }
         if (stepsRoot) {
             stepsRoot.addEventListener('click', handleStepsClick);
+            stepsRoot.addEventListener('change', handleStepToggleChange);
         }
         if (mobileBackBtn) {
             mobileBackBtn.addEventListener('click', mobileBack);
