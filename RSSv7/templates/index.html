@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>208</title>
+  <title>{{ server_name }}</title>
   <!-- Подключение иконки через Flask (предполагается, что сервер настроен) -->
   <link rel="icon" href="{{ url_for('static', filename='99.png') }}" type="image/png">
 
@@ -2300,7 +2300,7 @@
 
   <!-- Заголовок -->
   <div class="header">
-    <h1>Статус Ферм 208 test</h1>
+    <h1>Статус Ферм {{ server_name }}</h1>
   </div>
 
   <div class="container">
