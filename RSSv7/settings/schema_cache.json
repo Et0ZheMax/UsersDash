@@ -1,0 +1,1838 @@
+{
+  "schema": {
+    "Scripts": {
+      "vikingbot.base.gathervip": {
+        "Defaults": {
+          "LevelStartAt": "6",
+          "Monster": false,
+          "Niflung": "off",
+          "Divine": "6",
+          "Farm": "6",
+          "Sawmill": "6",
+          "Quarry": "9",
+          "Gold": "9",
+          "RallyTime": "10min",
+          "reduceLevel": false,
+          "marches": "",
+          "farmLowestResource": false,
+          "farmOnlyOneResource": false,
+          "farmOnlyTribeTerritory": false
+        },
+        "Shape": {
+          "LevelStartAt": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6"
+            ]
+          },
+          "Monster": {
+            "type": "bool"
+          },
+          "Niflung": {
+            "type": "select",
+            "options": [
+              "1",
+              "10",
+              "11",
+              "12",
+              "13",
+              "14",
+              "15",
+              "16",
+              "17",
+              "18",
+              "19",
+              "2",
+              "20",
+              "21",
+              "22",
+              "23",
+              "24",
+              "25",
+              "26",
+              "27",
+              "28",
+              "29",
+              "3",
+              "30",
+              "31",
+              "32",
+              "33",
+              "34",
+              "35",
+              "36",
+              "37",
+              "38",
+              "39",
+              "4",
+              "40",
+              "41",
+              "42",
+              "43",
+              "44",
+              "45",
+              "46",
+              "47",
+              "48",
+              "49",
+              "5",
+              "50",
+              "51",
+              "52",
+              "53",
+              "54",
+              "55",
+              "56",
+              "57",
+              "58",
+              "59",
+              "6",
+              "60",
+              "61",
+              "62",
+              "63",
+              "64",
+              "65",
+              "66",
+              "67",
+              "68",
+              "69",
+              "7",
+              "70",
+              "8",
+              "9",
+              "off"
+            ]
+          },
+          "Divine": {
+            "type": "select",
+            "options": [
+              "1",
+              "10",
+              "11",
+              "12",
+              "13",
+              "14",
+              "15",
+              "16",
+              "17",
+              "18",
+              "19",
+              "2",
+              "20",
+              "21",
+              "22",
+              "23",
+              "24",
+              "25",
+              "26",
+              "27",
+              "28",
+              "29",
+              "3",
+              "30",
+              "31",
+              "32",
+              "33",
+              "34",
+              "35",
+              "36",
+              "37",
+              "38",
+              "39",
+              "4",
+              "40",
+              "41",
+              "42",
+              "43",
+              "44",
+              "45",
+              "46",
+              "47",
+              "48",
+              "49",
+              "5",
+              "50",
+              "51",
+              "52",
+              "53",
+              "54",
+              "55",
+              "56",
+              "57",
+              "58",
+              "59",
+              "6",
+              "60",
+              "61",
+              "62",
+              "63",
+              "64",
+              "65",
+              "66",
+              "67",
+              "68",
+              "69",
+              "7",
+              "70",
+              "8",
+              "9",
+              "off"
+            ]
+          },
+          "Farm": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "off"
+            ]
+          },
+          "Sawmill": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "off"
+            ]
+          },
+          "Quarry": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "off"
+            ]
+          },
+          "Gold": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "off"
+            ]
+          },
+          "RallyTime": {
+            "type": "select",
+            "options": [
+              "10min",
+              "30min",
+              "5min",
+              "8hours"
+            ]
+          },
+          "reduceLevel": {
+            "type": "bool"
+          },
+          "marches": {
+            "type": "string"
+          },
+          "farmLowestResource": {
+            "type": "bool"
+          },
+          "farmOnlyOneResource": {
+            "type": "bool"
+          },
+          "farmOnlyTribeTerritory": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.dailies": {
+        "Defaults": {
+          "quest": false,
+          "recruit": false,
+          "vip": false,
+          "worker": "Off",
+          "gems": false,
+          "errands": "10",
+          "specialFarmer": false,
+          "skipVoyageLushLand": false,
+          "events": false,
+          "collectCrystals": false
+        },
+        "Shape": {
+          "quest": {
+            "type": "bool"
+          },
+          "recruit": {
+            "type": "bool"
+          },
+          "vip": {
+            "type": "bool"
+          },
+          "worker": {
+            "type": "select",
+            "options": [
+              "All",
+              "Common",
+              "Legend",
+              "Off",
+              "Rare"
+            ]
+          },
+          "gems": {
+            "type": "bool"
+          },
+          "errands": {
+            "type": "select",
+            "options": [
+              "10",
+              "15",
+              "20",
+              "5",
+              "Off"
+            ]
+          },
+          "specialFarmer": {
+            "type": "bool"
+          },
+          "skipVoyageLushLand": {
+            "type": "bool"
+          },
+          "events": {
+            "type": "bool"
+          },
+          "collectCrystals": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.alliancedonation": {
+        "Defaults": {
+          "allianceGift": false,
+          "allianceDonation": "Recommended",
+          "allianceBank": false,
+          "donateFood": "100%",
+          "donateLumber": "100%",
+          "donateStone": "100%",
+          "donateGold": "100%"
+        },
+        "Shape": {
+          "allianceGift": {
+            "type": "bool"
+          },
+          "allianceDonation": {
+            "type": "select",
+            "options": [
+              "Development",
+              "Off",
+              "Recommended",
+              "Skills",
+              "Territory",
+              "War"
+            ]
+          },
+          "allianceBank": {
+            "type": "bool"
+          },
+          "donateFood": {
+            "type": "select",
+            "options": [
+              "100%",
+              "25%",
+              "50%",
+              "75%",
+              "Off"
+            ]
+          },
+          "donateLumber": {
+            "type": "select",
+            "options": [
+              "100%",
+              "25%",
+              "50%",
+              "75%",
+              "Off"
+            ]
+          },
+          "donateStone": {
+            "type": "select",
+            "options": [
+              "100%",
+              "25%",
+              "50%",
+              "75%",
+              "Off"
+            ]
+          },
+          "donateGold": {
+            "type": "select",
+            "options": [
+              "100%",
+              "25%",
+              "50%",
+              "75%",
+              "Off"
+            ]
+          }
+        }
+      },
+      "vikingbot.base.buffs": {
+        "Defaults": {
+          "Attack": "Off",
+          "Defense": "Off",
+          "Gather": "Any",
+          "Workers": "Off",
+          "Deception": "Off",
+          "Trade": "Off",
+          "Patrol": "Off",
+          "useGems": false
+        },
+        "Shape": {
+          "Attack": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "Defense": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "Gather": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "Workers": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "Deception": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "Trade": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "Patrol": {
+            "type": "select",
+            "options": [
+              "Any",
+              "Off"
+            ]
+          },
+          "useGems": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.upgrade": {
+        "Defaults": {
+          "Upgrade": "MainHall",
+          "EagleNest": false,
+          "Warehouse": false,
+          "HallofValor": false,
+          "TribeHall": false,
+          "DivinationShack": false,
+          "Academy": false,
+          "Watchtower": false,
+          "Infirmary": false,
+          "Infantry": false,
+          "Archer": false,
+          "Porter": false,
+          "Pikemen": false,
+          "SquadBase": false,
+          "VillageHall": false,
+          "Workshop": false,
+          "Prison": false,
+          "DefenderCamp": false,
+          "SuppyHub": false,
+          "Market": false,
+          "useSpeedUps": false,
+          "useResources": false
+        },
+        "Shape": {
+          "Upgrade": {
+            "type": "select",
+            "options": [
+              "MainHall",
+              "Specfic",
+              "Villages"
+            ]
+          },
+          "EagleNest": {
+            "type": "bool"
+          },
+          "Warehouse": {
+            "type": "bool"
+          },
+          "HallofValor": {
+            "type": "bool"
+          },
+          "TribeHall": {
+            "type": "bool"
+          },
+          "DivinationShack": {
+            "type": "bool"
+          },
+          "Academy": {
+            "type": "bool"
+          },
+          "Watchtower": {
+            "type": "bool"
+          },
+          "Infirmary": {
+            "type": "bool"
+          },
+          "Infantry": {
+            "type": "bool"
+          },
+          "Archer": {
+            "type": "bool"
+          },
+          "Porter": {
+            "type": "bool"
+          },
+          "Pikemen": {
+            "type": "bool"
+          },
+          "SquadBase": {
+            "type": "bool"
+          },
+          "VillageHall": {
+            "type": "bool"
+          },
+          "Workshop": {
+            "type": "bool"
+          },
+          "Prison": {
+            "type": "bool"
+          },
+          "DefenderCamp": {
+            "type": "bool"
+          },
+          "SuppyHub": {
+            "type": "bool"
+          },
+          "Market": {
+            "type": "bool"
+          },
+          "useSpeedUps": {
+            "type": "bool"
+          },
+          "useResources": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.research": {
+        "Defaults": {
+          "research": "Economy",
+          "upgrade": false,
+          "useResources": false,
+          "useSpeedUps": false
+        },
+        "Shape": {
+          "research": {
+            "type": "select",
+            "options": [
+              "Economy",
+              "Military"
+            ]
+          },
+          "upgrade": {
+            "type": "bool"
+          },
+          "useResources": {
+            "type": "bool"
+          },
+          "useSpeedUps": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.recruitment": {
+        "Defaults": {
+          "Infantry": "Off",
+          "Archer": "Off",
+          "Pikemen": "Off",
+          "Porter": "1",
+          "Amount": "100%",
+          "UpgradeInfantry": "Off",
+          "UpgradeArcher": "Off",
+          "UpgradePikemen": "Off",
+          "UpgradePorter": "Auto",
+          "useResources": false,
+          "useSpeedUps": false
+        },
+        "Shape": {
+          "Infantry": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "Archer": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "Pikemen": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "Porter": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "Amount": {
+            "type": "select",
+            "options": [
+              "100%",
+              "25%",
+              "50%",
+              "75%"
+            ]
+          },
+          "UpgradeInfantry": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "UpgradeArcher": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "UpgradePikemen": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "UpgradePorter": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "Auto",
+              "Off"
+            ]
+          },
+          "useResources": {
+            "type": "bool"
+          },
+          "useSpeedUps": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.divinationshack": {
+        "Defaults": {
+          "SpeedUp": false,
+          "Food": false,
+          "Stones": false,
+          "Gold": false,
+          "Gems": false,
+          "Lumber": false,
+          "ConstructionSpeed": false,
+          "TrainExpansion": false,
+          "ForgingSpeed": false,
+          "ResearchSpeed": false,
+          "TrainingSpeed": false,
+          "ForgingConsumption": false,
+          "HealingSpeed": false,
+          "TrainingConsumption": false,
+          "HealingConsumption": false
+        },
+        "Shape": {
+          "SpeedUp": {
+            "type": "bool"
+          },
+          "Food": {
+            "type": "bool"
+          },
+          "Stones": {
+            "type": "bool"
+          },
+          "Gold": {
+            "type": "bool"
+          },
+          "Gems": {
+            "type": "bool"
+          },
+          "Lumber": {
+            "type": "bool"
+          },
+          "ConstructionSpeed": {
+            "type": "bool"
+          },
+          "TrainExpansion": {
+            "type": "bool"
+          },
+          "ForgingSpeed": {
+            "type": "bool"
+          },
+          "ResearchSpeed": {
+            "type": "bool"
+          },
+          "TrainingSpeed": {
+            "type": "bool"
+          },
+          "ForgingConsumption": {
+            "type": "bool"
+          },
+          "HealingSpeed": {
+            "type": "bool"
+          },
+          "TrainingConsumption": {
+            "type": "bool"
+          },
+          "HealingConsumption": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.mail": {
+        "Defaults": {
+          "skip": 0
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          }
+        }
+      },
+      "vikingbot.base.dragoncave": {
+        "Defaults": {
+          "Resources": false,
+          "Speedups": false,
+          "Buffs": false,
+          "Equipment": false,
+          "Mounts": false,
+          "Others": false,
+          "ResourcesUseGold": false,
+          "Gray": false,
+          "Green": false,
+          "Blue": false,
+          "Purple": false
+        },
+        "Shape": {
+          "Resources": {
+            "type": "bool"
+          },
+          "Speedups": {
+            "type": "bool"
+          },
+          "Buffs": {
+            "type": "bool"
+          },
+          "Equipment": {
+            "type": "bool"
+          },
+          "Mounts": {
+            "type": "bool"
+          },
+          "Others": {
+            "type": "bool"
+          },
+          "ResourcesUseGold": {
+            "type": "bool"
+          },
+          "Gray": {
+            "type": "bool"
+          },
+          "Green": {
+            "type": "bool"
+          },
+          "Blue": {
+            "type": "bool"
+          },
+          "Purple": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.robcaravan": {
+        "Defaults": {
+          "skip": 0,
+          "robCaravan": false,
+          "escortCaravan": false,
+          "assistCaravan": false
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          },
+          "robCaravan": {
+            "type": "bool"
+          },
+          "escortCaravan": {
+            "type": "bool"
+          },
+          "assistCaravan": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.smithy": {
+        "Defaults": {
+          "5Star": false,
+          "4Star": false,
+          "3Star": false,
+          "2Star": false,
+          "1Star": false,
+          "marches": "",
+          "waitBetweenAttacks": ""
+        },
+        "Shape": {
+          "5Star": {
+            "type": "bool"
+          },
+          "4Star": {
+            "type": "bool"
+          },
+          "3Star": {
+            "type": "bool"
+          },
+          "2Star": {
+            "type": "bool"
+          },
+          "1Star": {
+            "type": "bool"
+          },
+          "marches": {
+            "type": "string"
+          },
+          "waitBetweenAttacks": {
+            "type": "string"
+          }
+        }
+      },
+      "vikingbot.base.arena": {
+        "Defaults": {
+          "battles": ""
+        },
+        "Shape": {
+          "battles": {
+            "type": "string"
+          }
+        }
+      },
+      "vikingbot.base.skillshop": {
+        "Defaults": {
+          "skip": 0,
+          "onlyExperience": false,
+          "useResources": false
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          },
+          "onlyExperience": {
+            "type": "bool"
+          },
+          "useResources": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.mercenaryguild": {
+        "Defaults": {
+          "blue": false,
+          "purple": false,
+          "buyAll": false
+        },
+        "Shape": {
+          "blue": {
+            "type": "bool"
+          },
+          "purple": {
+            "type": "bool"
+          },
+          "buyAll": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.stagingpost": {
+        "Defaults": {
+          "redMission": false,
+          "marches": "",
+          "ignoreSuicide": false
+        },
+        "Shape": {
+          "redMission": {
+            "type": "bool"
+          },
+          "marches": {
+            "type": "string"
+          },
+          "ignoreSuicide": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.prosperitymerchant": {
+        "Defaults": {
+          "buyAllProductsWithResources": false
+        },
+        "Shape": {
+          "buyAllProductsWithResources": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.beastpen": {
+        "Defaults": {
+          "quickCapture": false,
+          "captureBlue": false,
+          "capturePurple": false,
+          "captureYellow": false,
+          "quickRecycle": false,
+          "recycleWhite": false,
+          "recycleGreen": false,
+          "recycleBlue": false,
+          "recyclePurple": false
+        },
+        "Shape": {
+          "quickCapture": {
+            "type": "bool"
+          },
+          "captureBlue": {
+            "type": "bool"
+          },
+          "capturePurple": {
+            "type": "bool"
+          },
+          "captureYellow": {
+            "type": "bool"
+          },
+          "quickRecycle": {
+            "type": "bool"
+          },
+          "recycleWhite": {
+            "type": "bool"
+          },
+          "recycleGreen": {
+            "type": "bool"
+          },
+          "recycleBlue": {
+            "type": "bool"
+          },
+          "recyclePurple": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.alliancegather": {
+        "Defaults": {
+          "helpBuild": false,
+          "Farm": false,
+          "Sawmill": false,
+          "Quarry": false,
+          "Gold": false
+        },
+        "Shape": {
+          "helpBuild": {
+            "type": "bool"
+          },
+          "Farm": {
+            "type": "bool"
+          },
+          "Sawmill": {
+            "type": "bool"
+          },
+          "Quarry": {
+            "type": "bool"
+          },
+          "Gold": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.heal": {
+        "Defaults": {
+          "skip": 0,
+          "useResources": false
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          },
+          "useResources": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.squadbase": {
+        "Defaults": {
+          "skip": 0
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          }
+        }
+      },
+      "vikingbot.base.villages": {
+        "Defaults": {
+          "skip": 0,
+          "marches": ""
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          },
+          "marches": {
+            "type": "string"
+          }
+        }
+      },
+      "vikingbot.base.exploration": {
+        "Defaults": {
+          "AtheronSnowfields": false,
+          "NovaForest": false,
+          "DanaPlains": false,
+          "MtKhajag": false,
+          "AsltaRange": false,
+          "Dornfjord": false,
+          "GertlandIsland": false,
+          "highestMission": false,
+          "lowestMission": false,
+          "fastestMission": false
+        },
+        "Shape": {
+          "AtheronSnowfields": {
+            "type": "bool"
+          },
+          "NovaForest": {
+            "type": "bool"
+          },
+          "DanaPlains": {
+            "type": "bool"
+          },
+          "MtKhajag": {
+            "type": "bool"
+          },
+          "AsltaRange": {
+            "type": "bool"
+          },
+          "Dornfjord": {
+            "type": "bool"
+          },
+          "GertlandIsland": {
+            "type": "bool"
+          },
+          "highestMission": {
+            "type": "bool"
+          },
+          "lowestMission": {
+            "type": "bool"
+          },
+          "fastestMission": {
+            "type": "bool"
+          }
+        }
+      },
+      "vikingbot.base.commission": {
+        "Defaults": {
+          "skip": 0
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          }
+        }
+      },
+      "vikingbot.base.eaglenest": {
+        "Defaults": {
+          "skip": 0
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          }
+        }
+      },
+      "vikingbot.base.wall": {
+        "Defaults": {
+          "skip": 0
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          }
+        }
+      },
+      "vikingbot.base.build": {
+        "Defaults": {
+          "skip": 0
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          }
+        }
+      },
+      "appmenu": {
+        "Defaults": {
+          "Shuffle": false,
+          "Slot": "",
+          "Custom": "",
+          "Email": "",
+          "Password": ""
+        },
+        "Shape": {
+          "Shuffle": {
+            "type": "bool"
+          },
+          "Slot": {
+            "type": "string"
+          },
+          "Custom": {
+            "type": "string"
+          },
+          "Email": {
+            "type": "string"
+          },
+          "Password": {
+            "type": "string"
+          }
+        }
+      },
+      "vikingbot.base.accountswitch": {
+        "Defaults": {
+          "skip": 0,
+          "mode": "",
+          "account": "1",
+          "iggID": ""
+        },
+        "Shape": {
+          "skip": {
+            "type": "number"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "account": {
+            "type": "select",
+            "options": [
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7"
+            ]
+          },
+          "iggID": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "built_at": 1764009692,
+  "source_mtime": 1764009680,
+  "vikingbot.base.gathervip": {
+    "fields": {
+      "LevelStartAt": {
+        "type": "select",
+        "options": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6"
+        ],
+        "default": {
+          "value": "3",
+          "options": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6"
+          ]
+        }
+      },
+      "Monster": {
+        "type": "bool",
+        "default": false
+      },
+      "Niflung": {
+        "type": "select",
+        "options": [
+          "off",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16",
+          "17",
+          "18",
+          "19",
+          "20",
+          "21",
+          "22",
+          "23",
+          "24",
+          "25",
+          "26",
+          "27",
+          "28",
+          "29",
+          "30",
+          "31",
+          "32",
+          "33",
+          "34",
+          "35",
+          "36",
+          "37",
+          "38",
+          "39",
+          "40",
+          "41",
+          "42",
+          "43",
+          "44",
+          "45",
+          "46",
+          "47",
+          "48",
+          "49",
+          "50",
+          "51",
+          "52",
+          "53",
+          "54",
+          "55",
+          "56",
+          "57",
+          "58",
+          "59",
+          "60",
+          "61",
+          "62",
+          "63",
+          "64",
+          "65",
+          "66",
+          "67",
+          "68",
+          "69",
+          "70"
+        ],
+        "default": {
+          "value": "off",
+          "options": [
+            "off",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23",
+            "24",
+            "25",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30",
+            "31",
+            "32",
+            "33",
+            "34",
+            "35",
+            "36",
+            "37",
+            "38",
+            "39",
+            "40",
+            "41",
+            "42",
+            "43",
+            "44",
+            "45",
+            "46",
+            "47",
+            "48",
+            "49",
+            "50",
+            "51",
+            "52",
+            "53",
+            "54",
+            "55",
+            "56",
+            "57",
+            "58",
+            "59",
+            "60",
+            "61",
+            "62",
+            "63",
+            "64",
+            "65",
+            "66",
+            "67",
+            "68",
+            "69",
+            "70"
+          ]
+        }
+      },
+      "Divine": {
+        "type": "select",
+        "options": [
+          "off",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16",
+          "17",
+          "18",
+          "19",
+          "20",
+          "21",
+          "22",
+          "23",
+          "24",
+          "25",
+          "26",
+          "27",
+          "28",
+          "29",
+          "30",
+          "31",
+          "32",
+          "33",
+          "34",
+          "35",
+          "36",
+          "37",
+          "38",
+          "39",
+          "40",
+          "41",
+          "42",
+          "43",
+          "44",
+          "45",
+          "46",
+          "47",
+          "48",
+          "49",
+          "50",
+          "51",
+          "52",
+          "53",
+          "54",
+          "55",
+          "56",
+          "57",
+          "58",
+          "59",
+          "60",
+          "61",
+          "62",
+          "63",
+          "64",
+          "65",
+          "66",
+          "67",
+          "68",
+          "69",
+          "70"
+        ],
+        "default": {
+          "value": "off",
+          "options": [
+            "off",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21",
+            "22",
+            "23",
+            "24",
+            "25",
+            "26",
+            "27",
+            "28",
+            "29",
+            "30",
+            "31",
+            "32",
+            "33",
+            "34",
+            "35",
+            "36",
+            "37",
+            "38",
+            "39",
+            "40",
+            "41",
+            "42",
+            "43",
+            "44",
+            "45",
+            "46",
+            "47",
+            "48",
+            "49",
+            "50",
+            "51",
+            "52",
+            "53",
+            "54",
+            "55",
+            "56",
+            "57",
+            "58",
+            "59",
+            "60",
+            "61",
+            "62",
+            "63",
+            "64",
+            "65",
+            "66",
+            "67",
+            "68",
+            "69",
+            "70"
+          ]
+        }
+      },
+      "Farm": {
+        "type": "select",
+        "options": [
+          "off",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "default": {
+          "value": "3",
+          "options": [
+            "off",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ]
+        }
+      },
+      "Sawmill": {
+        "type": "select",
+        "options": [
+          "off",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "default": {
+          "value": "3",
+          "options": [
+            "off",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ]
+        }
+      },
+      "Quarry": {
+        "type": "select",
+        "options": [
+          "off",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "default": {
+          "value": "3",
+          "options": [
+            "off",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ]
+        }
+      },
+      "Gold": {
+        "type": "select",
+        "options": [
+          "off",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9"
+        ],
+        "default": {
+          "value": "3",
+          "options": [
+            "off",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9"
+          ]
+        }
+      },
+      "RallyTime": {
+        "type": "select",
+        "options": [
+          "5min",
+          "10min",
+          "30min",
+          "8hours"
+        ],
+        "default": {
+          "value": "5min",
+          "options": [
+            "5min",
+            "10min",
+            "30min",
+            "8hours"
+          ]
+        }
+      },
+      "reduceLevel": {
+        "type": "bool",
+        "default": false
+      },
+      "marches": {
+        "type": "string",
+        "default": 0
+      },
+      "farmLowestResource": {
+        "type": "bool",
+        "default": false
+      }
+    }
+  },
+  "vikingbot.base.buffs": {
+    "fields": {
+      "Attack": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Off",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "Defense": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Off",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "Gather": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Any",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "Workers": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Off",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "Deception": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Off",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "Trade": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Off",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "Patrol": {
+        "type": "select",
+        "options": [
+          "Off",
+          "Any"
+        ],
+        "default": {
+          "value": "Off",
+          "options": [
+            "Off",
+            "Any"
+          ]
+        }
+      },
+      "useGems": {
+        "type": "bool",
+        "default": false
+      }
+    }
+  }
+}

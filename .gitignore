@@ -4,3 +4,6 @@ RSSv7/logs_cache.db
 RSSv7/resources_web.db
 UsersDash/data/backups/*
 UsersDash/data/app.db
+RSSv7/config.json
+RSSv7/resources_web.db
+UsersDash/data/app.db
