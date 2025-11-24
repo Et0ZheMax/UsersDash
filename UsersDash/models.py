@@ -124,6 +124,30 @@ class Account(db.Model):
         return f"<Account id={self.id} name={self.name}>"
 
 
+class ClientConfigVisibility(db.Model):
+    """Правила отображения конфигов для клиентов."""
+
+    __tablename__ = "client_config_visibility"
+
+    id = db.Column(db.Integer, primary_key=True)
+    script_id = db.Column(db.String(128), nullable=False)
+    config_key = db.Column(db.String(128), nullable=False)
+    group_key = db.Column(db.String(128), nullable=True)
+    client_visible = db.Column(db.Boolean, default=True, nullable=False)
+    client_label = db.Column(db.Text, nullable=True)
+    order_index = db.Column(db.Integer, default=0, nullable=False)
+    scope = db.Column(db.String(32), default="global", nullable=False)
+
+    __table_args__ = (
+        db.Index("idx_client_config_visibility_script_scope", "script_id", "scope"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ClientConfigVisibility script={self.script_id} key={self.config_key} "
+            f"scope={self.scope}>"
+        )
+
 
 class FarmData(db.Model):
     """
