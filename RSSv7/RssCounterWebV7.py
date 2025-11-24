@@ -8,6 +8,7 @@ import subprocess
 import shlex
 import time
 import shutil
+import tempfile
 import ctypes
 import socket
 import typing as t
@@ -21,11 +22,12 @@ import wmi
 import sys
 import csv
 import threading
-import inactive_monitor   
-from icmplib import ping as icmp_ping 
+import inactive_monitor
+from copy import deepcopy
+from icmplib import ping as icmp_ping
 from pathlib import Path
 from flask import jsonify, request
-from datetime import datetime, timezone, date, timedelta 
+from datetime import datetime, timezone, date, timedelta
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
 
@@ -55,11 +57,41 @@ if not is_admin():
 
 DEBUG = True  # или False, если не нужен режим отладки
 
+# === Атомарная запись JSON (tmp + os.replace) ================================
+def safe_write_json(path: str, data):
+    """Пишет JSON атомарно: сначала во временный файл, затем os.replace."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=d)
+    os.close(fd)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        raise
+
 # -------------------------------------------------
 # Функции health_check
 # -------------------------------------------------
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# === Пути под профили/шаблоны/схему ==========================================
+SETTINGS_DIR = os.path.join(BASE_DIR, "settings")
+PROFILES_DIR = os.path.join(SETTINGS_DIR, "profiles")     # профили аккаунтов *.json
+TEMPLATES_DIR = os.path.join(SETTINGS_DIR, "templates")   # шаблоны TRAIN.json, 650.json и т.д.
+SCHEMA_CACHE_PATH = os.path.join(SETTINGS_DIR, "schema_cache.json")  # авто-накапливаемая «схема»
+
+os.makedirs(SETTINGS_DIR, exist_ok=True)
+os.makedirs(PROFILES_DIR, exist_ok=True)
+os.makedirs(TEMPLATES_DIR, exist_ok=True)
+if not os.path.isfile(SCHEMA_CACHE_PATH):
+    safe_write_json(SCHEMA_CACHE_PATH, {})
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
@@ -91,6 +123,8 @@ PROFILE_PATH    = CONFIG.get("PROFILE_PATH", "")
 SRC_VMS         = CONFIG.get("SRC_VMS", "")
 DST_VMS         = CONFIG.get("DST_VMS", "")
 GNBOTS_SHORTCUT = CONFIG.get("GNBOTS_SHORTCUT", "")
+GNBOTS_PROFILES_PATH = PROFILE_PATH
+SCHEMA_TTL_SECONDS   = 600  # 10 минут
 SERVER_NAME     = os.getenv("SERVER_NAME", CONFIG.get("SERVER_NAME", socket.gethostname()))
 
 # 3) БД
@@ -129,6 +163,401 @@ def health_check():
 health_check()
 
 
+# ──────────────────────────────────────────────────────────────────────
+# --- CONFIG (schema support) ---
+# ──────────────────────────────────────────────────────────────────────
+
+# --- Вспомогательные: безопасное чтение файла ---
+def _safe_json_load(path: str):
+    import json, io, os
+    if not path or not os.path.exists(path):
+        return None
+    # Пробуем несколько кодировок — UTF-8, UTF-8-SIG, UTF-16LE/BE, CP1251
+    encodings = ["utf-8", "utf-8-sig", "utf-16", "utf-16le", "utf-16be", "cp1251"]
+    for enc in encodings:
+        try:
+            with io.open(path, "r", encoding=enc, errors="strict") as f:
+                return json.load(f)
+        except Exception:
+            continue
+    # Последняя попытка: читаем байты и пытаемся json.loads как UTF-8-SIG
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        return json.loads(raw.decode("utf-8-sig", errors="ignore"))
+    except Exception:
+        return None
+
+# === Авто-схема по живым аккаунтам + безопасный мёрдж шаблонов ===============
+
+def _json_read_or(path, default):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def schema_load():
+    return _json_read_or(SCHEMA_CACHE_PATH, {})
+
+def schema_save(data: dict):
+    safe_write_json(SCHEMA_CACHE_PATH, data)
+
+def schema_learn_from_steps(steps: list):
+    """Накапливаем superset полей по ScriptId, с типами/дефолтами."""
+    schema = schema_load()
+    changed = False
+
+    for step in steps or []:
+        sid = step.get("ScriptId")
+        cfg = step.get("Config") or {}
+        if not sid or not isinstance(cfg, dict):
+            continue
+
+        entry = schema.setdefault(sid, {"fields": {}})
+        fields = entry["fields"]
+
+        for k, v in cfg.items():
+            f = fields.setdefault(k, {})
+            # типы и дефолты
+            if isinstance(v, dict) and "options" in v:
+                # селект-поле: {"value": "...", "options": [...]}
+                if f.get("type") != "select":
+                    f["type"] = "select"; changed = True
+                opts = list(v.get("options") or [])
+                if f.get("options") != opts:
+                    f["options"] = opts; changed = True
+                dval = v.get("value")
+                # дефолт: Off если есть, иначе первый из options, иначе "".
+                def_val = "Off" if "Off" in opts else (opts[0] if opts else "")
+                new_def = {"value": dval if dval in opts else def_val, "options": opts}
+                if f.get("default") != new_def:
+                    f["default"] = new_def; changed = True
+            elif isinstance(v, bool):
+                if f.get("type") != "bool":
+                    f["type"] = "bool"; changed = True
+                if "default" not in f:
+                    f["default"] = False; changed = True
+            elif isinstance(v, (int, float)):
+                if f.get("type") != "number":
+                    f["type"] = "number"; changed = True
+                if "default" not in f:
+                    f["default"] = 0; changed = True
+            else:
+                if f.get("type") != "string":
+                    f["type"] = "string"; changed = True
+                if "default" not in f:
+                    f["default"] = ""; changed = True
+
+    if changed:
+        schema_save(schema)
+
+def _default_value_by_spec(spec: dict):
+    t = spec.get("type")
+    if t == "select":
+        return {"value": spec.get("default", {}).get("value", ""), "options": spec.get("options", [])}
+    if t == "bool":
+        return False
+    if t == "number":
+        return 0
+    return ""
+
+def template_inflate_with_schema(template_steps: list, schema: dict):
+    """Дополняем шаблон недостающими полями по схеме (для каждого ScriptId)."""
+    steps = deepcopy(template_steps or [])
+    for step in steps:
+        sid = step.get("ScriptId")
+        cfg = step.setdefault("Config", {})
+        if not sid or sid not in schema:
+            continue
+        # добиваем поля из схемы
+        for key, spec in schema[sid]["fields"].items():
+            if key not in cfg:
+                cfg[key] = _default_value_by_spec(spec)
+            else:
+                if isinstance(cfg[key], dict) and spec.get("type") == "select":
+                    if "options" not in cfg[key]:
+                        cfg[key]["options"] = list(spec.get("options") or [])
+    return steps
+
+def merge_template_into_account(account_steps: list, template_steps: list):
+    """Мёрдж шаблона в аккаунт БЕЗ удаления неизвестных полей/скриптов."""
+    from collections import defaultdict, deque
+
+    acc = deepcopy(account_steps or [])
+    tpl = deepcopy(template_steps or [])
+
+    acc_map = defaultdict(deque)
+    for s in acc:
+        acc_map[s.get("ScriptId")].append(s)
+
+    result = []
+    used_ids = set()
+
+    for t in tpl:
+        sid = t.get("ScriptId")
+        if sid in acc_map and acc_map[sid]:
+            a = acc_map[sid].popleft()
+            used_ids.add(id(a))
+            a_cfg = a.setdefault("Config", {})
+            t_cfg = t.get("Config", {}) or {}
+            for k, v in t_cfg.items():
+                a_cfg[k] = v
+            result.append(a)
+        else:
+            result.append(t)
+
+    for s in acc:
+        if id(s) not in used_ids and s not in result:
+            result.append(s)
+
+    return result
+
+
+def _build_schema():
+    """Собираем «живую схему» из профилей."""
+    src = _safe_json_load(GNBOTS_PROFILES_PATH) or {}
+    scripts = {}
+
+    candidates = []
+    if isinstance(src, dict):
+        for key in ("Accounts", "Profiles", "accounts", "profiles"):
+            val = src.get(key)
+            if isinstance(val, list):
+                candidates.extend(val)
+
+    if not candidates:
+        candidates = [src]
+
+    all_steps = []
+    for acc in candidates:
+        steps = _extract_steps_from_obj(acc)
+        if steps:
+            all_steps.extend(steps)
+
+    for st in all_steps:
+        sid = st.get("ScriptId")
+        cfg = st.get("Config") or {}
+        if not sid or not isinstance(cfg, dict):
+            continue
+        bucket = scripts.setdefault(sid, set())
+        for k in cfg.keys():
+            bucket.add(k)
+
+    json_scripts = {sid: sorted(list(fields)) for sid, fields in scripts.items()}
+
+    try:
+        os.makedirs(os.path.dirname(SCHEMA_CACHE_PATH), exist_ok=True)
+        with open(SCHEMA_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump({
+                "schema": {"Scripts": json_scripts},
+                "built_at": int(time.time()),
+                "source_mtime": os.path.getmtime(GNBOTS_PROFILES_PATH) if os.path.exists(GNBOTS_PROFILES_PATH) else 0
+            }, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Failed to write schema cache: {e}")
+
+    return {"Scripts": json_scripts}
+
+
+# --- Глобальный кеш схемы ---
+_schema_cache = {
+    "schema": None,
+    "built_at": 0,
+    "source_mtime": 0,
+}
+
+def _save_schema_cache_to_disk(schema: dict):
+    try:
+        with open(SCHEMA_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump({
+                "schema": schema,
+                "built_at": int(time.time()),
+                "source_mtime": _schema_cache.get("source_mtime", 0),
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _load_schema_cache_from_disk():
+    if not os.path.exists(SCHEMA_CACHE_PATH):
+        return None
+    try:
+        with open(SCHEMA_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data
+    except Exception:
+        return None
+
+def _extract_steps_from_obj(obj, acc_id_hint=None):
+    """Возвращает список шагов из произвольной структуры."""
+    steps = []
+
+    def is_step(d: dict) -> bool:
+        return isinstance(d, dict) and "ScriptId" in d and "Config" in d and isinstance(d["Config"], dict)
+
+    def try_parse_json_string(s: str):
+        s_strip = s.strip()
+        if not s_strip:
+            return None
+        looks_jsonish = s_strip[0] in "[{" and ("\"ScriptId\"" in s_strip or "'ScriptId'" in s_strip)
+        if not looks_jsonish:
+            return None
+        try:
+            return json.loads(s_strip)
+        except Exception:
+            try:
+                return json.loads(bytes(s_strip, "utf-8").decode("unicode_escape"))
+            except Exception:
+                return None
+
+    def walk(node, parent_key=None):
+        nonlocal steps
+        if isinstance(node, dict):
+            if is_step(node):
+                steps.append(node)
+            for k, v in node.items():
+                if isinstance(v, str):
+                    parsed = try_parse_json_string(v)
+                    if parsed is not None:
+                        walk(parsed, parent_key=k)
+                else:
+                    walk(v, parent_key=k)
+        elif isinstance(node, list):
+            for it in node:
+                walk(it, parent_key=parent_key)
+        elif isinstance(node, str):
+            parsed = try_parse_json_string(node)
+            if parsed is not None:
+                walk(parsed, parent_key=parent_key)
+
+    walk(obj, None)
+    return steps
+
+
+def _build_live_schema() -> dict:
+    """Возвращает effective-схему по профилям."""
+    src = _safe_json_load(GNBOTS_PROFILES_PATH) or {}
+    steps = _extract_steps_from_obj(src)
+
+    scripts = {}
+    for step in steps:
+        sid = step.get("ScriptId")
+        cfg = step.get("Config", {})
+        if not sid or not isinstance(cfg, dict):
+            continue
+        dst = scripts.setdefault(sid, {"Defaults": {}, "Shape": {}})
+
+        for k, v in cfg.items():
+            shape = dst["Shape"].get(k)
+            if isinstance(v, dict) and "options" in v:
+                options = v.get("options") or []
+                val = v.get("value")
+                prev_opts = set(shape["options"]) if shape and shape.get("type") == "select" else set()
+                new_opts = sorted(list(prev_opts | set(options)))
+                dst["Shape"][k] = {"type": "select", "options": new_opts}
+                if k not in dst["Defaults"]:
+                    default_val = val if val in new_opts else (new_opts[0] if new_opts else val)
+                    dst["Defaults"][k] = default_val
+            elif isinstance(v, bool):
+                dst["Shape"][k] = {"type": "bool"}
+                dst["Defaults"].setdefault(k, False)
+            elif isinstance(v, (int, float)):
+                dst["Shape"][k] = {"type": "number"}
+                dst["Defaults"].setdefault(k, 0)
+            else:
+                dst["Shape"][k] = {"type": "string"}
+                dst["Defaults"].setdefault(k, "")
+
+    return {"Scripts": scripts}
+
+def _need_refresh(now:int) -> bool:
+    ttl = (now - _schema_cache["built_at"]) > SCHEMA_TTL_SECONDS
+    src_mtime = 0
+    try:
+        src_mtime = int(os.path.getmtime(GNBOTS_PROFILES_PATH))
+    except Exception:
+        pass
+    changed = (src_mtime != _schema_cache["source_mtime"])
+    return ttl or changed
+
+def _ensure_schema(now:int=None, force:bool=False) -> dict:
+    global _schema_cache
+    now = now or int(time.time())
+
+    if _schema_cache["schema"] is None:
+        disk = _load_schema_cache_from_disk()
+        if disk and "schema" in disk:
+            _schema_cache = {
+                "schema": disk["schema"],
+                "built_at": disk.get("built_at", 0),
+                "source_mtime": disk.get("source_mtime", 0),
+            }
+
+    if force or (_schema_cache["schema"] is None) or _need_refresh(now):
+        schema = _build_live_schema()
+        _schema_cache["schema"] = schema
+        _schema_cache["built_at"] = now
+        try:
+            _schema_cache["source_mtime"] = int(os.path.getmtime(GNBOTS_PROFILES_PATH))
+        except Exception:
+            _schema_cache["source_mtime"] = 0
+        _save_schema_cache_to_disk(schema)
+    return _schema_cache["schema"]
+
+def _normalize_template_with_schema(template_steps:list, schema:dict) -> list:
+    """Возвращаем список шагов, дополненный ключами из schema."""
+    scripts_schema = schema.get("Scripts", {})
+    by_sid = {}
+    for step in template_steps:
+        sid = step.get("ScriptId")
+        if sid and sid not in by_sid:
+            by_sid[sid] = step
+
+    out = deepcopy(template_steps)
+
+    for sid, sdef in scripts_schema.items():
+        if sid not in by_sid:
+            defaults = sdef.get("Defaults", {})
+            shape    = sdef.get("Shape", {})
+            cfg = {}
+            for k, form in shape.items():
+                if form.get("type") == "select":
+                    cfg[k] = {"value": defaults.get(k, ""), "options": form.get("options", [])}
+                else:
+                    cfg[k] = defaults.get(k, False if form.get("type")=="bool" else (0 if form.get("type")=="number" else ""))
+            out.append({
+                "ScriptId": sid,
+                "Uid": f"{sid}_auto",
+                "OrderId": len(out),
+                "Config": cfg,
+                "Id": len(out),
+                "IsActive": False,
+                "IsCopy": True,
+                "ScheduleData": {"Active": False, "Last": "0001-01-01T00:00:00", "Daily": False, "Hourly": False, "Weekly": False},
+                "ScheduleRules": []
+            })
+
+    for step in out:
+        sid = step.get("ScriptId")
+        sdef = scripts_schema.get(sid)
+        if not sdef:
+            continue
+        shape = sdef.get("Shape", {})
+        defaults = sdef.get("Defaults", {})
+        cfg = step.setdefault("Config", {})
+        for k, form in shape.items():
+            if k not in cfg:
+                if form.get("type") == "select":
+                    cfg[k] = {"value": defaults.get(k, ""), "options": form.get("options", [])}
+                else:
+                    cfg[k] = defaults.get(k, False if form.get("type")=="bool" else (0 if form.get("type")=="number" else ""))
+            else:
+                if form.get("type") == "select" and isinstance(cfg.get(k), dict):
+                    cfg[k].setdefault("options", form.get("options", []))
+
+    return out
+
+# ──────────────────────────────────────────────────────────────────────
 # ──────────── Ш А Б Л О Н Ы ────────────
 TEMPLATES = {
     "650": r"""[{"ScriptId":"vikingbot.base.gathervip","Uid":"vikingbot.base.gathervip_3","OrderId":6,"Config":{"LevelStartAt":{"value":"3","options":["1","2","3","4","5","6"]},"Monster":false,"Niflung":{"value":"off","options":["off","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70"]},"Divine":{"value":"off","options":["off","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70"]},"Farm":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Sawmill":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Quarry":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Gold":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"RallyTime":{"value":"5min","options":["5min","10min","30min","8hours"]},"reduceLevel":false,"marches":"5","farmLowestResource":false},"Id":6,"IsActive":true,"IsCopy":true,"ScheduleData":{"Active":false,"Last":"0001-01-01T00:00:00","Daily":false,"Hourly":false,"Weekly":false},"ScheduleRules":[]},{"ScriptId":"vikingbot.base.gathervip","Uid":"vikingbot.base.gathervip_4","OrderId":6,"Config":{"LevelStartAt":{"value":"3","options":["1","2","3","4","5","6"]},"Monster":false,"Niflung":{"value":"off","options":["off","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70"]},"Divine":{"value":"off","options":["off","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70"]},"Farm":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Sawmill":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Quarry":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Gold":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"RallyTime":{"value":"5min","options":["5min","10min","30min","8hours"]},"reduceLevel":false,"marches":"5","farmLowestResource":false},"Id":6,"IsActive":true,"IsCopy":true,"ScheduleData":{"Active":false,"Last":"0001-01-01T00:00:00","Daily":false,"Hourly":false,"Weekly":false},"ScheduleRules":[]},{"ScriptId":"vikingbot.base.buffs","Uid":"vikingbot.base.buffs","OrderId":2,"Config":{"Attack":{"value":"Off","options":["Off","Any"]},"Defense":{"value":"Off","options":["Off","Any"]},"Gather":{"value":"Any","options":["Off","Any"]},"Workers":{"value":"Off","options":["Off","Any"]},"Deception":{"value":"Off","options":["Off","Any"]},"Trade":{"value":"Off","options":["Off","Any"]},"Patrol":{"value":"Off","options":["Off","Any"]},"useGems":false},"Id":2,"IsActive":true,"IsCopy":false,"ScheduleData":{"Active":false,"Last":"0001-01-01T00:00:00","Daily":false,"Hourly":false,"Weekly":false},"ScheduleRules":[{"Val":-1.0,"Val1":"mon,tue,wed,thu,fri,sat,sun|12:00 AM|1:59 AM","IntervalType":0,"Type":5}]},{"ScriptId":"vikingbot.base.buffs","Uid":"vikingbot.base.buffs_1","OrderId":6,"Config":{"Attack":{"value":"Off","options":["Off","Any"]},"Defense":{"value":"Off","options":["Off","Any"]},"Gather":{"value":"Any","options":["Off","Any"]},"Workers":{"value":"Off","options":["Off","Any"]},"Deception":{"value":"Off","options":["Off","Any"]},"Trade":{"value":"Off","options":["Off","Any"]},"Patrol":{"value":"Off","options":["Off","Any"]},"useGems":false},"Id":6,"IsActive":true,"IsCopy":true,"ScheduleData":{"Active":false,"Last":"0001-01-01T00:00:00","Daily":false,"Hourly":false,"Weekly":false},"ScheduleRules":[{"Val":-1.0,"Val1":"mon,tue,wed,thu,fri,sat,sun|8:00 AM|9:59 AM","IntervalType":0,"Type":5}]},{"ScriptId":"vikingbot.base.buffs","Uid":"vikingbot.base.buffs_2","OrderId":6,"Config":{"Attack":{"value":"Off","options":["Off","Any"]},"Defense":{"value":"Off","options":["Off","Any"]},"Gather":{"value":"Any","options":["Off","Any"]},"Workers":{"value":"Off","options":["Off","Any"]},"Deception":{"value":"Off","options":["Off","Any"]},"Trade":{"value":"Off","options":["Off","Any"]},"Patrol":{"value":"Off","options":["Off","Any"]},"useGems":false},"Id":6,"IsActive":true,"IsCopy":true,"ScheduleData":{"Active":false,"Last":"0001-01-01T00:00:00","Daily":false,"Hourly":false,"Weekly":false},"ScheduleRules":[{"Val":-1.0,"Val1":"mon,tue,wed,thu,fri,sat,sun|4:00 PM|5:59 PM","IntervalType":0,"Type":5}]},{"ScriptId":"vikingbot.base.gathervip","Uid":"vikingbot.base.gathervip_1","OrderId":3,"Config":{"LevelStartAt":{"value":"3","options":["1","2","3","4","5","6"]},"Monster":false,"Niflung":{"value":"off","options":["off","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70"]},"Divine":{"value":"off","options":["off","1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","23","24","25","26","27","28","29","30","31","32","33","34","35","36","37","38","39","40","41","42","43","44","45","46","47","48","49","50","51","52","53","54","55","56","57","58","59","60","61","62","63","64","65","66","67","68","69","70"]},"Farm":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Sawmill":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Quarry":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"Gold":{"value":"3","options":["off","1","2","3","4","5","6","7","8","9"]},"RallyTime":{"value":"5min","options":["5min","10min","30min","8hours"]},"reduceLevel":false,"marches":"5","farmLowestResource":false},"Id":3,"IsActive":true,"IsCopy":true,"ScheduleData":{"Active":false,"Last":"0001-01-01T00:00:00","Daily":false,"Hourly":false,"Weekly":false},"ScheduleRules":[]}]""",
@@ -1883,45 +2312,39 @@ def api_apply_template(acc_id):
         payload = request.get_json(silent=True) or {}
         tmpl_name = (payload.get("template") or "").strip()
 
-        # 1) проверяем шаблон
         if tmpl_name not in TEMPLATES:
             return jsonify({"error": "template not found"}), 404
 
-        # 2) читаем профиль
         if not os.path.exists(PROFILE_PATH):
             return jsonify({"error": "profile not found"}), 404
         with open(PROFILE_PATH, "r", encoding="utf-8") as f:
             prof = json.load(f)
 
-        # 3) находим аккаунт
         acc = next((a for a in prof if a.get("Id") == acc_id), None)
         if not acc:
             return jsonify({"error": "acc not found"}), 404
 
-        # 4) пишем шаблон в Data без лишних пробелов внутри JSON
+        current_steps = _parse_json_field(acc.get("Data", "[]"), [])
         try:
-            # если шаблон хранится как строка JSON → распарсить и сериализовать компактно
-            acc["Data"] = json.dumps(
-                json.loads(TEMPLATES[tmpl_name]),
-                ensure_ascii=False,
-                separators=(",", ":")  # компактно: без пробелов после ':' и вокруг ','
-            )
+            template_steps = json.loads(TEMPLATES[tmpl_name])
         except Exception:
-            # если шаблон вдруг невалидный JSON — сохраняем как есть
-            acc["Data"] = TEMPLATES[tmpl_name]
+            return jsonify({"error": "template invalid"}), 400
 
-        # 5) сохраняем профиль на диск
+        schema = schema_load()
+        template_filled = template_inflate_with_schema(template_steps, schema)
+        merged_steps = merge_template_into_account(current_steps, template_filled)
+
+        acc["Data"] = json.dumps(merged_steps, ensure_ascii=False, separators=(",", ":"))
+
         with open(PROFILE_PATH, "w", encoding="utf-8") as f:
             json.dump(prof, f, ensure_ascii=False, indent=2)
 
-        # 6) (опционально) синхронизируем быструю мету, если используешь её в интерфейсе
         try:
             if "sync_account_meta" in globals():
                 sync_account_meta()
         except Exception:
             app.logger.exception("sync_account_meta failed (non-critical)")
 
-        # 7) ОБЯЗАТЕЛЬНО возвращаем ответ клиенту
         return jsonify({"status": "ok", "acc_id": acc_id, "template": tmpl_name})
 
     except Exception as e:
@@ -2666,6 +3089,58 @@ def _strip_start(logs):
         out.append(line)
     return out
 
+# --- Маршруты/утилиты для работы со схемой и шаблонами ---
+
+@app.route("/api/schema/get", methods=["GET"])
+def api_schema_get():
+    """Отдать текущую авто-схему (schema_cache.json)."""
+    return jsonify(schema_load())
+
+@app.route("/api/schema/rebuild", methods=["POST"])
+def api_schema_rebuild():
+    """Полностью перестроить схему по всем профилям в settings/profiles."""
+    schema = {}
+    changed = False
+    for name in os.listdir(PROFILES_DIR):
+        if not name.lower().endswith(".json"):
+            continue
+        full = os.path.join(PROFILES_DIR, name)
+        prof = _json_read_or(full, {})
+        steps = prof.get("Data") or []
+        before = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+        schema_learn_from_steps(steps)
+        schema = schema_load()
+        after = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+        if before != after:
+            changed = True
+    return jsonify({"ok": True, "changed": changed, "size": len(schema)})
+
+@app.route("/api/templates/list", methods=["GET"])
+def api_templates_list():
+    arr = []
+    for name in sorted(os.listdir(TEMPLATES_DIR)):
+        if name.lower().endswith(".json"):
+            arr.append(name)
+    return jsonify({"templates": arr})
+
+@app.route("/api/templates/rehydrate", methods=["POST"])
+def api_templates_rehydrate():
+    """Дополнить ВСЕ шаблоны недостающими ключами из schema_cache.json."""
+    schema = schema_load()
+    updated = []
+    for name in os.listdir(TEMPLATES_DIR):
+        if not name.lower().endswith(".json"):
+            continue
+        p = os.path.join(TEMPLATES_DIR, name)
+        tpl = _json_read_or(p, [])
+        if not isinstance(tpl, list):
+            continue
+        new_tpl = template_inflate_with_schema(tpl, schema)
+        if new_tpl != tpl:
+            safe_write_json(p, new_tpl)
+            updated.append(name)
+    return jsonify({"ok": True, "updated": updated})
+
 @app.route("/api/manage/account/<acc_id>/settings", methods=["GET"])
 def api_manage_account_settings(acc_id):
     # Читаем общий JSON
@@ -2682,6 +3157,10 @@ def api_manage_account_settings(acc_id):
     # Парсим строку Data в JSON
     settings = _parse_json_field(acc.get("Data", "[]"), [])
     menu     = _parse_json_field(acc.get("MenuData", "{}"), {})
+    try:
+        schema_learn_from_steps(settings)
+    except Exception:
+        app.logger.exception("schema learn failed")
     return jsonify({"Data": settings, "MenuData": menu})
 
 @app.route("/api/manage/account/<acc_id>/settings/<int:step_idx>", methods=["PUT"])
@@ -3313,6 +3792,17 @@ def api_logs():
     if len(lines)>290:
         lines= lines[-290:]
     return {"acc_id":acc_id,"logs": lines}
+
+@app.route("/api/schema", methods=["GET"])
+def api_get_schema():
+    schema = _ensure_schema()
+    age = int(time.time()) - _schema_cache["built_at"]
+    return jsonify({"schema": schema, "built_at": _schema_cache["built_at"], "age_sec": age})
+
+@app.route("/api/schema/refresh", methods=["POST"])
+def api_refresh_schema():
+    _ensure_schema(force=True)
+    return jsonify({"ok": True, "built_at": _schema_cache["built_at"]})
 
 
 if __name__=="__main__":
