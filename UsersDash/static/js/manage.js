@@ -180,6 +180,11 @@
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
     const layoutRoot = document.querySelector('[data-role="manage-layout"]');
     const manageRoot = document.querySelector('.manage-modern');
+    const isAdminManage = Boolean(
+        (window.manageInitialState && window.manageInitialState.menu && window.manageInitialState.menu.is_admin_manage)
+        || (window.manageInitialState && window.manageInitialState.is_admin_manage)
+        || ((window.location && window.location.pathname) ? window.location.pathname.includes('/admin/') : false)
+    );
 
     function escapeHtml(str) {
         return (str || "").replace(/[&<>"]+/g, (ch) => ({
@@ -200,6 +205,33 @@
             url = url.replace("__STEP__", stepIdx);
         }
         return url;
+    }
+
+    function resolveScheduleEditorUrl(stepIdx) {
+        if (!state.selectedAccountId && state.selectedAccountId !== 0) return null;
+        const menu = state.menu || {};
+        const template = [
+            menu.schedule_editor_url,
+            menu.scheduleEditorUrl,
+            menu.ScheduleEditorUrl,
+            menu.schedule_editor,
+        ].find((val) => typeof val === "string");
+
+        if (!template) return null;
+        if (template.includes("__ACCOUNT__") || template.includes("__STEP__")) {
+            return replaceStepTemplate(template, state.selectedAccountId, stepIdx);
+        }
+        return template;
+    }
+
+    function openScheduleEditor(stepIdx) {
+        if (!isAdminManage) return;
+        const url = resolveScheduleEditorUrl(stepIdx);
+        if (url) {
+            window.open(url, "_blank", "noopener");
+        } else {
+            console.warn("Schedule editor URL is not configured");
+        }
     }
 
     function getScriptTitle(step) {
@@ -323,7 +355,13 @@
             const viewStep = state.steps[idx] || {};
             const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
             const schedule = scheduleSummary(viewStep, rawStep);
-            const scheduleHtml = schedule ? `<div class=\"step-schedule\">⏱ ${schedule}</div>` : "";
+            const scheduleSummaryHtml = schedule ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>` : "";
+            const scheduleButtonHtml = isAdminManage
+                ? `<button class=\"step-schedule__edit\" type=\"button\" data-role=\"schedule-edit\" data-step-idx=\"${idx}\" aria-label=\"Редактировать расписание шага\">⏲</button>`
+                : "";
+            const scheduleHtml = (schedule || scheduleButtonHtml)
+                ? `<div class=\"step-schedule\">${scheduleSummaryHtml}${scheduleButtonHtml}</div>`
+                : "";
             const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${idx}`;
             const isSelected = state.selectedStepIndex === idx;
             const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${idx + 1}`;
@@ -781,6 +819,16 @@
     function handleStepsClick(event) {
         if (event.target.closest('.ios-switch')) {
             event.stopPropagation();
+            return;
+        }
+
+        const scheduleBtn = event.target.closest('[data-role="schedule-edit"]');
+        if (scheduleBtn) {
+            event.stopPropagation();
+            const stepIdx = Number(scheduleBtn.dataset.stepIdx);
+            if (!Number.isNaN(stepIdx)) {
+                openScheduleEditor(stepIdx);
+            }
             return;
         }
 
