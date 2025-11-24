@@ -149,6 +149,8 @@
         ],
     };
 
+    const STEP_HIDDEN_KEY = "__step__";
+
     const state = Object.assign({
         selectedAccountId: null,
         selectedAccountName: "",
@@ -352,6 +354,13 @@
         const items = getVisibilityForScript(scriptId);
         const found = items.find((item) => item && item[prop]);
         return found ? found[prop] : undefined;
+    }
+
+    function isStepHidden(scriptId) {
+        if (isAdminManage) return false;
+
+        const items = getVisibilityForScript(scriptId) || [];
+        return items.some((item) => item && item.config_key === STEP_HIDDEN_KEY && item.client_visible === false);
     }
 
     function findViewStepByRawIndex(rawIdx) {
@@ -880,26 +889,33 @@
     function buildViewStepsFromRaw(rawSteps, visibilityMap) {
         state.visibilityMap = visibilityMap || state.visibilityMap || {};
 
-        return (rawSteps || []).map((step, idx) => {
-            const cfg = (step && step.Config) || {};
-            const scriptId = step && step.ScriptId;
-            const description = cfg.Description || cfg.description || "";
-            const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
-            const nameOverride = findVisibilityProp(scriptId, "client_label");
-            const name = nameOverride || getScriptTitle(step) || `Шаг ${idx + 1}`;
+        return (rawSteps || [])
+            .map((step, idx) => {
+                const cfg = (step && step.Config) || {};
+                const scriptId = step && step.ScriptId;
+                const description = cfg.Description || cfg.description || "";
+                const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
 
-            return {
-                index: idx,
-                raw_index: idx,
-                name,
-                script_id: scriptId,
-                config: cfg,
-                description,
-                is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
-                schedule_summary: scheduleSummary(null, step) || undefined,
-                schedule_rules_count: schedule_rules.length,
-            };
-        });
+                if (isStepHidden(scriptId, step)) {
+                    return null;
+                }
+
+                const nameOverride = findVisibilityProp(scriptId, "client_label");
+                const name = nameOverride || getScriptTitle(step) || `Шаг ${idx + 1}`;
+
+                return {
+                    index: idx,
+                    raw_index: idx,
+                    name,
+                    script_id: scriptId,
+                    config: cfg,
+                    description,
+                    is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
+                    schedule_summary: scheduleSummary(null, step) || undefined,
+                    schedule_rules_count: schedule_rules.length,
+                };
+            })
+            .filter(Boolean);
     }
 
     function renderEmptyState(message, debug) {
