@@ -271,7 +271,6 @@
             normalized[scriptId] = rows
                 .map((row) => ({
                     config_key: row.config_key || row.ConfigKey || row.configKey,
-                    group_key: row.group_key || row.GroupKey || row.groupKey,
                     client_visible: ("client_visible" in row)
                         ? row.client_visible
                         : (("clientVisible" in row) ? row.clientVisible : undefined),
@@ -356,21 +355,7 @@
     }
 
     function findViewStepByRawIndex(rawIdx) {
-        const groups = state.steps || [];
-        for (const group of groups) {
-            if (!group) continue;
-
-            if (group.raw_index === rawIdx) {
-                return group;
-            }
-
-            if (Array.isArray(group.items)) {
-                const found = group.items.find((item) => item && item.raw_index === rawIdx);
-                if (found) return found;
-            }
-        }
-
-        return undefined;
+        return (state.steps || []).find((step) => step && step.raw_index === rawIdx);
     }
 
     function formatScheduleRule(rule) {
@@ -895,50 +880,17 @@
     function buildViewStepsFromRaw(rawSteps, visibilityMap) {
         state.visibilityMap = visibilityMap || state.visibilityMap || {};
 
-        // Админка должна показывать шаги в исходном порядке без группировки,
-        // чтобы не терять визуальную последовательность их выполнения.
-        if (isAdminManage) {
-            return (rawSteps || []).map((step, idx) => {
-                const cfg = (step && step.Config) || {};
-                const scriptId = step && step.ScriptId;
-                const description = cfg.Description || cfg.description || "";
-                const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
-
-                return {
-                    index: idx,
-                    raw_index: idx,
-                    group_key: findVisibilityProp(scriptId, "group_key") || scriptId || `group-${idx}`,
-                    name: getScriptTitle(step) || `Шаг ${idx + 1}`,
-                    script_id: scriptId,
-                    config: cfg,
-                    description,
-                    is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
-                    schedule_summary: scheduleSummary(null, step) || undefined,
-                    schedule_rules_count: schedule_rules.length,
-                };
-            });
-        }
-
-        const grouped = [];
-        const groupsByKey = new Map();
-
-        (rawSteps || []).forEach((step, idx) => {
+        return (rawSteps || []).map((step, idx) => {
             const cfg = (step && step.Config) || {};
             const scriptId = step && step.ScriptId;
             const description = cfg.Description || cfg.description || "";
             const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
-
-            // Разгруппированные шаги не должны схлопываться по ScriptId.
-            // Оставляем группировку только если она явно задана в visibility_map.
-            const visibilityGroupKey = findVisibilityProp(scriptId, "group_key");
-            const groupKey = visibilityGroupKey || `group-${idx}`;
             const nameOverride = findVisibilityProp(scriptId, "client_label");
             const name = nameOverride || getScriptTitle(step) || `Шаг ${idx + 1}`;
 
-            const viewStep = {
+            return {
                 index: idx,
                 raw_index: idx,
-                group_key: visibilityGroupKey || scriptId || groupKey,
                 name,
                 script_id: scriptId,
                 config: cfg,
@@ -947,35 +899,6 @@
                 schedule_summary: scheduleSummary(null, step) || undefined,
                 schedule_rules_count: schedule_rules.length,
             };
-
-            if (!visibilityGroupKey) {
-                grouped.push(viewStep);
-                return;
-            }
-
-            const existingGroup = groupsByKey.get(groupKey);
-            if (existingGroup) {
-                existingGroup.items.push(viewStep);
-                return;
-            }
-
-            const group = {
-                group_key: visibilityGroupKey || scriptId || groupKey,
-                name,
-                items: [viewStep],
-            };
-
-            groupsByKey.set(groupKey, group);
-            grouped.push(group);
-        });
-
-        return grouped.map((group) => {
-            if (Array.isArray(group.items) && group.items.length === 1) {
-                const [single] = group.items;
-                return single ? { ...single, name: group.name || single.name } : group;
-            }
-
-            return group;
         });
     }
 
@@ -1071,75 +994,49 @@
                 </div>`;
         };
 
-        const renderGroupedStep = (group) => {
-            const items = Array.isArray(group.items) && group.items.length ? group.items : [group];
-            if (items.length <= 1) {
-                return renderSingleStep(items[0], group.name);
-            }
-
-            const groupTitle = group.name || items[0].name || "Шаги";
-            const isGroupSelected = items.some((item) => state.selectedStepIndex === item.raw_index);
-
-            const itemsHtml = items.map((item) => {
-                const rawStep = state.rawSteps[item.raw_index] || {};
-                const desc = item.description ? `<div class=\"step-desc step-group__item-desc\">${item.description}</div>` : "";
-                const schedule = scheduleSummary(item, rawStep);
-                const scheduleSummaryHtml = (isAdminManage && schedule)
-                    ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
-                    : "";
-                const scheduleHtml = scheduleSummaryHtml
-                    ? `<div class=\"step-schedule step-group__item-schedule\">${scheduleSummaryHtml}</div>`
-                    : "";
-                const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${item.raw_index}`;
-                const itemSelected = state.selectedStepIndex === item.raw_index;
-                const itemTitle = item.name || groupTitle;
-                const scheduleButtonHtml = isAdminManage
-                    ? [
-                        '<div class="step-actions__schedule">',
-                        `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${item.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
-                        '</div>',
-                    ].join("\n")
-                    : "";
-
-                return `
-                    <div class="step-group__item ${itemSelected ? "is-selected" : ""}" data-step-idx="${item.raw_index}">
-                        <div class="step-group__item-head">
-                            <div>
-                                <div class="step-group__item-title">${itemTitle}</div>
-                                ${desc}
-                                ${scheduleHtml}
-                            </div>
-                            <div class="step-actions">
-                                <label class="ios-switch" for="${switchId}">
-                                    <input type="checkbox"
-                                           id="${switchId}"
-                                           class="ios-switch__input"
-                                           data-role="step-toggle"
-                                           data-account-id="${state.selectedAccountId}"
-                                           data-step-idx="${item.raw_index}"
-                                           ${item.is_active ? "checked" : ""}>
-                                    <span class="ios-switch__slider" aria-hidden="true"></span>
-                                </label>
-                                ${scheduleButtonHtml}
-                            </div>
-                        </div>
-                    </div>`;
-            }).join("");
+        const html = (state.steps || []).map((viewStep) => {
+            const rawStep = state.rawSteps[viewStep.raw_index] || {};
+            const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
+            const schedule = scheduleSummary(viewStep, rawStep);
+            const scheduleSummaryHtml = (isAdminManage && schedule)
+                ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
+                : "";
+            const scheduleHtml = scheduleSummaryHtml ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
+            const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${viewStep.raw_index}`;
+            const isSelected = state.selectedStepIndex === viewStep.raw_index;
+            const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${viewStep.index + 1}`;
+            const scheduleButtonHtml = isAdminManage
+                ? [
+                    '<div class="step-actions__schedule">',
+                    `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${viewStep.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
+                    '</div>',
+                ].join("\n")
+                : "";
 
             return `
-                <div class="manage-step-card manage-step-card--group ${isGroupSelected ? "is-selected" : ""}" data-group-key="${group.group_key}">
+                <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${viewStep.raw_index}">
                     <div class="manage-step-head">
                         <div>
-                            <div class="step-title">${groupTitle}</div>
+                            <div class="step-title">${name}</div>
+                            ${desc}
+                            ${scheduleHtml}
+                        </div>
+                        <div class="step-actions">
+                            <label class="ios-switch" for="${switchId}">
+                                <input type="checkbox"
+                                       id="${switchId}"
+                                       class="ios-switch__input"
+                                       data-role="step-toggle"
+                                       data-account-id="${state.selectedAccountId}"
+                                       data-step-idx="${viewStep.raw_index}"
+                                       ${viewStep.is_active ? "checked" : ""}>
+                                <span class="ios-switch__slider" aria-hidden="true"></span>
+                            </label>
+                            ${scheduleButtonHtml}
                         </div>
                     </div>
-                    <div class="step-group">
-                        ${itemsHtml}
-                    </div>
                 </div>`;
-        };
-
-        const html = (state.steps || []).map((group) => renderGroupedStep(group)).join("");
+        }).join("");
 
         stepsRoot.innerHTML = html;
         updateHeaderText();
