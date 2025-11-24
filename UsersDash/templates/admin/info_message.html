@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Сообщение Инфо{% endblock %}
+
+{% block content %}
+<h1>Сообщение для блока «Инфо»</h1>
+
+<div class="kpi-row" style="margin-bottom: 16px;">
+    <div class="kpi-card" style="flex: 1 1 320px;">
+        <div class="kpi-label">Текущее сообщение</div>
+        {% if info_message %}
+            <div class="info-block-text" style="margin-top: 8px;">{{ info_message|replace('\n', '<br>')|safe }}</div>
+        {% else %}
+            <div class="kpi-empty">Сообщение не задано</div>
+        {% endif %}
+        {% if info_message_updated_at %}
+            <div class="status-note" style="margin-top: 8px;">Обновлено: {{ info_message_updated_at.strftime('%d.%m.%Y %H:%M') }}</div>
+        {% endif %}
+    </div>
+</div>
+
+<form method="post" class="card" style="margin-bottom: 24px;">
+    <label class="form-label" for="info_message">Новый текст для клиентов</label>
+    <textarea id="info_message" name="info_message" class="form-input" rows="4" placeholder="Введите сообщение, оно появится у всех клиентов в блоке Инфо.">{{ info_message }}</textarea>
+    <div class="status-note" style="margin: 10px 0 16px;">Строки перевода сохраняются.</div>
+    <button type="submit" class="btn btn-primary">Сохранить сообщение</button>
+</form>
+
+<h2>Что видят клиенты</h2>
+<div class="table-responsive">
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Клиент</th>
+            <th>Инфо</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for client in clients %}
+            <tr>
+                <td>{{ client.username }}</td>
+                <td>
+                    {% if info_message %}
+                        {{ info_message|replace('\n', '<br>')|safe }}
+                    {% else %}
+                        <span class="muted">—</span>
+                    {% endif %}
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

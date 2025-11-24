@@ -1028,7 +1028,77 @@
                         </div>
                     </div>
                 </div>`;
-        }).join("");
+        };
+
+        const renderGroupedStep = (group) => {
+            const items = Array.isArray(group.items) && group.items.length ? group.items : [group];
+            if (items.length <= 1) {
+                return renderSingleStep(items[0], group.name);
+            }
+
+            const groupTitle = group.name || items[0].name || "Шаги";
+            const isGroupSelected = items.some((item) => state.selectedStepIndex === item.raw_index);
+
+            const itemsHtml = items.map((item) => {
+                const rawStep = state.rawSteps[item.raw_index] || {};
+                const desc = item.description ? `<div class=\"step-desc step-group__item-desc\">${item.description}</div>` : "";
+                const schedule = scheduleSummary(item, rawStep);
+                const scheduleSummaryHtml = (isAdminManage && schedule)
+                    ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
+                    : "";
+                const scheduleHtml = scheduleSummaryHtml
+                    ? `<div class=\"step-schedule step-group__item-schedule\">${scheduleSummaryHtml}</div>`
+                    : "";
+                const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${item.raw_index}`;
+                const itemSelected = state.selectedStepIndex === item.raw_index;
+                const itemTitle = item.name || groupTitle;
+                const scheduleButtonHtml = isAdminManage
+                    ? [
+                        '<div class="step-actions__schedule">',
+                        `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${item.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
+                        '</div>',
+                    ].join("\n")
+                    : "";
+
+                return `
+                    <div class="step-group__item ${itemSelected ? "is-selected" : ""}" data-step-idx="${item.raw_index}">
+                        <div class="step-group__item-head">
+                            <div>
+                                <div class="step-group__item-title">${itemTitle}</div>
+                                ${desc}
+                                ${scheduleHtml}
+                            </div>
+                            <div class="step-actions">
+                                <label class="ios-switch" for="${switchId}">
+                                    <input type="checkbox"
+                                           id="${switchId}"
+                                           class="ios-switch__input"
+                                           data-role="step-toggle"
+                                           data-account-id="${state.selectedAccountId}"
+                                           data-step-idx="${item.raw_index}"
+                                           ${item.is_active ? "checked" : ""}>
+                                    <span class="ios-switch__slider" aria-hidden="true"></span>
+                                </label>
+                                ${scheduleButtonHtml}
+                            </div>
+                        </div>
+                    </div>`;
+            }).join("");
+
+            return `
+                <div class="manage-step-card manage-step-card--group ${isGroupSelected ? "is-selected" : ""}" data-group-key="${group.group_key}">
+                    <div class="manage-step-head">
+                        <div>
+                            <div class="step-title">${groupTitle}</div>
+                        </div>
+                    </div>
+                    <div class="step-group">
+                        ${itemsHtml}
+                    </div>
+                </div>`;
+        };
+
+        const html = (state.steps || []).map((group) => renderGroupedStep(group)).join("");
 
         stepsRoot.innerHTML = html;
         updateHeaderText();
@@ -1056,6 +1126,11 @@
         }
 
         const step = state.rawSteps[state.selectedStepIndex];
+        if (isStepHidden(step && step.ScriptId, step)) {
+            configRoot.innerHTML = '<div class="config-empty">Этот таймер скрыт.</div>';
+            updateHeaderText();
+            return;
+        }
         const cfg = step.Config || {};
         const title = getScriptTitle(step);
         const subtitle = state.selectedAccountName || "";
