@@ -565,7 +565,21 @@
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
             if (state.rawSteps[stepIdx]) {
-                state.rawSteps[stepIdx].Config = Object.assign({}, state.rawSteps[stepIdx].Config, payload);
+                const currentCfg = state.rawSteps[stepIdx].Config || {};
+                const mergedCfg = { ...currentCfg };
+
+                Object.entries(payload).forEach(([key, value]) => {
+                    const existing = currentCfg[key];
+                    const hasOptions = existing && typeof existing === "object" && Array.isArray(existing.options);
+
+                    if (hasOptions) {
+                        mergedCfg[key] = { ...existing, value };
+                    } else {
+                        mergedCfg[key] = value;
+                    }
+                });
+
+                state.rawSteps[stepIdx].Config = mergedCfg;
             }
             const now = Date.now();
             if (!isAuto || now - lastConfigToastAt > 4000) {
