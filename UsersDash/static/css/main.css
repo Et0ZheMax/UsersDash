@@ -424,18 +424,6 @@ h1 {
     background: linear-gradient(135deg, rgba(74, 222, 128, 0.2), rgba(74, 222, 128, 0.05));
 }
 
-.step-toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.6rem;
-}
-
-.step-toggle__label {
-    font-size: 0.9rem;
-    color: #9ca3af;
-    min-width: 72px;
-}
-
 .mini-toast-container {
     position: fixed;
     bottom: 10px;
@@ -1540,7 +1528,13 @@ h1 {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  align-items: flex-start;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.manage-step-head > div:first-child {
+  flex: 1;
+  min-width: 200px;
 }
 
 .step-title {
@@ -1568,6 +1562,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-shrink: 0;
 }
 
 .manage-loading,
