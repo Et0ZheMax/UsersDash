@@ -937,110 +937,86 @@
         }
     }
 
+
     function renderSteps() {
-        if (!stepsRoot) return;
+    // Если контейнер для шагов не найден — выходим
+    if (!stepsRoot) return;
 
-        if (!state.selectedAccountId) {
-            renderEmptyState("Выберите ферму слева, чтобы увидеть настройки.");
-            return;
-        }
-
-        if (!state.rawSteps || !state.rawSteps.length) {
-            renderEmptyState("Шаги для этой фермы не найдены.", state.debugInfo);
-            return;
-        }
-
-        const html = (state.steps || []).map((viewStep) => {
-            const rawStep = state.rawSteps[viewStep.raw_index] || {};
-            const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
-            const schedule = scheduleSummary(viewStep, rawStep);
-            const scheduleSummaryHtml = (isAdminManage && schedule)
-                ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
-                : "";
-            const scheduleHtml = scheduleSummaryHtml ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
-            const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${viewStep.raw_index}`;
-            const isSelected = state.selectedStepIndex === viewStep.raw_index;
-            const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${viewStep.index + 1}`;
-            const scheduleButtonHtml = isAdminManage
-                ? [
-                    '<div class="step-actions__schedule">',
-                    `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${viewStep.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
-                    '</div>',
-                ].join("\n")
-                : "";
-
-            return `
-                <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${viewStep.raw_index}">
-                    <div class="manage-step-head">
-                        <div>
-                            <div class="step-title">${name}</div>
-                            ${desc}
-                            ${scheduleHtml}
-                        </div>
-                        <div class="step-actions">
-                            <label class="ios-switch" for="${switchId}">
-                                <input type="checkbox"
-                                       id="${switchId}"
-                                       class="ios-switch__input"
-                                       data-role="step-toggle"
-                                       data-account-id="${state.selectedAccountId}"
-                                       data-step-idx="${viewStep.raw_index}"
-                                       ${viewStep.is_active ? "checked" : ""}>
-                                <span class="ios-switch__slider" aria-hidden="true"></span>
-                            </label>
-                            ${scheduleButtonHtml}
-                        </div>
-                    </div>
-                </div>`;
-        };
-
-        const html = (state.steps || []).map((viewStep) => {
-            const rawStep = state.rawSteps[viewStep.raw_index] || {};
-            const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
-            const schedule = scheduleSummary(viewStep, rawStep);
-            const scheduleSummaryHtml = (isAdminManage && schedule)
-                ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
-                : "";
-            const scheduleHtml = scheduleSummaryHtml ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
-            const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${viewStep.raw_index}`;
-            const isSelected = state.selectedStepIndex === viewStep.raw_index;
-            const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${viewStep.index + 1}`;
-            const scheduleButtonHtml = isAdminManage
-                ? [
-                    '<div class="step-actions__schedule">',
-                    `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${viewStep.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
-                    '</div>',
-                ].join("\n")
-                : "";
-
-            return `
-                <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${viewStep.raw_index}">
-                    <div class="manage-step-head">
-                        <div>
-                            <div class="step-title">${name}</div>
-                            ${desc}
-                            ${scheduleHtml}
-                        </div>
-                        <div class="step-actions">
-                            <label class="ios-switch" for="${switchId}">
-                                <input type="checkbox"
-                                       id="${switchId}"
-                                       class="ios-switch__input"
-                                       data-role="step-toggle"
-                                       data-account-id="${state.selectedAccountId}"
-                                       data-step-idx="${viewStep.raw_index}"
-                                       ${viewStep.is_active ? "checked" : ""}>
-                                <span class="ios-switch__slider" aria-hidden="true"></span>
-                            </label>
-                            ${scheduleButtonHtml}
-                        </div>
-                    </div>
-                </div>`;
-        }).join("");
-
-        stepsRoot.innerHTML = html;
-        updateHeaderText();
+    // Если ещё не выбрана ферма
+    if (!state.selectedAccountId) {
+        renderEmptyState("Выберите ферму слева, чтобы увидеть настройки.");
+        return;
     }
+
+    // Если по выбранной ферме нет шагов
+    if (!state.rawSteps || !state.rawSteps.length) {
+        renderEmptyState("Шаги для этой фермы не найдены.", state.debugInfo);
+        return;
+    }
+
+    // Рендерим карточки шагов
+    const html = (state.steps || []).map((viewStep) => {
+        const rawStep = state.rawSteps[viewStep.raw_index] || {};
+        const desc = viewStep.description
+            ? `<div class="step-desc">${viewStep.description}</div>`
+            : "";
+
+        const schedule = scheduleSummary(viewStep, rawStep);
+        const scheduleSummaryHtml = (isAdminManage && schedule)
+            ? `<span class="step-schedule__summary">⏱ ${schedule}</span>`
+            : "";
+        const scheduleHtml = scheduleSummaryHtml
+            ? `<div class="step-schedule">${scheduleSummaryHtml}</div>`
+            : "";
+
+        const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${viewStep.raw_index}`;
+        const isSelected = state.selectedStepIndex === viewStep.raw_index;
+        const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${viewStep.index + 1}`;
+
+        // Кнопка редактирования расписания отображается только в админ-версии
+        const scheduleButtonHtml = isAdminManage
+            ? [
+                '<div class="step-actions__schedule">',
+                `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${viewStep.raw_index}" aria-label="Редактировать расписание шага">⏲</button>`,
+                '</div>',
+            ].join("\n")
+            : "";
+
+        return `
+            <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${viewStep.raw_index}">
+                <div class="manage-step-head">
+                    <div>
+                        <div class="step-title">${name}</div>
+                        ${desc}
+                        ${scheduleHtml}
+                    </div>
+                    <div class="step-actions">
+                        <label class="ios-switch" for="${switchId}">
+                            <input
+                                type="checkbox"
+                                id="${switchId}"
+                                class="ios-switch__input"
+                                data-role="step-toggle"
+                                data-account-id="${state.selectedAccountId}"
+                                data-step-idx="${viewStep.raw_index}"
+                                ${viewStep.is_active ? "checked" : ""}
+                            >
+                            <span class="ios-switch__slider" aria-hidden="true"></span>
+                        </label>
+                        ${scheduleButtonHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    // Вставляем HTML в DOM
+    stepsRoot.innerHTML = html;
+
+    // Обновляем заголовки справа / сверху
+    updateHeaderText();
+}
+
 
     let currentConfigForm = null;
     let configAutoSaveTimer = null;
