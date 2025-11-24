@@ -60,7 +60,7 @@
 
         {% if status and status.has_issues %}
             <div class="status-chip status-chip--warning">Требуется внимание</div>
-            <div class="status-list status-list--scrollable">
+            <div class="status-list">
                 {% if status.missing_details %}
                     {% for item in status.missing_details %}
                         <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
