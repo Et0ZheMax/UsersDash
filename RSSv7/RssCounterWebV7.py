@@ -128,8 +128,9 @@ SCHEMA_TTL_SECONDS   = 600  # 10 минут
 SERVER_NAME     = os.getenv("SERVER_NAME", CONFIG.get("SERVER_NAME", socket.gethostname()))
 
 # 3) БД
-RESOURCES_DB = os.path.join(BASE_DIR, "resources_web.db")
-LOGS_DB      = os.path.join(BASE_DIR, "logs_cache.db")
+RESOURCES_DB   = os.path.join(BASE_DIR, "resources_web.db")
+LOGS_DB        = os.path.join(BASE_DIR, "logs_cache.db")
+USERDASH_DB    = os.path.abspath(os.path.join(BASE_DIR, "..", "UsersDash", "data", "app.db"))
 
 # 4) Телега — из ENV имеет приоритет, затем config.json
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", CONFIG.get("TELEGRAM_TOKEN", ""))
@@ -2243,17 +2244,11 @@ def api_screenshot():
     b64 = base64.b64encode(buf.getvalue()).decode()
     return jsonify({"data": f"data:image/png;base64,{b64}"})
 
-@app.route("/api/accounts_profile", methods=["PATCH"])
-def api_accounts_profile():
-    """
-    Получает список {id,email,passwd,igg} и
-    обновляет FRESH_NOX.json (только эти поля).
-    """
-    payload = request.json or []
+def apply_profile_updates(payload: list[dict]):
     rec_map = {p["id"]: p for p in payload}
 
     if not os.path.exists(PROFILE_PATH):
-        return jsonify({"err":"profile not found"}),404
+        raise FileNotFoundError(PROFILE_PATH)
 
     with open(PROFILE_PATH, "r", encoding="utf-8") as f:
         prof = json.load(f)
@@ -2279,6 +2274,21 @@ def api_accounts_profile():
         json.dump(prof, f, ensure_ascii=False, indent=2)
 
     sync_account_meta()      # ← NEW
+
+
+@app.route("/api/accounts_profile", methods=["PATCH"])
+def api_accounts_profile():
+    """
+    Получает список {id,email,passwd,igg} и
+    обновляет FRESH_NOX.json (только эти поля).
+    """
+    payload = request.json or []
+
+    try:
+        apply_profile_updates(payload)
+    except FileNotFoundError:
+        return jsonify({"err":"profile not found"}),404
+
     return jsonify({"status":"ok"})
 
 @app.route("/api/log_slice")
@@ -2353,78 +2363,101 @@ def api_apply_template(acc_id):
         return jsonify({"error": "internal", "details": str(e)}), 500
 
 
+def _normalize_date_str(value: str) -> str:
+    """Приводит строки дат к YYYY-MM-DD или возвращает ""."""
+    if not value:
+        return ""
+
+    try:
+        dt = datetime.fromisoformat(str(value).strip())
+        return dt.date().isoformat()
+    except Exception:
+        try:
+            dt = datetime.strptime(str(value).split()[0], "%Y-%m-%d")
+            return dt.date().isoformat()
+        except Exception:
+            return ""
+
+
+def load_accounts_meta_full(ids: set[str] | None = None) -> list[dict]:
+    """Возвращает список аккаунтов c мета-данными так же, как api_accounts_meta_full."""
+    # 1) читаем профиль (только активные)
+    profile = []
+    if os.path.exists(PROFILE_PATH):
+        with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+            for a in json.load(f):
+                if not a.get("Active"):
+                    continue
+                if ids and a.get("Id") not in ids:
+                    continue
+
+                # --- E-mail / Pass / IGG из профиля ---
+                email = passwd = igg = ""
+                try:
+                    md = json.loads(a.get("MenuData", "{}"))
+                    cfg = md.get("Config", {})
+                    email  = cfg.get("Email", "") or ""
+                    passwd = cfg.get("Password", "") or ""
+                    igg    = cfg.get("Custom", "") or ""
+                except Exception:
+                    pass
+
+                profile.append({
+                    "id": a.get("Id"),
+                    "name": a.get("Name", ""),
+                    "email": email,
+                    "passwd": passwd,
+                    "igg": igg,
+                    "server": SERVER,
+                })
+
+    # 2) account_meta: берём ВСЕ поля, чтобы был фолбэк для учёток
+    conn = open_db(RESOURCES_DB)
+    c = conn.cursor()
+    meta = {
+        r[0]: {
+            "email":      r[1] or "",
+            "passwd":     r[2] or "",
+            "igg":        r[3] or "",
+            "pay_until":  r[4] or "",
+            "tariff_rub": r[5] or 0,
+            "server":     r[6] or "",
+            "tg_tag":     r[7] or "",
+        }
+        for r in c.execute(
+            """
+                SELECT id, email, passwd, igg, pay_until, tariff_rub, server, tg_tag
+                FROM account_meta
+            """
+        )
+    }
+    conn.close()
+
+    # 3) объединяем с фолбэком: пустые поля из профиля → подставляем из БД
+    out = []
+    for p in profile:
+        m = meta.get(p["id"], {})
+        merged = {
+            "id": p.get("id"),
+            "name": p.get("name", ""),
+            "email": p.get("email") or m.get("email", ""),
+            "passwd": p.get("passwd") or m.get("passwd", ""),
+            "igg": p.get("igg") or m.get("igg", ""),
+            "pay_until": m.get("pay_until", ""),
+            "tariff_rub": m.get("tariff_rub", 0) or 0,
+            "server": p.get("server") or m.get("server") or SERVER,
+            "tg_tag": m.get("tg_tag", ""),
+        }
+        out.append(merged)
+
+    return out
+
+
 @app.route("/api/accounts_meta_full")
 def api_accounts_meta_full():
     try:
-        # ids фильтр
         ids = set(filter(None, request.args.get("ids", "").split(","))) or None
-
-        # 1) читаем профиль (только активные)
-        profile = []
-        if os.path.exists(PROFILE_PATH):
-            with open(PROFILE_PATH, "r", encoding="utf-8") as f:
-                for a in json.load(f):
-                    if not a.get("Active"):
-                        continue
-                    if ids and a.get("Id") not in ids:
-                        continue
-
-                    # --- E-mail / Pass / IGG из профиля ---
-                    email = passwd = igg = ""
-                    try:
-                        md = json.loads(a.get("MenuData", "{}"))
-                        cfg = md.get("Config", {})
-                        email  = cfg.get("Email", "") or ""
-                        passwd = cfg.get("Password", "") or ""
-                        igg    = cfg.get("Custom", "") or ""
-                    except Exception:
-                        pass
-
-                    profile.append({
-                        "id": a.get("Id"),
-                        "name": a.get("Name", ""),
-                        "email": email,
-                        "passwd": passwd,
-                        "igg": igg,
-                        "server": SERVER,
-                    })
-
-        # 2) account_meta: берём ВСЕ поля, чтобы был фолбэк для учёток
-        conn = open_db(RESOURCES_DB)
-        c = conn.cursor()
-        meta = {
-            r[0]: {
-                "email":      r[1] or "",
-                "passwd":     r[2] or "",
-                "igg":        r[3] or "",
-                "pay_until":  r[4] or "",
-                "tariff_rub": r[5] or 0,
-                "server":     r[6] or "",
-                "tg_tag":     r[7] or "",
-            }
-            for r in c.execute("""
-                SELECT id, email, passwd, igg, pay_until, tariff_rub, server, tg_tag
-                FROM account_meta
-            """)
-        }
-        conn.close()
-
-        # 3) объединяем с фолбэком: пустые поля из профиля → подставляем из БД
-        out = []
-        for p in profile:
-            m = meta.get(p["id"], {})
-            merged = {
-                "id": p.get("id"),
-                "name": p.get("name", ""),
-                "email": p.get("email") or m.get("email", ""),
-                "passwd": p.get("passwd") or m.get("passwd", ""),
-                "igg": p.get("igg") or m.get("igg", ""),
-                "pay_until": m.get("pay_until", ""),
-                "tariff_rub": m.get("tariff_rub", 0) or 0,
-                "server": p.get("server") or m.get("server") or SERVER,
-                "tg_tag": m.get("tg_tag", ""),
-            }
-            out.append(merged)
+        out = load_accounts_meta_full(ids)
 
         return jsonify({
             "ok": True,
@@ -2434,6 +2467,241 @@ def api_accounts_meta_full():
         })
     except Exception as exc:
         app.logger.exception("api_accounts_meta_full failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+def load_usersdash_accounts(server_name: str) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+    if not os.path.exists(USERDASH_DB):
+        errors.append(f"UsersDash DB не найден: {USERDASH_DB}")
+        return [], errors
+
+    conn = open_db(USERDASH_DB)
+    c = conn.cursor()
+    srv_row = c.execute(
+        "SELECT id, name FROM servers WHERE name=? LIMIT 1",
+        (server_name,),
+    ).fetchone()
+
+    if not srv_row:
+        conn.close()
+        errors.append(f"Сервер '{server_name}' не найден в UsersDash")
+        return [], errors
+
+    srv_id = srv_row[0]
+    rows = c.execute(
+        """
+            SELECT a.id, a.name, a.internal_id, a.is_active,
+                   a.next_payment_at, a.next_payment_amount,
+                   fd.email, fd.password, fd.igg_id, fd.server, fd.telegram_tag
+            FROM accounts a
+            LEFT JOIN farm_data fd
+              ON fd.user_id = a.owner_id AND fd.farm_name = a.name
+            WHERE a.server_id=? AND a.is_active IS NOT 0
+        """,
+        (srv_id,),
+    ).fetchall()
+    conn.close()
+
+    items = []
+    for r in rows:
+        items.append({
+            "usersdash_id": r[0],
+            "name": r[1] or "",
+            "internal_id": str(r[2]) if r[2] is not None else "",
+            "is_active": bool(r[3]),
+            "next_payment_at": _normalize_date_str(r[4]),
+            "tariff": r[5],
+            "email": r[6] or "",
+            "password": r[7] or "",
+            "igg_id": r[8] or "",
+            "server": r[9] or "",
+            "telegram": r[10] or "",
+        })
+
+    return items, errors
+
+
+@app.route("/api/usersdash_sync_preview")
+def api_usersdash_sync_preview():
+    try:
+        local_items = load_accounts_meta_full(None)
+        remote_items, errors = load_usersdash_accounts(SERVER)
+
+        remote_by_internal = {
+            r.get("internal_id"): r for r in remote_items if r.get("internal_id")
+        }
+        remote_by_name = {r.get("name"): r for r in remote_items if r.get("name")}
+
+        changes: list[dict] = []
+
+        field_map = [
+            ("email", "email", "email"),
+            ("password", "passwd", "password"),
+            ("igg_id", "igg", "igg_id"),
+            ("server", "server", "server"),
+            ("telegram", "tg_tag", "telegram"),
+            ("next_payment_at", "pay_until", "next_payment_at"),
+            ("tariff", "tariff_rub", "tariff"),
+        ]
+
+        for loc in local_items:
+            lid = str(loc.get("id") or "")
+            lname = loc.get("name") or ""
+
+            rem = None
+            if lid and lid in remote_by_internal:
+                rem = remote_by_internal[lid]
+            elif lname and lname in remote_by_name:
+                rem = remote_by_name[lname]
+
+            if not rem:
+                continue
+
+            for field, local_key, remote_key in field_map:
+                lv_raw = loc.get(local_key, "")
+                rv_raw = rem.get(remote_key, "")
+
+                if field == "next_payment_at":
+                    lv = _normalize_date_str(lv_raw)
+                    rv = _normalize_date_str(rv_raw)
+                elif field == "tariff":
+                    lv = "" if lv_raw in (None, "") else str(lv_raw)
+                    rv = "" if rv_raw in (None, "") else str(rv_raw)
+                else:
+                    lv = str(lv_raw or "")
+                    rv = str(rv_raw or "")
+
+                if lv == rv:
+                    continue
+
+                changes.append({
+                    "id": lid,
+                    "name": lname,
+                    "field": field,
+                    "local": lv,
+                    "remote": rv,
+                    "usersdash_id": rem.get("usersdash_id"),
+                })
+
+        return jsonify({"ok": True, "changes": changes, "errors": errors})
+    except Exception as exc:
+        app.logger.exception("api_usersdash_sync_preview failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/usersdash_sync_apply", methods=["POST"])
+def api_usersdash_sync_apply():
+    try:
+        payload = request.get_json(silent=True) or {}
+        changes = payload.get("changes") or []
+        if not isinstance(changes, list) or not changes:
+            return jsonify({"ok": False, "error": "Нет изменений для применения"}), 400
+
+        updates: dict[str, dict] = {}
+        for ch in changes:
+            acc_id = str(ch.get("id") or ch.get("internal_id") or "").strip()
+            field = ch.get("field")
+            remote_val = ch.get("remote")
+            if not acc_id or not field:
+                continue
+
+            rec = updates.setdefault(acc_id, {"id": acc_id})
+
+            if field == "email":
+                rec["email"] = remote_val or ""
+            elif field == "password":
+                rec["passwd"] = remote_val or ""
+            elif field == "igg_id":
+                rec["igg"] = remote_val or ""
+            elif field == "server":
+                rec["server"] = remote_val or ""
+            elif field == "telegram":
+                rec["tg_tag"] = remote_val or ""
+            elif field == "next_payment_at":
+                rec["pay_until"] = _normalize_date_str(remote_val)
+            elif field == "tariff":
+                try:
+                    rec["tariff_rub"] = int(remote_val)
+                except Exception:
+                    rec["tariff_rub"] = None
+
+        if not updates:
+            return jsonify({"ok": False, "error": "Нет валидных изменений"}), 400
+
+        conn = open_db(RESOURCES_DB)
+        c = conn.cursor()
+
+        # Текущие значения для аккуратного мерджа
+        existing: dict[str, dict] = {}
+        placeholders = ",".join("?" for _ in updates)
+        if placeholders:
+            for row in c.execute(
+                f"SELECT id, email, passwd, igg, pay_until, tariff_rub, server, tg_tag "
+                f"FROM account_meta WHERE id IN ({placeholders})",
+                tuple(updates.keys()),
+            ):
+                existing[str(row[0])] = {
+                    "email": row[1] or "",
+                    "passwd": row[2] or "",
+                    "igg": row[3] or "",
+                    "pay_until": row[4] or "",
+                    "tariff_rub": row[5],
+                    "server": row[6] or "",
+                    "tg_tag": row[7] or "",
+                }
+
+        merged_rows = []
+        profile_payload = []
+        for acc_id, rec in updates.items():
+            base = existing.get(acc_id, {
+                "email": "",
+                "passwd": "",
+                "igg": "",
+                "pay_until": "",
+                "tariff_rub": None,
+                "server": "",
+                "tg_tag": "",
+            })
+
+            merged = {**base}
+            for k, v in rec.items():
+                if k == "id":
+                    continue
+                merged[k] = v if v is not None else ""
+
+            merged_rows.append({"id": acc_id, **merged})
+            profile_payload.append({
+                "id": acc_id,
+                "email": merged.get("email", ""),
+                "passwd": merged.get("passwd", ""),
+                "igg": merged.get("igg", ""),
+            })
+
+        cols = ["email","passwd","igg","pay_until","tariff_rub","server","tg_tag"]
+        for rec in merged_rows:
+            vals = [rec.get(k) for k in cols]
+            c.execute(
+                f"""
+                   INSERT INTO account_meta(id,{','.join(cols)})
+                   VALUES(?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     {', '.join([f'{k}=excluded.{k}' for k in cols])}
+                """,
+                [rec["id"], *vals],
+            )
+
+        conn.commit()
+        conn.close()
+
+        try:
+            apply_profile_updates(profile_payload)
+        except FileNotFoundError:
+            return jsonify({"ok": False, "error": "PROFILE_PATH не найден"}), 404
+
+        return jsonify({"ok": True, "updated": len(merged_rows)})
+    except Exception as exc:
+        app.logger.exception("api_usersdash_sync_apply failed")
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
