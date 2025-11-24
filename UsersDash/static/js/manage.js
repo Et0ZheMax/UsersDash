@@ -234,7 +234,19 @@
     function scheduleSummary(stepView, rawStep) {
         if (stepView && stepView.schedule_summary) return stepView.schedule_summary;
         const rules = (rawStep && rawStep.ScheduleRules) || [];
-        const summaries = rules.map(formatScheduleRule).filter(Boolean);
+        const summaries = rules.map((rule) => {
+            if (rule && typeof rule === "object" && typeof rule.Val1 === "string") {
+                const [daysRaw, startRaw, endRaw] = rule.Val1.split("|").map((s) => (s || "").trim());
+                const days = daysRaw ? daysRaw.split(",").map((d) => d.trim()).filter(Boolean) : null;
+                const legacyRule = {
+                    Days: days && days.length ? days : undefined,
+                    StartAt: startRaw || undefined,
+                    EndAt: endRaw || undefined,
+                };
+                return formatScheduleRule(legacyRule);
+            }
+            return formatScheduleRule(rule);
+        }).filter(Boolean);
         if (summaries.length) return summaries.join("; ");
         if (rules.length) return `${rules.length} правил расписания`;
         return "";
