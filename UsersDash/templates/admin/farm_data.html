@@ -558,6 +558,26 @@ document.addEventListener("DOMContentLoaded", function () {
         };
     }
 
+    function showMiniToast(message, type = "info") {
+        let container = document.querySelector(".mini-toast-container--top");
+        if (!container) {
+            container = document.createElement("div");
+            container.className = "mini-toast-container mini-toast-container--top";
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement("div");
+        toast.className = `mini-toast mini-toast--${type}`;
+        toast.textContent = message;
+
+        container.innerHTML = "";
+        container.appendChild(toast);
+
+        requestAnimationFrame(() => toast.classList.add("is-visible"));
+        setTimeout(() => toast.classList.remove("is-visible"), 1600);
+        setTimeout(() => toast.remove(), 2000);
+    }
+
     function formatFarmLabel(tr) {
         if (!tr) return "ферма";
         const owner = tr.dataset.ownerName || "";
@@ -630,6 +650,20 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    function setTariffSelection(cell, priceValue) {
+        if (!cell) return;
+        if (priceValue === undefined || priceValue === null || priceValue === "") {
+            delete cell.dataset.selectedTariffPrice;
+        } else {
+            cell.dataset.selectedTariffPrice = String(priceValue);
+        }
+    }
+
+    function getTariffSelection(cell) {
+        if (!cell) return "";
+        return cell.dataset.selectedTariffPrice || "";
+    }
+
     function updateTariffDropdownState(cell, selectedPrice) {
         const dropdown = cell ? cell.querySelector('[data-role="tariff-dropdown"]') : null;
         if (!dropdown) return;
@@ -679,7 +713,11 @@ document.addEventListener("DOMContentLoaded", function () {
         if (shouldOpen) {
             const input = cell.querySelector('input[name="tariff"]');
             const { normalized } = normalizeTariffInput(input ? input.value : "");
-            updateTariffDropdownState(cell, normalized || (input ? input.value : ""));
+            const selectedPrice = getTariffSelection(cell);
+            updateTariffDropdownState(
+                cell,
+                selectedPrice || normalized || (input ? input.value : "")
+            );
         }
 
         dropdown.hidden = !shouldOpen;
@@ -692,11 +730,27 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!label) return;
 
         const { normalized, isValid } = normalizeTariffInput(input.value);
+        const selectedPrice = getTariffSelection(cell);
         label.classList.remove("tariff-label--premium");
 
         if (!normalized && !input.value) {
             label.textContent = "Тариф не назначен";
+            setTariffSelection(cell, "");
             updateTariffDropdownState(cell, "");
+            return;
+        }
+
+        if (selectedPrice) {
+            const tariffName = TARIFF_PRICE_MAP[selectedPrice] || TARIFF_PRICE_MAP[String(selectedPrice)];
+            if (tariffName) {
+                label.textContent = tariffName;
+                if (tariffName === PREMIUM_TARIFF_NAME) {
+                    label.classList.add("tariff-label--premium");
+                }
+            } else {
+                label.textContent = `Тариф: ${selectedPrice} ₽`;
+            }
+            updateTariffDropdownState(cell, selectedPrice);
             return;
         }
 
@@ -711,6 +765,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (tariffName) {
             label.textContent = tariffName;
+            setTariffSelection(cell, normalized);
             if (tariffName === PREMIUM_TARIFF_NAME) {
                 label.classList.add("tariff-label--premium");
             }
@@ -718,7 +773,7 @@ document.addEventListener("DOMContentLoaded", function () {
             label.textContent = `Тариф не распознан (${numericValue} ₽)`;
         }
 
-        updateTariffDropdownState(cell, normalized);
+        updateTariffDropdownState(cell, selectedPrice || normalized);
     }
 
     const adminFarmDataWatchedFields = new Set([
@@ -868,8 +923,14 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             const now = Date.now();
+            const toastFn = isAuto ? showMiniToast : showToast;
             if (!isAuto || now - lastAdminAutoSaveToastAt > 8000) {
-                showToast(isAuto ? "Изменения сохранены автоматически." : "Данные ферм сохранены.", "success");
+                toastFn(
+                    isAuto
+                        ? "Изменения сохранены автоматически."
+                        : "Данные ферм сохранены.",
+                    "success"
+                );
                 if (isAuto) {
                     lastAdminAutoSaveToastAt = now;
                 }
@@ -976,6 +1037,7 @@ document.addEventListener("DOMContentLoaded", function () {
             const cell = optionBtn.closest('[data-role="tariff-cell"]');
             const input = cell ? cell.querySelector('input[name="tariff"]') : null;
             if (input) {
+                setTariffSelection(cell, optionBtn.dataset.price || "");
                 input.value = optionBtn.dataset.price || "";
                 input.dispatchEvent(new Event("input", { bubbles: true }));
                 updateTariffLabel(input);
