@@ -355,8 +355,10 @@
             const viewStep = state.steps[idx] || {};
             const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
             const schedule = scheduleSummary(viewStep, rawStep);
-            const scheduleSummaryHtml = schedule ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>` : "";
-            const scheduleHtml = schedule ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
+            const scheduleSummaryHtml = (isAdminManage && schedule)
+                ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>`
+                : "";
+            const scheduleHtml = scheduleSummaryHtml ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
             const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${idx}`;
             const isSelected = state.selectedStepIndex === idx;
             const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${idx + 1}`;
