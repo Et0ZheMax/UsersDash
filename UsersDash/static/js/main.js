@@ -328,9 +328,7 @@
         }
 
     const farmDataWatchedFields = new Set(["email", "password", "igg_id", "server", "telegram_tag"]);
-    let farmDataAutoSaveTimer = null;
     let farmDataSaveInProgress = false;
-    let farmDataAutoSaveQueued = false;
     let lastAutoSaveToastAt = 0;
 
     function setFarmDataSavingState(isSaving, isAuto) {
@@ -385,10 +383,6 @@
 
     async function handleFarmDataSave(btn, options = {}) {
         const isAuto = Boolean(options.isAuto);
-        if (farmDataAutoSaveTimer) {
-            clearTimeout(farmDataAutoSaveTimer);
-            farmDataAutoSaveTimer = null;
-        }
         const { items, rows, missingTable } = collectClientFarmDataItems();
         if (missingTable) {
             if (!isAuto) {
@@ -412,7 +406,6 @@
 
         if (isAuto) {
             if (farmDataSaveInProgress) {
-                farmDataAutoSaveQueued = true;
                 return;
             }
             farmDataSaveInProgress = true;
@@ -459,10 +452,6 @@
             if (isAuto) {
                 farmDataSaveInProgress = false;
                 setFarmDataSavingState(false);
-                if (farmDataAutoSaveQueued) {
-                    farmDataAutoSaveQueued = false;
-                    scheduleFarmDataAutoSave();
-                }
             } else {
                 setButtonLoading(btn, false);
                 const textEl = btn ? findBtnTextEl(btn) : null;
@@ -474,13 +463,10 @@
     }
 
     function scheduleFarmDataAutoSave() {
-        if (farmDataAutoSaveTimer) {
-            clearTimeout(farmDataAutoSaveTimer);
+        if (farmDataSaveInProgress) {
+            return;
         }
-        farmDataAutoSaveTimer = setTimeout(function () {
-            farmDataAutoSaveTimer = null;
-            handleFarmDataSave(null, { isAuto: true });
-        }, 900);
+        handleFarmDataSave(null, { isAuto: true });
     }
 
     function handleClientFarmDataChange(event) {
