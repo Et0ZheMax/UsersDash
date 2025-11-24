@@ -944,6 +944,8 @@
             form.appendChild(field);
         });
 
+        renderScheduleEditor(form, step);
+
         const footer = document.createElement("div");
         footer.className = "config-footer";
         const saveBtn = document.createElement("button");
