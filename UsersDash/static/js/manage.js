@@ -312,7 +312,7 @@
             const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
             const schedule = scheduleSummary(viewStep, rawStep);
             const scheduleHtml = schedule ? `<div class=\"step-schedule\">⏱ ${schedule}</div>` : "";
-            const buttonText = viewStep.is_active ? "Отключить" : "Включить";
+            const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${idx}`;
             const statusBadge = viewStep.is_active
                 ? '<span class="status-chip status-chip--ok">Активен</span>'
                 : '<span class="status-chip status-chip--warning">Выключен</span>';
@@ -329,14 +329,17 @@
                         </div>
                         <div class="step-actions">
                             ${statusBadge}
-                            <button class="btn btn-small btn-ghost"
-                                    data-action="toggle-step"
-                                    data-account-id="${state.selectedAccountId}"
-                                    data-step-idx="${idx}"
-                                    data-current-active="${viewStep.is_active ? "1" : "0"}">
-                                <span class="btn-text">${buttonText}</span>
-                                <span class="btn-spinner" hidden></span>
-                            </button>
+                            <label class="ios-switch" for="${switchId}">
+                                <input type="checkbox"
+                                       id="${switchId}"
+                                       class="ios-switch__input"
+                                       data-role="step-toggle"
+                                       data-account-id="${state.selectedAccountId}"
+                                       data-step-idx="${idx}"
+                                       ${viewStep.is_active ? "checked" : ""}>
+                                <span class="ios-switch__slider" aria-hidden="true"></span>
+                            </label>
+                            <span class="step-toggle__label">${viewStep.is_active ? "Активен" : "Выключен"}</span>
                         </div>
                     </div>
                 </div>`;
@@ -346,9 +349,20 @@
         updateHeaderText();
     }
 
+    let currentConfigForm = null;
+    let configAutoSaveTimer = null;
+    let configSaveInProgress = false;
+    let configAutoSaveQueued = false;
+    let lastConfigToastAt = 0;
+
     function renderConfig() {
         if (!configRoot) return;
         configRoot.innerHTML = "";
+
+        if (configAutoSaveTimer) {
+            clearTimeout(configAutoSaveTimer);
+            configAutoSaveTimer = null;
+        }
 
         if (state.selectedStepIndex === null || !state.rawSteps[state.selectedStepIndex]) {
             configRoot.innerHTML = '<div class="config-empty">Выберите шаг, чтобы редактировать настройки.</div>';
@@ -430,10 +444,16 @@
         footer.className = "config-footer";
         const saveBtn = document.createElement("button");
         saveBtn.className = "btn btn-primary btn-small";
-        saveBtn.textContent = "Сохранить";
+        saveBtn.textContent = "Сохранить сейчас";
         saveBtn.addEventListener("click", () => saveConfig(state.selectedStepIndex, form, cfg));
         footer.appendChild(saveBtn);
         form.appendChild(footer);
+
+        form.dataset.stepIdx = String(state.selectedStepIndex);
+        form.addEventListener("input", () => scheduleConfigAutoSave(state.selectedStepIndex, form, cfg));
+        form.addEventListener("change", () => scheduleConfigAutoSave(state.selectedStepIndex, form, cfg));
+
+        currentConfigForm = form;
 
         configRoot.appendChild(form);
         updateHeaderText();
@@ -448,28 +468,28 @@
         });
     }
 
-    async function toggleStep(accountId, stepIdx, currentActive, button) {
+    async function toggleStep(accountId, stepIdx, nextActive, control) {
         if (!accountId) return;
-        const newActive = currentActive === "1" ? false : true;
-        if (button) button.disabled = true;
+        const desiredState = Boolean(nextActive);
+        if (control) control.disabled = true;
         try {
             const url = replaceStepTemplate(state.toggleUrlTemplate, accountId, stepIdx);
             const resp = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
-                body: JSON.stringify({ is_active: newActive }),
+                body: JSON.stringify({ is_active: desiredState }),
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
-            if (state.steps[stepIdx]) state.steps[stepIdx].is_active = newActive;
-            if (state.rawSteps[stepIdx]) state.rawSteps[stepIdx].IsActive = newActive;
+            if (state.steps[stepIdx]) state.steps[stepIdx].is_active = desiredState;
+            if (state.rawSteps[stepIdx]) state.rawSteps[stepIdx].IsActive = desiredState;
             renderSteps();
             renderConfig();
         } catch (err) {
             console.error(err);
             alert(err.message || "Не удалось обновить шаг");
         } finally {
-            if (button) button.disabled = false;
+            if (control) control.disabled = false;
         }
     }
 
@@ -494,8 +514,53 @@
         return result;
     }
 
-    async function saveConfig(stepIdx, formEl, cfg) {
+    function showMiniToast(message, type = "info") {
+        let container = document.querySelector(".mini-toast-container");
+        if (!container) {
+            container = document.createElement("div");
+            container.className = "mini-toast-container";
+            document.body.appendChild(container);
+        }
+
+        const toast = document.createElement("div");
+        toast.className = `mini-toast mini-toast--${type}`;
+        toast.textContent = message;
+        container.innerHTML = "";
+        container.appendChild(toast);
+
+        requestAnimationFrame(() => toast.classList.add("is-visible"));
+        setTimeout(() => toast.classList.remove("is-visible"), 1600);
+        setTimeout(() => toast.remove(), 2000);
+    }
+
+    function scheduleConfigAutoSave(stepIdx, formEl, cfg) {
+        if (!formEl || !cfg || formEl !== currentConfigForm) return;
+        if (Number(formEl.dataset.stepIdx) !== stepIdx) return;
+
+        if (configAutoSaveTimer) {
+            clearTimeout(configAutoSaveTimer);
+        }
+
+        configAutoSaveTimer = setTimeout(() => {
+            configAutoSaveTimer = null;
+            saveConfig(stepIdx, formEl, cfg, { isAuto: true });
+        }, 650);
+    }
+
+    async function saveConfig(stepIdx, formEl, cfg, options = {}) {
+        const isAuto = Boolean(options.isAuto);
         if (!state.selectedAccountId) return;
+        if (isAuto && configSaveInProgress) {
+            configAutoSaveQueued = true;
+            return;
+        }
+        if (isAuto) {
+            configSaveInProgress = true;
+        }
+        if (configAutoSaveTimer) {
+            clearTimeout(configAutoSaveTimer);
+            configAutoSaveTimer = null;
+        }
         const payload = collectConfig(formEl, cfg || {});
         try {
             const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
@@ -509,10 +574,23 @@
             if (state.rawSteps[stepIdx]) {
                 state.rawSteps[stepIdx].Config = Object.assign({}, state.rawSteps[stepIdx].Config, payload);
             }
+            const now = Date.now();
+            if (!isAuto || now - lastConfigToastAt > 4000) {
+                showMiniToast("Сохранено", "success");
+                lastConfigToastAt = now;
+            }
             renderConfig();
         } catch (err) {
             console.error(err);
             alert(err.message || "Не удалось сохранить настройки");
+        } finally {
+            if (isAuto) {
+                configSaveInProgress = false;
+                if (configAutoSaveQueued) {
+                    configAutoSaveQueued = false;
+                    scheduleConfigAutoSave(stepIdx, formEl, cfg);
+                }
+            }
         }
     }
 
@@ -660,14 +738,15 @@
     }
 
     function handleStepsClick(event) {
-        const toggleBtn = event.target.closest('[data-action="toggle-step"]');
-        if (toggleBtn) {
-            const stepIdx = Number(toggleBtn.dataset.stepIdx);
+        const toggleInput = event.target.closest('[data-role="step-toggle"]');
+        if (toggleInput) {
+            event.stopPropagation();
+            const stepIdx = Number(toggleInput.dataset.stepIdx);
             toggleStep(
-                toggleBtn.dataset.accountId,
+                toggleInput.dataset.accountId,
                 stepIdx,
-                toggleBtn.dataset.currentActive,
-                toggleBtn
+                toggleInput.checked,
+                toggleInput
             );
             return;
         }
