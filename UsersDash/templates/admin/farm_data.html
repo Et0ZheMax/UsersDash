@@ -611,39 +611,43 @@ document.addEventListener("DOMContentLoaded", function () {
         return { normalized: "", isValid: false };
     }
 
-    document.addEventListener("input", function (e) {
-        const target = e.target;
-        if (target.matches('input[name="igg_id"]')) {
-            const digits = target.value.replace(/\\D+/g, "");
-            if (target.value !== digits) {
-                target.value = digits;
-            }
-        }
-    });
+    const adminFarmDataWatchedFields = new Set([
+        "email",
+        "password",
+        "igg_id",
+        "server",
+        "telegram_tag",
+        "next_payment_date",
+        "tariff"
+    ]);
 
-    document.addEventListener("input", function (e) {
-        const searchInput = e.target.closest('[data-role="admin-farmdata-search"]');
-        if (!searchInput) return;
+    let adminFarmDataAutoSaveTimer = null;
+    let adminFarmDataSaveInProgress = false;
+    let adminFarmDataAutoSaveQueued = false;
+    let lastAdminAutoSaveToastAt = 0;
 
-        const query = searchInput.value.trim().toLowerCase();
-        const table = document.querySelector('[data-role="admin-farmdata-table"]');
-        if (!table) return;
+    function setAdminFarmSaveState(isSaving, isAuto) {
+        const btn = document.querySelector('[data-role="farmdata-save"]');
+        const spinnerEl = btn ? btn.querySelector(".btn-spinner") : null;
+        const textEl = btn ? btn.querySelector(".btn-text") : null;
 
-        const rows = table.querySelectorAll("tbody tr[data-account-id]");
-        rows.forEach(function (tr) {
-            const text = tr.textContent.toLowerCase();
-            tr.style.display = text.includes(query) ? "" : "none";
-        });
-    });
-
-    document.addEventListener("click", async function (e) {
-        const btn = e.target.closest('[data-role="farmdata-save"]');
         if (!btn) return;
 
+        btn.disabled = isSaving;
+        if (spinnerEl) spinnerEl.hidden = !isSaving;
+        if (textEl) {
+            if (isSaving) {
+                textEl.textContent = isAuto ? "Автосохранение..." : "Сохраняем...";
+            } else {
+                textEl.textContent = "Сохранить";
+            }
+        }
+    }
+
+    function collectAdminFarmDataItems() {
         const table = document.querySelector('[data-role="admin-farmdata-table"]');
         if (!table) {
-            showToast("Таблица не найдена.", "error");
-            return;
+            return { items: [], formatWarnings: [], missingTable: true, hasRows: false };
         }
 
         const rows = table.querySelectorAll("tbody tr[data-account-id]");
@@ -688,8 +692,33 @@ document.addEventListener("DOMContentLoaded", function () {
             });
         });
 
-        if (!items.length) {
-            showToast("Нет данных для сохранения.", "info");
+        return {
+            items,
+            formatWarnings,
+            missingTable: false,
+            hasRows: rows.length > 0
+        };
+    }
+
+    async function saveAdminFarmData(options = {}) {
+        const { isAuto = false, triggerBtn = null } = options;
+        if (adminFarmDataAutoSaveTimer) {
+            clearTimeout(adminFarmDataAutoSaveTimer);
+            adminFarmDataAutoSaveTimer = null;
+        }
+        const { items, formatWarnings, missingTable, hasRows } = collectAdminFarmDataItems();
+
+        if (missingTable) {
+            if (!isAuto) {
+                showToast("Таблица не найдена.", "error");
+            }
+            return;
+        }
+
+        if (!hasRows || !items.length) {
+            if (!isAuto) {
+                showToast("Нет данных для сохранения.", "info");
+            }
             return;
         }
 
@@ -701,7 +730,21 @@ document.addEventListener("DOMContentLoaded", function () {
                 (formatWarnings.length > 3 ? " ..." : "");
         }
 
-        setBtnLoading(btn, true);
+        if (isAuto) {
+            if (adminFarmDataSaveInProgress) {
+                adminFarmDataAutoSaveQueued = true;
+                return;
+            }
+            adminFarmDataSaveInProgress = true;
+            setAdminFarmSaveState(true, true);
+        } else {
+            setBtnLoading(triggerBtn, true);
+            const textEl = triggerBtn ? triggerBtn.querySelector(".btn-text") : null;
+            if (textEl) {
+                textEl.textContent = "Сохраняем...";
+            }
+        }
+
         try {
             const resp = await fetch("/admin/farm-data/save", {
                 method: "POST",
@@ -714,7 +757,13 @@ document.addEventListener("DOMContentLoaded", function () {
                 throw new Error(data.error || "Ошибка при сохранении данных.");
             }
 
-            showToast("Данные ферм сохранены.", "success");
+            const now = Date.now();
+            if (!isAuto || now - lastAdminAutoSaveToastAt > 8000) {
+                showToast(isAuto ? "Изменения сохранены автоматически." : "Данные ферм сохранены.", "success");
+                if (isAuto) {
+                    lastAdminAutoSaveToastAt = now;
+                }
+            }
             if (pendingFormatMessage) {
                 showToast(pendingFormatMessage, "info");
             }
@@ -725,8 +774,80 @@ document.addEventListener("DOMContentLoaded", function () {
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
         } finally {
-            setBtnLoading(btn, false);
+            if (isAuto) {
+                adminFarmDataSaveInProgress = false;
+                setAdminFarmSaveState(false);
+                if (adminFarmDataAutoSaveQueued) {
+                    adminFarmDataAutoSaveQueued = false;
+                    scheduleAdminFarmDataAutoSave();
+                }
+            } else {
+                setBtnLoading(triggerBtn, false);
+                const textEl = triggerBtn ? triggerBtn.querySelector(".btn-text") : null;
+                if (textEl) {
+                    textEl.textContent = "Сохранить";
+                }
+            }
         }
+    }
+
+    function scheduleAdminFarmDataAutoSave() {
+        if (adminFarmDataSaveInProgress) {
+            adminFarmDataAutoSaveQueued = true;
+            return;
+        }
+
+        if (adminFarmDataAutoSaveTimer) {
+            clearTimeout(adminFarmDataAutoSaveTimer);
+        }
+
+        adminFarmDataAutoSaveTimer = setTimeout(function () {
+            adminFarmDataAutoSaveTimer = null;
+            saveAdminFarmData({ isAuto: true });
+        }, 900);
+    }
+
+    document.addEventListener("input", function (e) {
+        const target = e.target;
+        if (target.matches('input[name="igg_id"]')) {
+            const digits = target.value.replace(/\\D+/g, "");
+            if (target.value !== digits) {
+                target.value = digits;
+            }
+        }
+    });
+
+    document.addEventListener("input", function (e) {
+        const searchInput = e.target.closest('[data-role="admin-farmdata-search"]');
+        if (!searchInput) return;
+
+        const query = searchInput.value.trim().toLowerCase();
+        const table = document.querySelector('[data-role="admin-farmdata-table"]');
+        if (!table) return;
+
+        const rows = table.querySelectorAll("tbody tr[data-account-id]");
+        rows.forEach(function (tr) {
+            const text = tr.textContent.toLowerCase();
+            tr.style.display = text.includes(query) ? "" : "none";
+        });
+    });
+
+    function handleAdminFarmDataFieldChange(e) {
+        const target = e.target;
+        if (!target || target.tagName !== "INPUT") return;
+        if (!adminFarmDataWatchedFields.has(target.name)) return;
+        if (!target.closest('[data-role="admin-farmdata-table"]')) return;
+
+        scheduleAdminFarmDataAutoSave();
+    }
+
+    document.addEventListener("input", handleAdminFarmDataFieldChange);
+    document.addEventListener("change", handleAdminFarmDataFieldChange);
+
+    document.addEventListener("click", async function (e) {
+        const btn = e.target.closest('[data-role="farmdata-save"]');
+        if (!btn) return;
+        await saveAdminFarmData({ triggerBtn: btn });
     });
 
     document.addEventListener("click", function (e) {
