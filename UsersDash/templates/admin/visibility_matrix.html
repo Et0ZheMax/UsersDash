@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Матрица видимости настроек{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <div class="page-kicker">Админ-панель</div>
+        <h1 class="page-title">Матрица видимости конфигов</h1>
+        <div class="page-subtitle">Список шагов и ключей из manage.js и API с текущими настройками</div>
+    </div>
+    <div class="page-actions">
+        <a href="{{ url_for('admin.manage') }}" class="btn btn-outline">← Назад к manage</a>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <p class="text-muted">
+            Источник manage.js: {{ manage_meta.order_map|length }} шагов. Данные API: {{ server_meta.steps_count }} шагов{% if server_meta.sample_account %} (пример: {{ server_meta.sample_account.name }}).{% endif %}
+        </p>
+        <form method="post">
+            <table class="table table-striped table-sm">
+                <thead>
+                    <tr>
+                        <th>Скрипт</th>
+                        <th>Ключ</th>
+                        <th>Метка для клиента</th>
+                        <th>Группа</th>
+                        <th>Порядок</th>
+                        <th>Видно</th>
+                        <th>Источник</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for script_id, rows_list in grouped_rows.items() %}
+                    <tr class="table-secondary">
+                        <th colspan="7">{{ rows_list[0].script_label or script_id }}</th>
+                    </tr>
+                    {% for row in rows_list %}
+                        <tr>
+                            <td class="text-monospace">{{ row.script_id }}</td>
+                            <td class="text-monospace">{{ row.config_key }}</td>
+                            <td>
+                                <input type="text" class="form-control" name="label::{{ row.form_key }}" value="{{ row.client_label or row.default_label }}" placeholder="{{ row.default_label }}">
+                            </td>
+                            <td>
+                                <input type="text" class="form-control" name="group::{{ row.form_key }}" value="{{ row.group_key or '' }}" placeholder="Группа/секция">
+                            </td>
+                            <td style="width: 90px;">
+                                <input type="number" class="form-control" name="order::{{ row.form_key }}" value="{{ row.order_index }}" min="0">
+                            </td>
+                            <td class="text-center" style="width: 80px;">
+                                <input type="checkbox" name="visible::{{ row.form_key }}" {% if row.client_visible %}checked{% endif %}>
+                            </td>
+                            <td class="text-muted">
+                                {% set parts = [] %}
+                                {% if row.from_js %}{% set _ = parts.append('manage.js') %}{% endif %}
+                                {% if row.from_server %}{% set _ = parts.append('API') %}{% endif %}
+                                {% if row.has_db %}{% set _ = parts.append('DB') %}{% endif %}
+                                {{ parts|join(', ') if parts else '—' }}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                {% endfor %}
+                </tbody>
+            </table>
+            <div class="mt-3">
+                <button type="submit" class="btn btn-primary">Сохранить</button>
+                <a href="{{ url_for('admin.manage') }}" class="btn btn-outline">Отмена</a>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

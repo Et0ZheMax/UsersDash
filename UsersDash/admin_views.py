@@ -2,6 +2,7 @@
 # Маршруты админ-панели: общий дашборд, пользователи, сервера, фермы.
 # Здесь только админская логика, доступная пользователям с role='admin'.
 
+import os
 import re
 from datetime import datetime
 import traceback
@@ -20,8 +21,9 @@ from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
 from sqlalchemy.orm import joinedload
 
-from UsersDash.models import Account, FarmData, Server, User, db
+from UsersDash.models import Account, ClientConfigVisibility, FarmData, Server, User, db
 from UsersDash.services.db_backup import backup_database
+from UsersDash.services import client_config_visibility
 from UsersDash.services.remote_api import (
     fetch_account_settings,
     fetch_resources_for_accounts,
@@ -267,6 +269,211 @@ def manage():
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
+    )
+
+
+def _parse_js_dict_constants(js_text: str, const_name: str) -> dict[str, str]:
+    pattern = rf"const\\s+{const_name}\\s*=\\s*\\{{(.*?)\\}}\\s*;"
+    match = re.search(pattern, js_text, re.S)
+    if not match:
+        return {}
+
+    body = match.group(1)
+    return {key: val for key, val in re.findall(r'"([^"]+)"\s*:\s*"([^"]*)"', body)}
+
+
+def _parse_js_order_map(js_text: str) -> dict[str, list[str]]:
+    pattern = r"const\\s+ORDER_MAP\\s*=\\s*\\{(.*?)\\}\\s*;"
+    match = re.search(pattern, js_text, re.S)
+    if not match:
+        return {}
+
+    body = match.group(1)
+    result: dict[str, list[str]] = {}
+    for block in re.finditer(r'"([^"]+)"\s*:\s*\[(.*?)\]', body, re.S):
+        script_id = block.group(1)
+        keys = [k for k in re.findall(r'"([^"]+)"', block.group(2))]
+        result[script_id] = keys
+    return result
+
+
+def _load_manage_js_meta() -> dict:
+    manage_js_path = os.path.join(os.path.dirname(__file__), "static", "js", "manage.js")
+    try:
+        with open(manage_js_path, "r", encoding="utf-8") as f:
+            js_text = f.read()
+    except OSError:
+        return {"config_labels": {}, "script_labels": {}, "order_map": {}}
+
+    return {
+        "config_labels": _parse_js_dict_constants(js_text, "CONFIG_LABELS"),
+        "script_labels": _parse_js_dict_constants(js_text, "SCRIPT_LABELS"),
+        "order_map": _parse_js_order_map(js_text),
+    }
+
+
+def _collect_server_step_meta():
+    from UsersDash.client_views import _extract_steps_and_menu
+
+    accounts = (
+        Account.query.options(joinedload(Account.server))
+        .filter(Account.is_active.is_(True))
+        .order_by(Account.id.asc())
+        .all()
+    )
+
+    for acc in accounts:
+        raw_settings = fetch_account_settings(acc)
+        steps, _ = _extract_steps_and_menu(raw_settings)
+        if not steps:
+            continue
+
+        scripts: dict[str, dict[str, set[str]]] = {}
+        for step in steps:
+            script_id = step.get("ScriptId") or step.get("script_id")
+            if not script_id:
+                continue
+
+            config_keys = set()
+            config_obj = step.get("Config") or step.get("config") or {}
+            if isinstance(config_obj, dict):
+                config_keys.update(config_obj.keys())
+
+            if script_id not in scripts:
+                scripts[script_id] = {"config_keys": set()}
+            scripts[script_id]["config_keys"].update(config_keys)
+
+        return {"scripts": scripts, "sample_account": acc, "steps_count": len(steps)}
+
+    return {"scripts": {}, "sample_account": None, "steps_count": 0}
+
+
+def _build_visibility_rows(manage_meta, server_meta, db_records):
+    order_map = manage_meta.get("order_map") or {}
+    script_labels = manage_meta.get("script_labels") or {}
+    config_labels = manage_meta.get("config_labels") or {}
+    server_scripts: dict = server_meta.get("scripts") or {}
+
+    records_map: dict[tuple[str, str], ClientConfigVisibility] = {}
+    for rec in db_records:
+        key = (rec.script_id, rec.config_key)
+        if key not in records_map:
+            records_map[key] = rec
+
+    scripts = set(order_map.keys()) | set(script_labels.keys()) | set(server_scripts.keys())
+    scripts.update(rec.script_id for rec in db_records)
+
+    rows = []
+    for script_id in sorted(scripts):
+        config_keys: set[str] = set(order_map.get(script_id, []))
+        server_cfg = server_scripts.get(script_id) or {}
+        config_keys.update(server_cfg.get("config_keys", set()))
+        for rec in db_records:
+            if rec.script_id == script_id:
+                config_keys.add(rec.config_key)
+
+        for config_key in sorted(config_keys):
+            db_rec = records_map.get((script_id, config_key))
+            order_idx = 0
+            if db_rec:
+                order_idx = db_rec.order_index or 0
+            elif config_key in order_map.get(script_id, []):
+                order_idx = order_map[script_id].index(config_key)
+
+            rows.append(
+                {
+                    "script_id": script_id,
+                    "config_key": config_key,
+                    "script_label": script_labels.get(script_id, script_id),
+                    "default_label": config_labels.get(config_key, config_key),
+                    "client_label": db_rec.client_label if db_rec else None,
+                    "group_key": db_rec.group_key if db_rec else None,
+                    "client_visible": db_rec.client_visible if db_rec else True,
+                    "order_index": order_idx,
+                    "from_js": config_key in config_labels,
+                    "from_server": config_key in (server_cfg.get("config_keys") or set()),
+                    "has_db": db_rec is not None,
+                }
+            )
+
+    for idx, row in enumerate(rows):
+        row["form_key"] = f"row{idx}"
+
+    return rows
+
+
+@admin_bp.route("/config-visibility", methods=["GET", "POST"])
+@login_required
+def config_visibility_matrix():
+    admin_required()
+
+    manage_meta = _load_manage_js_meta()
+    server_meta = _collect_server_step_meta()
+    db_records = ClientConfigVisibility.query.order_by(
+        ClientConfigVisibility.script_id.asc(),
+        ClientConfigVisibility.order_index.asc(),
+        ClientConfigVisibility.config_key.asc(),
+    ).all()
+
+    rows = _build_visibility_rows(manage_meta, server_meta, db_records)
+
+    if request.method == "POST":
+        for row in rows:
+            prefix = row["form_key"]
+            label = request.form.get(f"label::{prefix}", "").strip() or None
+            group_key = request.form.get(f"group::{prefix}", "").strip() or None
+            order_raw = request.form.get(f"order::{prefix}")
+            try:
+                order_index = int(order_raw) if order_raw is not None else 0
+            except (TypeError, ValueError):
+                order_index = 0
+
+            visible = request.form.get(f"visible::{prefix}") == "on"
+
+            existing = next(
+                (
+                    rec
+                    for rec in db_records
+                    if rec.script_id == row["script_id"]
+                    and rec.config_key == row["config_key"]
+                ),
+                None,
+            )
+
+            if existing and existing.group_key != group_key:
+                client_config_visibility.delete_record(
+                    script_id=existing.script_id,
+                    config_key=existing.config_key,
+                    scope=existing.scope or "global",
+                    group_key=existing.group_key,
+                )
+
+            client_config_visibility.upsert_record(
+                script_id=row["script_id"],
+                config_key=row["config_key"],
+                client_visible=visible,
+                client_label=label,
+                order_index=order_index,
+                scope="global",
+                group_key=group_key,
+            )
+
+        flash("Настройки видимости сохранены.", "success")
+        return redirect(url_for("admin.config_visibility_matrix"))
+
+    grouped_rows: dict[str, list[dict]] = {}
+    for row in rows:
+        grouped_rows.setdefault(row["script_id"], []).append(row)
+
+    for script in grouped_rows:
+        grouped_rows[script].sort(key=lambda r: (r.get("order_index", 0), r["config_key"]))
+
+    return render_template(
+        "admin/visibility_matrix.html",
+        rows=rows,
+        grouped_rows=grouped_rows,
+        manage_meta=manage_meta,
+        server_meta=server_meta,
     )
 
 
