@@ -913,7 +913,11 @@
             const scriptId = step && step.ScriptId;
             const description = cfg.Description || cfg.description || "";
             const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
-            const groupKey = findVisibilityProp(scriptId, "group_key") || scriptId || `group-${idx}`;
+
+            // Разгруппированные шаги не должны схлопываться по ScriptId.
+            // Оставляем группировку только если она явно задана в visibility_map.
+            const visibilityGroupKey = findVisibilityProp(scriptId, "group_key");
+            const groupKey = visibilityGroupKey || `group-${idx}`;
 
             if (seenGroups.has(groupKey)) return;
             seenGroups.add(groupKey);
@@ -924,7 +928,7 @@
             grouped.push({
                 index: idx,
                 raw_index: idx,
-                group_key: groupKey,
+                group_key: visibilityGroupKey || scriptId || groupKey,
                 name,
                 script_id: scriptId,
                 config: cfg,
