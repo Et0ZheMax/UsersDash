@@ -422,6 +422,7 @@ h1 {
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
+    align-items: flex-start;
     margin-bottom: 20px;
 }
 
@@ -435,7 +436,7 @@ h1 {
 .kpi-info-card {
     flex: 1 1 260px;
     max-width: 420px;
-    align-self: stretch;
+    align-self: flex-start;
 }
 
 .kpi-list {
@@ -447,20 +448,6 @@ h1 {
     gap: 6px;
 }
 
-.kpi-list--scrollable {
-    max-height: 180px;
-    overflow-y: auto;
-    padding-right: 4px;
-}
-
-.kpi-list--scrollable::-webkit-scrollbar {
-    width: 6px;
-}
-
-.kpi-list--scrollable::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.4);
-    border-radius: 999px;
-}
 
 .btn-ghost {
     background: rgba(76, 127, 255, 0.1);
@@ -470,12 +457,6 @@ h1 {
 
 .btn-ghost:hover {
     background: rgba(76, 127, 255, 0.18);
-}
-
-.kpi-status-card {
-    flex: 0 1 340px;
-    max-width: 400px;
-    align-self: flex-start;
 }
 
 .kpi-status-card {
@@ -700,22 +681,6 @@ h1 {
     gap: 6px;
 }
 
-.status-list--scrollable {
-    --status-row-height: 64px;
-    --status-row-gap: 6px;
-    max-height: calc(2.5 * var(--status-row-height) + 1.5 * var(--status-row-gap));
-    overflow-y: auto;
-    padding-right: 4px;
-}
-
-.status-list--scrollable::-webkit-scrollbar {
-    width: 6px;
-}
-
-.status-list--scrollable::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.4);
-    border-radius: 999px;
-}
 
 .status-item {
     padding: 8px 10px;
@@ -785,54 +750,6 @@ h1 {
     display: flex;
     flex-direction: column;
     gap: 6px;
-}
-
-.status-list--scrollable {
-    --status-row-height: 64px;
-    --status-row-gap: 6px;
-    max-height: calc(2.5 * var(--status-row-height) + 1.5 * var(--status-row-gap));
-    overflow-y: auto;
-    padding-right: 4px;
-}
-
-.status-list--scrollable::-webkit-scrollbar {
-    width: 6px;
-}
-
-.status-list--scrollable::-webkit-scrollbar-thumb {
-    background: rgba(148, 163, 184, 0.4);
-    border-radius: 999px;
-}
-
-.status-item {
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: #111827;
-    font-size: 0.9rem;
-}
-
-.status-item--warn {
-    border: 1px solid rgba(250, 204, 21, 0.3);
-    color: #eab308;
-}
-
-.status-item-title {
-    font-weight: 600;
-}
-
-.status-item-text {
-    margin-top: 4px;
-    font-size: 0.86rem;
-    color: #fcd34d;
-}
-
-.status-note {
-    font-size: 0.85rem;
-    color: #9ca3af;
-}
-
-.status-note--ok {
-    color: #4ade80;
 }
 
 /* Toolbar */

@@ -15,7 +15,7 @@
         <div class="kpi-label">Ближайшие оплаты</div>
 
         {% if upcoming_payments and upcoming_payments|length %}
-            <ul class="kpi-list kpi-list--scrollable">
+            <ul class="kpi-list">
                 {% for p in upcoming_payments %}
                     <li>
                         <strong>{{ p.account_name }}</strong>
@@ -60,7 +60,7 @@
 
         {% if status and status.has_issues %}
             <div class="status-chip status-chip--warning">Требуется внимание</div>
-            <div class="status-list status-list--scrollable">
+            <div class="status-list">
                 {% if status.missing_details %}
                     {% for item in status.missing_details %}
                         <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
