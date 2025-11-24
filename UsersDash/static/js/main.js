@@ -477,6 +477,7 @@
         const row = target.closest('[data-role="farmdata-table"] tbody tr[data-account-id]');
         if (!row) return;
 
+        applyFarmDataStatusUI();
         scheduleFarmDataAutoSave();
     }
 
@@ -487,6 +488,7 @@
         autoHideFlashMessages();
         setupNavToggle();
         setupAccountSearch();
+        applyFarmDataStatusUI();
     });
 
     // ---------- Делегированный обработчик кликов ----------
