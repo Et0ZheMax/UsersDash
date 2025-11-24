@@ -355,6 +355,16 @@
         return found ? found[prop] : undefined;
     }
 
+    function isStepHidden(scriptId, rawStep) {
+        if (rawStep && rawStep._hidden_for_client) return true;
+
+        return getVisibilityForScript(scriptId).some((item) => (
+            item
+            && item.config_key === "__step__"
+            && item.client_visible === false
+        ));
+    }
+
     function findViewStepByRawIndex(rawIdx) {
         for (const group of state.steps || []) {
             if (!group) continue;
@@ -894,6 +904,7 @@
         (rawSteps || []).forEach((step, idx) => {
             const cfg = (step && step.Config) || {};
             const scriptId = step && step.ScriptId;
+            if (isStepHidden(scriptId, step)) return;
             const description = cfg.Description || cfg.description || "";
             const schedule_rules = (step && Array.isArray(step.ScheduleRules)) ? step.ScheduleRules : [];
             const groupKey = findVisibilityProp(scriptId, "group_key") || scriptId || `group-${idx}`;
@@ -1134,6 +1145,11 @@
         }
 
         const step = state.rawSteps[state.selectedStepIndex];
+        if (isStepHidden(step && step.ScriptId, step)) {
+            configRoot.innerHTML = '<div class="config-empty">Этот таймер скрыт.</div>';
+            updateHeaderText();
+            return;
+        }
         const cfg = step.Config || {};
         const title = getScriptTitle(step);
         const subtitle = state.selectedAccountName || "";
