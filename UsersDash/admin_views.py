@@ -27,6 +27,7 @@ from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_rssv7_accounts_meta,
 )
+from UsersDash.services.tariffs import TARIFF_PRICE_MAP
 
 
 
@@ -681,6 +682,7 @@ def admin_farm_data():
     return render_template(
         "admin/farm_data.html",
         items=items,
+        tariff_price_map=TARIFF_PRICE_MAP,
     )
 
 

@@ -412,13 +412,17 @@
                                            value="{{ acc.next_payment_at.strftime('%Y-%m-%d') if acc.next_payment_at else '' }}">
                                 </td>
                                 <td>
-                                    <input class="farmdata-input farmdata-input--price"
-                                           type="number"
-                                           min="0"
-                                           step="50"
-                                           name="tariff"
-                                           placeholder="₽"
-                                           value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
+                                    <div class="tariff-cell" data-role="tariff-cell">
+                                        <input class="farmdata-input farmdata-input--price"
+                                               type="number"
+                                               min="0"
+                                               step="50"
+                                               name="tariff"
+                                               placeholder="₽"
+                                               value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
+                                        <div class="tariff-label tariff-label--interactive" data-role="tariff-label"></div>
+                                        <div class="tariff-dropdown" data-role="tariff-dropdown" hidden></div>
+                                    </div>
                                 </td>
                             </tr>
                         {% endfor %}
@@ -609,6 +613,112 @@ document.addEventListener("DOMContentLoaded", function () {
             return { normalized, isValid: true };
         }
         return { normalized: "", isValid: false };
+    }
+
+    const TARIFF_PRICE_MAP = {{ tariff_price_map|tojson }};
+    const PREMIUM_TARIFF_NAME = TARIFF_PRICE_MAP["1400"] || TARIFF_PRICE_MAP[1400] || "Премиум";
+    const TARIFF_OPTIONS = [
+        { price: 500, name: TARIFF_PRICE_MAP["500"] || TARIFF_PRICE_MAP[500] || "Только Фарм" },
+        { price: 1000, name: TARIFF_PRICE_MAP["1000"] || TARIFF_PRICE_MAP[1000] || "Расширенный" },
+        { price: 1400, name: PREMIUM_TARIFF_NAME }
+    ].filter(function (opt) { return !!opt.name; });
+
+    function closeTariffDropdowns(exceptEl) {
+        document.querySelectorAll('[data-role="tariff-dropdown"]').forEach(function (dropdown) {
+            if (exceptEl && dropdown === exceptEl) return;
+            dropdown.hidden = true;
+        });
+    }
+
+    function updateTariffDropdownState(cell, selectedPrice) {
+        const dropdown = cell ? cell.querySelector('[data-role="tariff-dropdown"]') : null;
+        if (!dropdown) return;
+        dropdown.querySelectorAll('[data-role="tariff-option"]').forEach(function (btn) {
+            btn.classList.toggle("is-active", btn.dataset.price === String(selectedPrice));
+        });
+    }
+
+    function renderTariffDropdown(cell) {
+        if (!cell) return;
+        const dropdown = cell.querySelector('[data-role="tariff-dropdown"]');
+        if (!dropdown || dropdown.dataset.ready === "true") return;
+
+        dropdown.innerHTML = "";
+        TARIFF_OPTIONS.forEach(function (opt) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "tariff-dropdown__option";
+            btn.dataset.role = "tariff-option";
+            btn.dataset.price = String(opt.price);
+
+            const priceSpan = document.createElement("span");
+            priceSpan.className = "tariff-dropdown__option-price";
+            priceSpan.textContent = `${opt.price} ₽`;
+
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "tariff-dropdown__option-name";
+            nameSpan.textContent = opt.name;
+
+            btn.appendChild(priceSpan);
+            btn.appendChild(nameSpan);
+            dropdown.appendChild(btn);
+        });
+
+        dropdown.dataset.ready = "true";
+    }
+
+    function toggleTariffDropdown(cell) {
+        if (!cell) return;
+        renderTariffDropdown(cell);
+        const dropdown = cell.querySelector('[data-role="tariff-dropdown"]');
+        if (!dropdown) return;
+
+        const shouldOpen = dropdown.hidden;
+        closeTariffDropdowns(shouldOpen ? dropdown : null);
+
+        if (shouldOpen) {
+            const input = cell.querySelector('input[name="tariff"]');
+            const { normalized } = normalizeTariffInput(input ? input.value : "");
+            updateTariffDropdownState(cell, normalized || (input ? input.value : ""));
+        }
+
+        dropdown.hidden = !shouldOpen;
+    }
+
+    function updateTariffLabel(input) {
+        if (!input) return;
+        const cell = input.closest('[data-role="tariff-cell"]');
+        const label = cell ? cell.querySelector('[data-role="tariff-label"]') : null;
+        if (!label) return;
+
+        const { normalized, isValid } = normalizeTariffInput(input.value);
+        label.classList.remove("tariff-label--premium");
+
+        if (!normalized && !input.value) {
+            label.textContent = "Тариф не назначен";
+            updateTariffDropdownState(cell, "");
+            return;
+        }
+
+        if (!isValid) {
+            label.textContent = "Тариф не распознан";
+            updateTariffDropdownState(cell, "");
+            return;
+        }
+
+        const numericValue = parseInt(normalized, 10);
+        const tariffName = TARIFF_PRICE_MAP[numericValue] || TARIFF_PRICE_MAP[String(numericValue)];
+
+        if (tariffName) {
+            label.textContent = tariffName;
+            if (tariffName === PREMIUM_TARIFF_NAME) {
+                label.classList.add("tariff-label--premium");
+            }
+        } else {
+            label.textContent = `Тариф не распознан (${numericValue} ₽)`;
+        }
+
+        updateTariffDropdownState(cell, normalized);
     }
 
     const adminFarmDataWatchedFields = new Set([
@@ -838,11 +948,50 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!adminFarmDataWatchedFields.has(target.name)) return;
         if (!target.closest('[data-role="admin-farmdata-table"]')) return;
 
+        if (target.name === "tariff") {
+            updateTariffLabel(target);
+        }
+
         scheduleAdminFarmDataAutoSave();
     }
 
     document.addEventListener("input", handleAdminFarmDataFieldChange);
     document.addEventListener("change", handleAdminFarmDataFieldChange);
+
+    document.querySelectorAll('[data-role="tariff-cell"] input[name="tariff"]').forEach(function (input) {
+        updateTariffLabel(input);
+        renderTariffDropdown(input.closest('[data-role="tariff-cell"]'));
+    });
+
+    document.addEventListener("click", function (e) {
+        const label = e.target.closest('[data-role="tariff-label"]');
+        if (label) {
+            const cell = label.closest('[data-role="tariff-cell"]');
+            toggleTariffDropdown(cell);
+            return;
+        }
+
+        const optionBtn = e.target.closest('[data-role="tariff-option"]');
+        if (optionBtn) {
+            const cell = optionBtn.closest('[data-role="tariff-cell"]');
+            const input = cell ? cell.querySelector('input[name="tariff"]') : null;
+            if (input) {
+                input.value = optionBtn.dataset.price || "";
+                input.dispatchEvent(new Event("input", { bubbles: true }));
+                updateTariffLabel(input);
+                closeTariffDropdowns();
+                saveAdminFarmData({ isAuto: true });
+                return;
+            }
+
+            closeTariffDropdowns();
+            return;
+        }
+
+        if (!e.target.closest('[data-role="tariff-dropdown"]')) {
+            closeTariffDropdowns();
+        }
+    });
 
     document.addEventListener("click", async function (e) {
         const btn = e.target.closest('[data-role="farmdata-save"]');
