@@ -356,15 +356,17 @@
             const desc = viewStep.description ? `<div class=\"step-desc\">${viewStep.description}</div>` : "";
             const schedule = scheduleSummary(viewStep, rawStep);
             const scheduleSummaryHtml = schedule ? `<span class=\"step-schedule__summary\">⏱ ${schedule}</span>` : "";
-            const scheduleButtonHtml = isAdminManage
-                ? `<button class=\"step-schedule__edit\" type=\"button\" data-role=\"schedule-edit\" data-step-idx=\"${idx}\" aria-label=\"Редактировать расписание шага\">⏲</button>`
-                : "";
-            const scheduleHtml = (schedule || scheduleButtonHtml)
-                ? `<div class=\"step-schedule\">${scheduleSummaryHtml}${scheduleButtonHtml}</div>`
-                : "";
+            const scheduleHtml = schedule ? `<div class=\"step-schedule\">${scheduleSummaryHtml}</div>` : "";
             const switchId = `step-toggle-${state.selectedAccountId || "acc"}-${idx}`;
             const isSelected = state.selectedStepIndex === idx;
             const name = getScriptTitle(rawStep) || viewStep.name || `Шаг ${idx + 1}`;
+            const scheduleButtonHtml = isAdminManage
+                ? [
+                    '<div class="step-actions__schedule">',
+                    `    <button class="step-schedule__edit" type="button" data-role="schedule-edit" data-step-idx="${idx}" aria-label="Редактировать расписание шага">⏲</button>`,
+                    '</div>',
+                ].join("\n")
+                : "";
 
             return `
                 <div class="manage-step-card ${isSelected ? "is-selected" : ""}" data-step-idx="${idx}">
@@ -380,11 +382,12 @@
                                        id="${switchId}"
                                        class="ios-switch__input"
                                        data-role="step-toggle"
-                                        data-account-id="${state.selectedAccountId}"
+                                       data-account-id="${state.selectedAccountId}"
                                        data-step-idx="${idx}"
                                        ${viewStep.is_active ? "checked" : ""}>
                                 <span class="ios-switch__slider" aria-hidden="true"></span>
                             </label>
+                            ${scheduleButtonHtml}
                         </div>
                     </div>
                 </div>`;
