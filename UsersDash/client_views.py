@@ -27,6 +27,7 @@ from UsersDash.services.remote_api import (
     update_account_step_settings,
 )
 from UsersDash.services.tariffs import is_tariff_billable, summarize_tariffs
+from UsersDash.services.info_message import get_global_info_message_text
 
 client_bp = Blueprint("client", __name__, url_prefix="")
 
@@ -392,6 +393,8 @@ def dashboard():
 
     tariffs_summary, tariffs_total = summarize_tariffs(accounts)
 
+    info_message = get_global_info_message_text()
+
     if not accounts:
         return render_template(
             "client/dashboard.html",
@@ -402,6 +405,7 @@ def dashboard():
             tariffs_summary=[],
             tariffs_total=0,
             farmdata_status=farmdata_status,
+            info_message=info_message,
         )
 
     resources_map = fetch_resources_for_accounts(accounts)
@@ -438,6 +442,7 @@ def dashboard():
         tariffs_summary=tariffs_summary,
         tariffs_total=tariffs_total,
         farmdata_status=farmdata_status,
+        info_message=info_message,
     )
 
 
