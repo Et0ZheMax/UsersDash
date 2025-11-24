@@ -536,10 +536,8 @@
             clearTimeout(configAutoSaveTimer);
         }
 
-        configAutoSaveTimer = setTimeout(() => {
-            configAutoSaveTimer = null;
-            saveConfig(stepIdx, formEl, cfg, { isAuto: true });
-        }, 650);
+        configAutoSaveTimer = null;
+        saveConfig(stepIdx, formEl, cfg, { isAuto: true });
     }
 
     async function saveConfig(stepIdx, formEl, cfg, options = {}) {
