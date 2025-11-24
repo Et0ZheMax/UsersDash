@@ -308,6 +308,38 @@
         return `${normalizedHours}:${normalizedMinutes} ${suffix}`;
     }
 
+    const DAY_OPTIONS = [
+        { value: "mon", label: "Пн" },
+        { value: "tue", label: "Вт" },
+        { value: "wed", label: "Ср" },
+        { value: "thu", label: "Чт" },
+        { value: "fri", label: "Пт" },
+        { value: "sat", label: "Сб" },
+        { value: "sun", label: "Вс" },
+    ];
+
+    const DAY_ALIASES = {
+        mon: "mon", monday: "mon", "понедельник": "mon", "пн": "mon",
+        tue: "tue", tuesday: "tue", "вторник": "tue", "вт": "tue",
+        wed: "wed", wednesday: "wed", "среда": "wed", "ср": "wed",
+        thu: "thu", thursday: "thu", "четверг": "thu", "чт": "thu",
+        fri: "fri", friday: "fri", "пятница": "fri", "пт": "fri",
+        sat: "sat", saturday: "sat", "суббота": "sat", "сб": "sat",
+        sun: "sun", sunday: "sun", "воскресенье": "sun", "вс": "sun",
+    };
+
+    function parseDaysValue(daysStr) {
+        if (!daysStr || typeof daysStr !== "string") return [];
+        const tokens = daysStr.split(/[,\s]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
+        const mapped = tokens.map((token) => DAY_ALIASES[token] || token).filter(Boolean);
+        return Array.from(new Set(mapped));
+    }
+
+    function stringifyDays(daysArr) {
+        if (!Array.isArray(daysArr) || !daysArr.length) return "";
+        return daysArr.join(", ");
+    }
+
     function normalizeScheduleRule(rule) {
         const raw = rule || {};
         let days = raw.Days || raw.WeekDays || raw.Weekdays;
@@ -338,9 +370,7 @@
 
     function buildScheduleRulePayload(rawRule, draft) {
         const base = rawRule && typeof rawRule === "object" ? { ...rawRule } : {};
-        const daysArr = draft.days
-            ? draft.days.split(/[,\s]+/).map((d) => d.trim()).filter(Boolean)
-            : [];
+        const daysArr = draft.days ? parseDaysValue(draft.days) : [];
         const start = draft.start || "";
         const end = draft.end || "";
         const every = draft.every === "" ? "" : draft.every;
@@ -403,6 +433,100 @@
         return base;
     }
 
+    function renderDaysPicker(triggerEl, row, inputEl) {
+        if (!triggerEl || !row || !inputEl) return;
+        const existing = document.querySelector(".schedule-days-modal");
+        if (existing) existing.remove();
+
+        const selected = Array.isArray(row._selectedDays)
+            ? [...row._selectedDays]
+            : parseDaysValue(inputEl.value || "");
+
+        const modal = document.createElement("div");
+        modal.className = "schedule-days-modal is-open";
+        modal.innerHTML = `
+            <div class="schedule-days-modal__backdrop" data-role="days-close"></div>
+            <div class="schedule-days-modal__dialog" role="dialog" aria-modal="true">
+                <div class="schedule-days-modal__header">
+                    <div>
+                        <div class="schedule-days-modal__title">Дни недели</div>
+                        <div class="schedule-days-modal__subtitle">Отметьте нужные дни или выберите все</div>
+                    </div>
+                    <button type="button" class="schedule-days-modal__close" data-role="days-close" aria-label="Закрыть">×</button>
+                </div>
+                <div class="schedule-days-modal__body" data-role="days-list"></div>
+                <div class="schedule-days-modal__footer">
+                    <label class="schedule-days-modal__select-all">
+                        <input type="checkbox" data-role="days-select-all">
+                        <span>Выбрать все дни</span>
+                    </label>
+                    <div class="schedule-days-modal__actions">
+                        <button type="button" class="btn btn-secondary btn-small" data-role="days-close">Отмена</button>
+                        <button type="button" class="btn btn-primary btn-small" data-role="days-apply">Применить</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const list = modal.querySelector('[data-role="days-list"]');
+        if (list) {
+            DAY_OPTIONS.forEach((opt) => {
+                const id = `day-${opt.value}-${Math.random().toString(36).slice(2, 8)}`;
+                const wrapper = document.createElement("label");
+                wrapper.className = "schedule-days-modal__item";
+                wrapper.innerHTML = `
+                    <input type="checkbox" value="${opt.value}" id="${id}" ${selected.includes(opt.value) ? "checked" : ""}>
+                    <span>${opt.label}</span>
+                `;
+                list.appendChild(wrapper);
+            });
+        }
+
+        const selectAll = modal.querySelector('[data-role="days-select-all"]');
+        const applyBtn = modal.querySelector('[data-role="days-apply"]');
+
+        const syncSelectAll = () => {
+            if (!selectAll) return;
+            const checkboxes = Array.from(modal.querySelectorAll('[data-role="days-list"] input[type="checkbox"]'));
+            if (!checkboxes.length) return;
+            selectAll.checked = checkboxes.every((cb) => cb.checked);
+        };
+
+        if (selectAll) {
+            selectAll.addEventListener("change", () => {
+                const checkboxes = modal.querySelectorAll('[data-role="days-list"] input[type="checkbox"]');
+                checkboxes.forEach((cb) => { cb.checked = selectAll.checked; });
+            });
+        }
+
+        modal.addEventListener("click", (event) => {
+            if (event.target.closest('[data-role="days-close"]')) {
+                modal.remove();
+            }
+        });
+
+        if (applyBtn) {
+            applyBtn.addEventListener("click", () => {
+                const chosen = Array.from(modal.querySelectorAll('[data-role="days-list"] input[type="checkbox"]'))
+                    .filter((cb) => cb.checked)
+                    .map((cb) => cb.value);
+                row._selectedDays = chosen;
+                inputEl.value = stringifyDays(chosen);
+                inputEl.dispatchEvent(new Event("input", { bubbles: true }));
+                modal.remove();
+            });
+        }
+
+        modal.addEventListener("change", (event) => {
+            if (event.target.closest('[data-role="days-list"]')) {
+                syncSelectAll();
+            }
+        });
+
+        document.body.appendChild(modal);
+        syncSelectAll();
+    }
+
     function createScheduleEditor(step) {
         if (!isAdminManage) return null;
         const rules = Array.isArray(step && step.ScheduleRules) ? step.ScheduleRules : [];
@@ -437,10 +561,14 @@
             row.className = "config-schedule__row";
             row.dataset.role = "schedule-row";
             row._rawRule = rule || {};
+            row._selectedDays = parseDaysValue(normalized.days);
             row.innerHTML = `
                 <label class="config-schedule__field">
-                    <span>Дни (csv)</span>
-                    <input type="text" data-schedule-field="days" value="${escapeHtml(normalized.days)}" placeholder="mon,tue,wed">
+                    <span>Дни</span>
+                    <div class="config-schedule__days-input">
+                        <input type="text" data-schedule-field="days" value="${escapeHtml(stringifyDays(parseDaysValue(normalized.days)) || normalized.days)}" placeholder="mon,tue,wed" readonly>
+                        <button type="button" class="config-schedule__days-trigger" data-role="schedule-days-trigger" aria-label="Выбрать дни недели">📅</button>
+                    </div>
                 </label>
                 <label class="config-schedule__field">
                     <span>Начало</span>
@@ -467,6 +595,17 @@
                     row.remove();
                     updateEmptyState();
                 });
+            }
+
+            const daysTrigger = row.querySelector('[data-role="schedule-days-trigger"]');
+            const daysInput = row.querySelector('[data-schedule-field="days"]');
+            if (daysTrigger && daysInput) {
+                const openPicker = (event) => {
+                    event.preventDefault();
+                    renderDaysPicker(daysTrigger, row, daysInput);
+                };
+                daysTrigger.addEventListener("click", openPicker);
+                daysInput.addEventListener("click", openPicker);
             }
 
             return row;
@@ -505,6 +644,24 @@
             .schedule-modal__body { overflow: auto; padding-right: 4px; }
             .schedule-modal__footer { display: flex; justify-content: flex-end; gap: 10px; }
             .schedule-modal__close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; }
+            .schedule-days-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 2100; }
+            .schedule-days-modal.is-open { display: flex; }
+            .schedule-days-modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+            .schedule-days-modal__dialog { position: relative; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); width: min(460px, 94vw); display: flex; flex-direction: column; gap: 12px; }
+            .schedule-days-modal__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            .schedule-days-modal__title { font-size: 18px; font-weight: 700; }
+            .schedule-days-modal__subtitle { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+            .schedule-days-modal__close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; }
+            .schedule-days-modal__body { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+            .schedule-days-modal__item { display: flex; align-items: center; gap: 8px; padding: 8px; background: #111827; border-radius: 8px; border: 1px solid #1e293b; cursor: pointer; }
+            .schedule-days-modal__item input { accent-color: #38bdf8; }
+            .schedule-days-modal__footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+            .schedule-days-modal__actions { display: flex; gap: 8px; }
+            .schedule-days-modal__select-all { display: flex; align-items: center; gap: 8px; color: #e2e8f0; }
+            .config-schedule__days-input { display: flex; align-items: center; gap: 6px; }
+            .config-schedule__days-input input[readonly] { cursor: pointer; background: #0b1224; border: 1px solid #1e293b; border-radius: 8px; padding-right: 36px; }
+            .config-schedule__days-trigger { min-width: 32px; height: 32px; border-radius: 8px; border: 1px solid #1e293b; background: #111827; color: #e2e8f0; cursor: pointer; }
+            .config-schedule__days-trigger:hover { background: #1f2937; }
         `;
         document.head.appendChild(style);
     }
@@ -889,8 +1046,9 @@
 
         return rows.map((row, idx) => {
             const raw = row._rawRule || (Array.isArray(originalRules) ? originalRules[idx] : {});
+            const selectedDays = Array.isArray(row._selectedDays) ? row._selectedDays : null;
             const draft = {
-                days: (row.querySelector('[data-schedule-field="days"]') || {}).value || "",
+                days: selectedDays ? stringifyDays(selectedDays) : ((row.querySelector('[data-schedule-field="days"]') || {}).value || ""),
                 start: (row.querySelector('[data-schedule-field="start"]') || {}).value || "",
                 end: (row.querySelector('[data-schedule-field="end"]') || {}).value || "",
                 every: (row.querySelector('[data-schedule-field="every"]') || {}).value || "",
@@ -1178,6 +1336,14 @@
             event.stopPropagation();
             const stepIdx = Number(scheduleBtn.dataset.stepIdx);
             if (!Number.isNaN(stepIdx)) {
+                if (state.selectedStepIndex !== stepIdx) {
+                    state.selectedStepIndex = stepIdx;
+                    renderSteps();
+                    renderConfig();
+                    if (isMobile()) {
+                        setMobileView('config');
+                    }
+                }
                 openScheduleEditor(stepIdx);
             }
             return;
