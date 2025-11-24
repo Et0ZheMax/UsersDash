@@ -356,7 +356,21 @@
     }
 
     function findViewStepByRawIndex(rawIdx) {
-        return (state.steps || []).find((item) => item && item.raw_index === rawIdx);
+        const groups = state.steps || [];
+        for (const group of groups) {
+            if (!group) continue;
+
+            if (group.raw_index === rawIdx) {
+                return group;
+            }
+
+            if (Array.isArray(group.items)) {
+                const found = group.items.find((item) => item && item.raw_index === rawIdx);
+                if (found) return found;
+            }
+        }
+
+        return undefined;
     }
 
     function formatScheduleRule(rule) {
@@ -906,7 +920,7 @@
         }
 
         const grouped = [];
-        const seenGroups = new Set();
+        const groupsByKey = new Map();
 
         (rawSteps || []).forEach((step, idx) => {
             const cfg = (step && step.Config) || {};
@@ -918,14 +932,10 @@
             // Оставляем группировку только если она явно задана в visibility_map.
             const visibilityGroupKey = findVisibilityProp(scriptId, "group_key");
             const groupKey = visibilityGroupKey || `group-${idx}`;
-
-            if (seenGroups.has(groupKey)) return;
-            seenGroups.add(groupKey);
-
             const nameOverride = findVisibilityProp(scriptId, "client_label");
             const name = nameOverride || getScriptTitle(step) || `Шаг ${idx + 1}`;
 
-            grouped.push({
+            const viewStep = {
                 index: idx,
                 raw_index: idx,
                 group_key: visibilityGroupKey || scriptId || groupKey,
@@ -936,10 +946,37 @@
                 is_active: step && typeof step.IsActive === "boolean" ? step.IsActive : true,
                 schedule_summary: scheduleSummary(null, step) || undefined,
                 schedule_rules_count: schedule_rules.length,
-            });
+            };
+
+            if (!visibilityGroupKey) {
+                grouped.push(viewStep);
+                return;
+            }
+
+            const existingGroup = groupsByKey.get(groupKey);
+            if (existingGroup) {
+                existingGroup.items.push(viewStep);
+                return;
+            }
+
+            const group = {
+                group_key: visibilityGroupKey || scriptId || groupKey,
+                name,
+                items: [viewStep],
+            };
+
+            groupsByKey.set(groupKey, group);
+            grouped.push(group);
         });
 
-        return grouped;
+        return grouped.map((group) => {
+            if (Array.isArray(group.items) && group.items.length === 1) {
+                const [single] = group.items;
+                return single ? { ...single, name: group.name || single.name } : group;
+            }
+
+            return group;
+        });
     }
 
     function renderEmptyState(message, debug) {
