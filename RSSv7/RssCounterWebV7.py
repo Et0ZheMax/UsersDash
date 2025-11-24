@@ -32,9 +32,9 @@ from flask_cors import CORS
 # Установка всего: python -m pip install -U psutil paramiko requests Pillow pywin32 WMI icmplib Flask Flask-Cors
 
 # Пример: задаём своему скрипту заголовок «MyUniqueScript»
-title = "RssV7_F99"
+DEFAULT_TITLE = "RssV7"
 if sys.platform == "win32":
-    ctypes.windll.kernel32.SetConsoleTitleW(title)
+    ctypes.windll.kernel32.SetConsoleTitleW(DEFAULT_TITLE)
 
 # -------------------------------------------------
 # Функции для запуска с правами администратора
@@ -65,11 +65,12 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 def _write_default_config(path):
     default = {
-        "LOGS_DIR": r"C:\Program Files (x86)\GnBots\logs",
-        "PROFILE_PATH": r"C:\Program Files (x86)\GnBots\config\profiles.json",
-        "SRC_VMS": r"D:\Backups\VMs",
-        "DST_VMS": r"D:\Prod\VMs",
-        "GNBOTS_SHORTCUT": r"C:\Program Files (x86)\GnBots\GnBots.lnk",
+        "LOGS_DIR": r"C:\\Program Files (x86)\\GnBots\\logs",
+        "PROFILE_PATH": r"C:\\Program Files (x86)\\GnBots\\config\\profiles.json",
+        "SRC_VMS": r"D:\\Backups\\VMs",
+        "DST_VMS": r"D:\\Prod\\VMs",
+        "GNBOTS_SHORTCUT": r"C:\\Program Files (x86)\\GnBots\\GnBots.lnk",
+        "SERVER_NAME": socket.gethostname(),
         "TELEGRAM_TOKEN": "",
         "TELEGRAM_CHAT_ID": ""
     }
@@ -90,6 +91,7 @@ PROFILE_PATH    = CONFIG.get("PROFILE_PATH", "")
 SRC_VMS         = CONFIG.get("SRC_VMS", "")
 DST_VMS         = CONFIG.get("DST_VMS", "")
 GNBOTS_SHORTCUT = CONFIG.get("GNBOTS_SHORTCUT", "")
+SERVER_NAME     = os.getenv("SERVER_NAME", CONFIG.get("SERVER_NAME", socket.gethostname()))
 
 # 3) БД
 RESOURCES_DB = os.path.join(BASE_DIR, "resources_web.db")
@@ -98,6 +100,12 @@ LOGS_DB      = os.path.join(BASE_DIR, "logs_cache.db")
 # 4) Телега — из ENV имеет приоритет, затем config.json
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", CONFIG.get("TELEGRAM_TOKEN", ""))
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", CONFIG.get("TELEGRAM_CHAT_ID", ""))
+
+# 4.1) Имя сервера (для заголовков/уведомлений)
+APP_TITLE = f"RssV7_{SERVER_NAME}" if SERVER_NAME else DEFAULT_TITLE
+if sys.platform == "win32":
+    ctypes.windll.kernel32.SetConsoleTitleW(APP_TITLE)
+
 
 # 5) Health-check (создаст папки БД, проверит конфиг)
 def health_check():
@@ -141,6 +149,11 @@ app = Flask(__name__, template_folder="templates")
 CORS(app)
 
 LAST_UPDATE_TIME = None
+
+
+@app.context_processor
+def inject_server_name():
+    return {"server_name": SERVER_NAME}
 
 LOG_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3} \+\d{2}:\d{2}) "
@@ -915,7 +928,7 @@ def transformLogLine(dt_part, line_str):
 ##############################
 
 # ────────────────────────── настройки ──────────────────────────
-SERVER = "F99"                                       # имя сервера
+SERVER = SERVER_NAME                                # имя сервера
 BACKUP_CONFIG_SRC      = r"C:\LDPlayer\LDPlayer9\vms\config"
 BACKUP_CONFIG_DST_ROOT = r"C:\LD_backup\configs"
 BACKUP_ACCS_DST_ROOT   = r"C:\LD_backup\accs_data"
