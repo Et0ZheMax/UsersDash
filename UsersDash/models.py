@@ -132,7 +132,6 @@ class ClientConfigVisibility(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     script_id = db.Column(db.String(128), nullable=False)
     config_key = db.Column(db.String(128), nullable=False)
-    group_key = db.Column(db.String(128), nullable=True)
     client_visible = db.Column(db.Boolean, default=True, nullable=False)
     client_label = db.Column(db.Text, nullable=True)
     order_index = db.Column(db.Integer, default=0, nullable=False)
