@@ -26,6 +26,7 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     update_account_step_settings,
 )
+from UsersDash.services.info_message import get_global_info_message_text
 from UsersDash.services.tariffs import is_tariff_billable, summarize_tariffs
 
 client_bp = Blueprint("client", __name__, url_prefix="")
