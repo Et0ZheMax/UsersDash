@@ -24,6 +24,7 @@ body {
     font-weight: 600;
     letter-spacing: 0.05em;
     color: #e4e7ff;
+    text-decoration: none;
 }
 
 .header-right {
