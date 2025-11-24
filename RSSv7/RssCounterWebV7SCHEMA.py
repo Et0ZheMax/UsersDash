@@ -8,6 +8,7 @@ import subprocess
 import shlex
 import time
 import shutil
+import tempfile
 import ctypes
 import socket
 import paramiko
@@ -57,6 +58,23 @@ if not is_admin():
 
 
 DEBUG = True  # или False, если не нужен режим отладки
+
+# === Атомарная запись JSON (tmp + os.replace) ================================
+def safe_write_json(path: str, data):
+    """Пишет JSON атомарно: сначала во временный файл, затем os.replace, чтобы не
+    повредить файл при параллельных сохранениях / сбоях."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=d)
+    os.close(fd)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        try: os.remove(tmp)
+        except: pass
+        raise
 
 # -------------------------------------------------
 # Функции health_check
@@ -163,26 +181,6 @@ SCHEMA_TTL_SECONDS   = 600  # 10 минут
 # --- Импорты рядом с остальными ---
 import time, json, os
 from copy import deepcopy
-
-# === Атомарная запись JSON (tmp + os.replace) ================================
-import tempfile
-
-def safe_write_json(path: str, data):
-    """Пишет JSON атомарно: сначала во временный файл, затем os.replace, чтобы не
-    повредить файл при параллельных сохранениях / сбоях."""
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".tmp_", dir=d)
-    os.close(fd)
-    try:
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
-    except Exception:
-        try: os.remove(tmp)
-        except: pass
-        raise
-
 
 # --- Вспомогательные: безопасное чтение файла ---
 def _safe_json_load(path: str):
