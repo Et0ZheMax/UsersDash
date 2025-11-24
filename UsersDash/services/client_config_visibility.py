@@ -90,6 +90,11 @@ def delete_record(
     db.session.commit()
     return count
 
+# Специальный ключ config_key="__step__" используется для скрытия целого шага
+# на клиентской стороне. Такие шаги остаются в исходном списке (для корректных
+# индексов), но не отображаются в интерфейсе клиента.
+STEP_HIDDEN_KEY = "__step__"
+
 DEFAULT_VISIBILITY_RULES = [
     {
         "script_id": "vikingbot.base.gathervip",
@@ -107,6 +112,28 @@ DEFAULT_VISIBILITY_RULES = [
         "group_key": "gathering",
         "client_label": "Сбор альянса",
         "client_visible": True,
+        "order_index": 0,
+    },
+    # Таймеры и сервисные шаги не должны показываться клиентам
+    {
+        "script_id": "vikingbot.base.accountswitch",
+        "config_key": STEP_HIDDEN_KEY,
+        "client_label": "Таймеры: переключение аккаунтов",
+        "client_visible": False,
+        "order_index": 0,
+    },
+    {
+        "script_id": "vikingbot.base.transfer",
+        "config_key": STEP_HIDDEN_KEY,
+        "client_label": "Таймеры: перевод ресурсов",
+        "client_visible": False,
+        "order_index": 0,
+    },
+    {
+        "script_id": "vikingbot.base.openinventory",
+        "config_key": STEP_HIDDEN_KEY,
+        "client_label": "Таймеры: инвентарь",
+        "client_visible": False,
         "order_index": 0,
     },
 ]

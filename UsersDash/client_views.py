@@ -217,6 +217,9 @@ def _build_manage_view_steps(raw_settings, include_schedule: bool = True, *, ste
         if not isinstance(step, dict):
             step = {}
 
+        if step.get("_hidden_for_client"):
+            continue
+
         cfg = step.get("Config") or {}
         script_id = step.get("ScriptId")
         name = (
@@ -305,6 +308,17 @@ def _apply_visibility_to_steps(raw_steps: list[dict], visibility_map: dict, *, i
         cfg = step.get("Config") or {}
         script_id = step.get("ScriptId") or step.get("script_id")
         visibility_rules = visibility_map.get(script_id) or []
+
+        if any(
+            rule.get("config_key") == client_config_visibility.STEP_HIDDEN_KEY
+            and rule.get("client_visible") is False
+            for rule in visibility_rules
+        ):
+            hidden_step = dict(step)
+            hidden_step["Config"] = {}
+            hidden_step["_hidden_for_client"] = True
+            filtered_steps.append(hidden_step)
+            continue
 
         if not visibility_rules or not isinstance(cfg, dict):
             filtered_steps.append(step)
