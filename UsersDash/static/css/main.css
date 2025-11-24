@@ -307,6 +307,26 @@ h1 {
     background: #171a2b;
 }
 
+.tariff-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tariff-label {
+    font-size: 0.8rem;
+    color: #8f96c4;
+    min-height: 18px;
+}
+
+.tariff-label--premium {
+    font-weight: 700;
+    background: linear-gradient(90deg, #fbd38d, #f6ad55, #fbd38d);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
 /* KPI */
 
 .kpi-row {
@@ -353,6 +373,45 @@ h1 {
 .kpi-value {
     font-size: 1.4rem;
     margin-top: 4px;
+}
+
+.tariff-list {
+    list-style: none;
+    margin: 8px 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.tariff-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tariff-item:last-child {
+    border-bottom: none;
+}
+
+.tariff-name {
+    font-weight: 600;
+}
+
+.tariff-name--premium {
+    font-weight: 700;
+    background: linear-gradient(90deg, #fbd38d, #f6ad55, #fbd38d);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.tariff-count {
+    font-weight: 600;
+    color: #a9b4ff;
 }
 
 .status-chip {
