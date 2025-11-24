@@ -20,6 +20,7 @@ from sqlalchemy.orm import joinedload
 from typing import Any
 from UsersDash.models import Account, FarmData, db
 from UsersDash.services.farmdata_status import collect_farmdata_status
+from UsersDash.services import client_config_visibility
 from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_account_settings,
@@ -142,8 +143,10 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
     return [], {}
 
 
-def _build_manage_view_steps(raw_settings, include_schedule: bool = True):
+def _build_manage_view_steps(raw_settings, include_schedule: bool = True, *, steps_override=None):
     steps, _ = _extract_steps_and_menu(raw_settings)
+    if steps_override is not None:
+        steps = steps_override
     view_steps = []
 
     script_labels = {
@@ -249,6 +252,73 @@ def _build_manage_view_steps(raw_settings, include_schedule: bool = True):
         view_steps.append(step_view)
 
     return view_steps
+
+
+def _build_visibility_map(raw_steps: list[dict]) -> dict:
+    """Возвращает матрицу видимости для указанных шагов."""
+
+    visibility_map: dict[str, list[dict]] = {}
+
+    for step in raw_steps or []:
+        script_id = None
+        if isinstance(step, dict):
+            script_id = step.get("ScriptId") or step.get("script_id")
+
+        if not script_id or script_id in visibility_map:
+            continue
+
+        records = client_config_visibility.list_for_script(script_id, scope="global")
+        if not records:
+            continue
+
+        visibility_map[script_id] = [
+            {
+                "config_key": rec.config_key,
+                "group_key": rec.group_key,
+                "client_visible": rec.client_visible,
+                "client_label": rec.client_label,
+                "order_index": rec.order_index,
+            }
+            for rec in records
+        ]
+
+    return visibility_map
+
+
+def _apply_visibility_to_steps(raw_steps: list[dict], visibility_map: dict, *, is_admin: bool) -> list[dict]:
+    """Удаляет скрытые поля конфигурации для клиентов."""
+
+    if is_admin:
+        return raw_steps
+
+    filtered_steps: list[dict] = []
+
+    for step in raw_steps or []:
+        if not isinstance(step, dict):
+            filtered_steps.append(step)
+            continue
+
+        cfg = step.get("Config") or {}
+        script_id = step.get("ScriptId") or step.get("script_id")
+        visibility_rules = visibility_map.get(script_id) or []
+
+        if not visibility_rules or not isinstance(cfg, dict):
+            filtered_steps.append(step)
+            continue
+
+        rules_by_key = {rule.get("config_key"): rule for rule in visibility_rules}
+
+        filtered_cfg = {
+            key: value
+            for key, value in cfg.items()
+            if not (rules_by_key.get(key) and rules_by_key[key].get("client_visible") is False)
+        }
+
+        new_step = dict(step)
+        new_step["Config"] = filtered_cfg
+        filtered_steps.append(new_step)
+
+    return filtered_steps
 
 
 
@@ -392,11 +462,18 @@ def manage_page():
     raw_steps = []
     menu_data = None
     debug_info = None
+    visibility_map = {}
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
+        visibility_map = _build_visibility_map(raw_steps)
+        raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=is_admin)
         if raw_steps:
-            view_steps = _build_manage_view_steps(raw_settings, include_schedule=is_admin)
+            view_steps = _build_manage_view_steps(
+                raw_settings,
+                include_schedule=is_admin,
+                steps_override=raw_steps,
+            )
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
 
@@ -406,6 +483,7 @@ def manage_page():
         selected_account=selected_account,
         view_steps=view_steps,
         raw_steps=raw_steps,
+        visibility_map=visibility_map,
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
@@ -497,7 +575,15 @@ def manage_account_details(account_id: int):
     if not raw_steps:
         return jsonify({"ok": False, "error": "failed to load settings", "debug": debug_info}), 500
 
-    steps = _build_manage_view_steps(raw_settings, include_schedule=getattr(current_user, "role", None) == "admin")
+    is_admin = getattr(current_user, "role", None) == "admin"
+    visibility_map = _build_visibility_map(raw_steps)
+    raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=is_admin)
+
+    steps = _build_manage_view_steps(
+        raw_settings,
+        include_schedule=is_admin,
+        steps_override=raw_steps,
+    )
 
     return jsonify(
         {
@@ -509,6 +595,7 @@ def manage_account_details(account_id: int):
             },
             "steps": steps,
             "raw_steps": raw_steps,
+            "visibility_map": visibility_map,
             "menu": menu_data,
             "debug": debug_info,
         }

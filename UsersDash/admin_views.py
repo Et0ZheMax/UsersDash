@@ -216,7 +216,12 @@ def manage():
 
     admin_required()
 
-    from UsersDash.client_views import _build_manage_view_steps, _extract_steps_and_menu
+    from UsersDash.client_views import (
+        _apply_visibility_to_steps,
+        _build_manage_view_steps,
+        _build_visibility_map,
+        _extract_steps_and_menu,
+    )
 
     accounts = (
         Account.query.options(
@@ -250,13 +255,18 @@ def manage():
     raw_steps = []
     menu_data = None
     debug_info = None
+    visibility_map = {}
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(
             raw_settings, return_debug=True
         )
+        visibility_map = _build_visibility_map(raw_steps)
+        raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=True)
         if raw_steps:
-            view_steps = _build_manage_view_steps(raw_settings)
+            view_steps = _build_manage_view_steps(
+                raw_settings, steps_override=raw_steps
+            )
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
 
@@ -266,6 +276,7 @@ def manage():
         selected_account=selected_account,
         view_steps=view_steps,
         raw_steps=raw_steps,
+        visibility_map=visibility_map,
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
