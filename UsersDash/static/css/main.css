@@ -419,6 +419,7 @@ h1 {
 /* KPI */
 
 .kpi-row {
+    --kpi-card-min-height: 140px;
     display: flex;
     flex-wrap: wrap;
     gap: 12px;
@@ -431,6 +432,7 @@ h1 {
     border-radius: 12px;
     padding: 12px 16px;
     min-width: 150px;
+    min-height: var(--kpi-card-min-height);
 }
 
 .kpi-info-card {
