@@ -27,7 +27,6 @@ from UsersDash.services.remote_api import (
     update_account_step_settings,
 )
 from UsersDash.services.tariffs import is_tariff_billable, summarize_tariffs
-from UsersDash.services.info_message import get_global_info_message_text
 
 client_bp = Blueprint("client", __name__, url_prefix="")
 
@@ -256,6 +255,73 @@ def _build_manage_view_steps(raw_settings, include_schedule: bool = True, *, ste
         view_steps.append(step_view)
 
     return view_steps
+
+
+def _build_visibility_map(raw_steps: list[dict]) -> dict:
+    """Возвращает матрицу видимости для указанных шагов."""
+
+    visibility_map: dict[str, list[dict]] = {}
+
+    for step in raw_steps or []:
+        script_id = None
+        if isinstance(step, dict):
+            script_id = step.get("ScriptId") or step.get("script_id")
+
+        if not script_id or script_id in visibility_map:
+            continue
+
+        records = client_config_visibility.list_for_script(script_id, scope="global")
+        if not records:
+            continue
+
+        visibility_map[script_id] = [
+            {
+                "config_key": rec.config_key,
+                "group_key": rec.group_key,
+                "client_visible": rec.client_visible,
+                "client_label": rec.client_label,
+                "order_index": rec.order_index,
+            }
+            for rec in records
+        ]
+
+    return visibility_map
+
+
+def _apply_visibility_to_steps(raw_steps: list[dict], visibility_map: dict, *, is_admin: bool) -> list[dict]:
+    """Удаляет скрытые поля конфигурации для клиентов."""
+
+    if is_admin:
+        return raw_steps
+
+    filtered_steps: list[dict] = []
+
+    for step in raw_steps or []:
+        if not isinstance(step, dict):
+            filtered_steps.append(step)
+            continue
+
+        cfg = step.get("Config") or {}
+        script_id = step.get("ScriptId") or step.get("script_id")
+        visibility_rules = visibility_map.get(script_id) or []
+
+        if not visibility_rules or not isinstance(cfg, dict):
+            filtered_steps.append(step)
+            continue
+
+        rules_by_key = {rule.get("config_key"): rule for rule in visibility_rules}
+
+        filtered_cfg = {
+            key: value
+            for key, value in cfg.items()
+            if not (rules_by_key.get(key) and rules_by_key[key].get("client_visible") is False)
+        }
+
+        new_step = dict(step)
+        new_step["Config"] = filtered_cfg
+        filtered_steps.append(new_step)
+
+    return filtered_steps
 
 
 def _build_visibility_map(raw_steps: list[dict]) -> dict:
