@@ -738,6 +738,22 @@
         modal.classList.add("is-open");
     }
 
+    function renderScheduleEditor(rootEl, step) {
+        if (!rootEl || !isAdminManage) return;
+
+        const stepIdx = Number(rootEl.dataset ? rootEl.dataset.stepIdx : state.selectedStepIndex);
+        const hasDraft = Number.isFinite(stepIdx)
+            && state.scheduleDrafts
+            && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx);
+        const stepData = hasDraft ? { ...step, ScheduleRules: state.scheduleDrafts[stepIdx] } : step;
+
+        const editor = createScheduleEditor(stepData);
+        if (editor) {
+            editor.dataset.stepIdx = String(Number.isFinite(stepIdx) ? stepIdx : state.selectedStepIndex || 0);
+            rootEl.appendChild(editor);
+        }
+    }
+
     function buildViewStepsFromRaw(rawSteps) {
         return (rawSteps || []).map((step, idx) => {
             const cfg = (step && step.Config) || {};
