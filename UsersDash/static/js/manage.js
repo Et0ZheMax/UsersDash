@@ -162,6 +162,7 @@
         toggleUrlTemplate: "",
         updateUrlTemplate: "",
         selectedStepIndex: null,
+        scheduleDrafts: {},
     }, window.manageInitialState || {});
 
     state.detailsUrlTemplate = state.detailsUrlTemplate || "/manage/account/__ACCOUNT__/details";
@@ -225,13 +226,7 @@
     }
 
     function openScheduleEditor(stepIdx) {
-        if (!isAdminManage) return;
-        const url = resolveScheduleEditorUrl(stepIdx);
-        if (url) {
-            window.open(url, "_blank", "noopener");
-        } else {
-            console.warn("Schedule editor URL is not configured");
-        }
+        openScheduleModal(stepIdx);
     }
 
     function getScriptTitle(step) {
@@ -408,8 +403,8 @@
         return base;
     }
 
-    function renderScheduleEditor(form, step) {
-        if (!isAdminManage || !form) return;
+    function createScheduleEditor(step) {
+        if (!isAdminManage) return null;
         const rules = Array.isArray(step && step.ScheduleRules) ? step.ScheduleRules : [];
 
         const container = document.createElement("div");
@@ -418,7 +413,7 @@
         container.innerHTML = `
             <div class="config-schedule__header">
                 <div>
-                    <div class="config-schedule__title">Расписание</div>
+                    <div class="config-schedule__title">Таймеры</div>
                     <div class="config-schedule__subtitle">Настройте дни, интервал и время запуска шага</div>
                 </div>
                 <button type="button" class="btn btn-secondary btn-small" data-role="schedule-add">Добавить правило</button>
@@ -471,33 +466,119 @@
                 removeBtn.addEventListener("click", () => {
                     row.remove();
                     updateEmptyState();
-                    form.dispatchEvent(new Event("input", { bubbles: true }));
                 });
             }
 
             return row;
         };
 
-        if (rules.length) {
-            rules.forEach((rule) => {
-                list.appendChild(createRow(rule));
-            });
-        } else {
-            updateEmptyState();
-        }
+        rules.forEach((rule) => {
+            const row = createRow(rule);
+            if (row && list) list.appendChild(row);
+        });
+
+        updateEmptyState();
 
         const addBtn = container.querySelector('[data-role="schedule-add"]');
-        if (addBtn) {
+        if (addBtn && list) {
             addBtn.addEventListener("click", () => {
-                if (list && list.querySelector('.config-empty')) {
-                    list.innerHTML = "";
-                }
-                list.appendChild(createRow(null));
-                form.dispatchEvent(new Event("input", { bubbles: true }));
+                const row = createRow({});
+                list.appendChild(row);
             });
         }
 
-        form.appendChild(container);
+        return container;
+    }
+
+    function ensureScheduleModalStyles() {
+        if (document.getElementById("schedule-modal-styles")) return;
+        const style = document.createElement("style");
+        style.id = "schedule-modal-styles";
+        style.textContent = `
+            .schedule-modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 2000; }
+            .schedule-modal.is-open { display: flex; }
+            .schedule-modal__backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+            .schedule-modal__dialog { position: relative; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); width: min(900px, 96vw); max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+            .schedule-modal__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+            .schedule-modal__title { font-size: 20px; font-weight: 700; }
+            .schedule-modal__subtitle { color: #94a3b8; font-size: 14px; margin-top: 4px; }
+            .schedule-modal__body { overflow: auto; padding-right: 4px; }
+            .schedule-modal__footer { display: flex; justify-content: flex-end; gap: 10px; }
+            .schedule-modal__close { background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function closeScheduleModal(modal) {
+        if (!modal) return;
+        modal.classList.remove("is-open");
+    }
+
+    function openScheduleModal(stepIdx) {
+        if (!isAdminManage) return;
+        ensureScheduleModalStyles();
+        const existing = document.querySelector(`.schedule-modal[data-step-idx="${stepIdx}"]`);
+        const modal = existing || document.createElement("div");
+        modal.className = "schedule-modal";
+        modal.dataset.role = "schedule-modal";
+        modal.dataset.stepIdx = String(stepIdx);
+        modal.innerHTML = `
+            <div class="schedule-modal__backdrop" data-role="schedule-modal-close"></div>
+            <div class="schedule-modal__dialog" role="dialog" aria-modal="true">
+                <div class="schedule-modal__header">
+                    <div>
+                        <div class="schedule-modal__title">Настройка таймеров</div>
+                        <div class="schedule-modal__subtitle">Укажите дни, временные рамки и интервал срабатывания шага</div>
+                    </div>
+                    <button type="button" class="schedule-modal__close" data-role="schedule-modal-close" aria-label="Закрыть">×</button>
+                </div>
+                <div class="schedule-modal__body" data-role="schedule-modal-body"></div>
+                <div class="schedule-modal__footer">
+                    <button type="button" class="btn btn-secondary btn-small" data-role="schedule-modal-close">Отмена</button>
+                    <button type="button" class="btn btn-primary btn-small" data-role="schedule-modal-save">Сохранить таймеры</button>
+                </div>
+            </div>
+        `;
+
+        const body = modal.querySelector('[data-role="schedule-modal-body"]');
+        if (body) {
+            body.innerHTML = "";
+            const rawStep = state.rawSteps[stepIdx] || {};
+            const draft = (state.scheduleDrafts && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx))
+                ? state.scheduleDrafts[stepIdx]
+                : undefined;
+            const stepData = draft !== undefined ? { ...rawStep, ScheduleRules: draft } : rawStep;
+            const editor = createScheduleEditor(stepData);
+            if (editor) {
+                editor.dataset.stepIdx = String(stepIdx);
+                body.appendChild(editor);
+            }
+        }
+
+        if (!existing) {
+            modal.addEventListener("click", (event) => {
+                if (event.target.closest('[data-role="schedule-modal-close"]')) {
+                    closeScheduleModal(modal);
+                }
+            });
+
+            const saveBtn = modal.querySelector('[data-role="schedule-modal-save"]');
+            if (saveBtn) {
+                saveBtn.addEventListener("click", () => {
+                    const rules = collectScheduleRules(modal, state.rawSteps[stepIdx] && state.rawSteps[stepIdx].ScheduleRules, { ignoreDraft: true });
+                    state.scheduleDrafts[stepIdx] = rules;
+                    closeScheduleModal(modal);
+
+                    if (Number(state.selectedStepIndex) === Number(stepIdx) && currentConfigForm) {
+                        saveConfig(stepIdx, currentConfigForm, state.rawSteps[stepIdx] && state.rawSteps[stepIdx].Config);
+                    }
+                });
+            }
+
+            document.body.appendChild(modal);
+        }
+
+        modal.classList.add("is-open");
     }
 
     function buildViewStepsFromRaw(rawSteps) {
@@ -788,10 +869,21 @@
         return result;
     }
 
-    function collectScheduleRules(formEl, originalRules) {
-        if (!formEl || !isAdminManage) return null;
-        const editor = formEl.querySelector('[data-role="schedule-editor"]');
-        if (!editor) return null;
+    function collectScheduleRules(rootEl, originalRules, options = {}) {
+        if (!rootEl || !isAdminManage) return null;
+
+        const stepIdx = Number(rootEl.dataset ? rootEl.dataset.stepIdx : NaN);
+        const hasDraft = !options.ignoreDraft
+            && Number.isFinite(stepIdx)
+            && state.scheduleDrafts
+            && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx);
+
+        if (hasDraft) {
+            return state.scheduleDrafts[stepIdx];
+        }
+
+        const editor = rootEl.querySelector('[data-role="schedule-editor"]');
+        if (!editor) return Array.isArray(originalRules) ? originalRules : [];
         const rows = Array.from(editor.querySelectorAll('[data-role="schedule-row"]'));
         if (!rows.length) return [];
 
@@ -891,6 +983,9 @@
                 if (scheduleRules !== null) {
                     state.rawSteps[stepIdx].ScheduleRules = scheduleRules || [];
                 }
+                if (state.scheduleDrafts && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx)) {
+                    delete state.scheduleDrafts[stepIdx];
+                }
                 state.steps = buildViewStepsFromRaw(state.rawSteps);
             }
             renderSteps();
@@ -976,6 +1071,7 @@
     async function loadSteps(accountId, meta = {}) {
         if (!accountId || state.isLoading) return;
         state.isLoading = true;
+        state.scheduleDrafts = {};
         if (meta.name) state.selectedAccountName = meta.name;
         if (meta.server) state.selectedServerName = meta.server;
         highlightAccount(accountId);
