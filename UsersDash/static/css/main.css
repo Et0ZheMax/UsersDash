@@ -2003,17 +2003,18 @@ h1 {
   background: #101224;
   border: 1px solid #20263f;
   border-radius: 12px;
-  padding: 18px;
-  margin: 22px 0;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+  padding: 14px;
+  margin: 16px 0;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+  max-width: 900px;
 }
 
 .admin-payment-panel__header {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .admin-payment-panel__title {
@@ -2023,23 +2024,23 @@ h1 {
 .admin-payment-panel__subtitle {
   color: #aab4d2;
   font-size: 14px;
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .admin-payment-panel__list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 360px;
+  gap: 8px;
+  max-height: 300px;
   overflow-y: auto;
-  padding-right: 6px;
+  padding-right: 4px;
 }
 
 .admin-payment-card {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px;
+  padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid #2a2f48;
   background: #13172a;
@@ -2069,24 +2070,28 @@ h1 {
 .admin-payment-card__main {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .admin-payment-card__title {
   font-weight: 700;
+  font-size: 15px;
 }
 
 .admin-payment-card__meta {
   color: #9aa3c4;
+  font-size: 13px;
 }
 
 .admin-payment-card__date {
   color: #f5d6a1;
+  font-size: 13px;
 }
 
 .admin-payment-card__amount {
   color: #bce6ff;
   font-weight: 600;
+  font-size: 13px;
 }
 
 .admin-payment-card__badge {
@@ -2102,7 +2107,7 @@ h1 {
 
 .admin-payment-card__actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
 }
 
@@ -2111,7 +2116,8 @@ h1 {
   background: #16192a;
   color: #f5f5f5;
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 5px 9px;
+  font-size: 13px;
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   text-decoration: none;
@@ -2141,10 +2147,14 @@ h1 {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   z-index: 2000;
+}
+
+.admin-payment-modal.is-open {
+  display: flex;
 }
 
 .admin-payment-modal__dialog {
