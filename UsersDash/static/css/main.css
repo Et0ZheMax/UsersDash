@@ -429,8 +429,10 @@ h1 {
 
 .kpi-row--stacked {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   gap: 10px;
+  align-items: stretch;
 }
 
 .kpi-card {
