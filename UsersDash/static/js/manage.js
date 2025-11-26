@@ -186,6 +186,8 @@
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
     const layoutRoot = document.querySelector('[data-role="manage-layout"]');
     const manageRoot = document.querySelector('.manage-modern');
+    const accountSearchInput = document.querySelector('[data-role="account-search"]');
+    const accountsSearchEmpty = document.querySelector('[data-role="accounts-search-empty"]');
     const explicitAdminFlag = (typeof window.manageIsAdmin !== "undefined") ? window.manageIsAdmin : false;
     const isAdminManage = Boolean(
         explicitAdminFlag
@@ -288,6 +290,35 @@
         });
 
         return normalized;
+    }
+
+    function getAccountButtons() {
+        return accountsRoot
+            ? Array.from(accountsRoot.querySelectorAll('[data-account-id]'))
+            : [];
+    }
+
+    function applyAccountFilter(rawQuery) {
+        if (!accountsRoot) return;
+        const query = (rawQuery || "").trim().toLowerCase();
+        let visibleCount = 0;
+
+        getAccountButtons().forEach((btn) => {
+            const haystack = [
+                btn.dataset.accountName || "",
+                btn.dataset.serverName || "",
+                btn.dataset.ownerName || "",
+            ].join(" ").toLowerCase();
+
+            const matches = haystack.includes(query);
+            const keepVisible = !query || matches;
+            btn.classList.toggle("is-hidden", !keepVisible);
+            if (keepVisible) visibleCount += 1;
+        });
+
+        if (accountsSearchEmpty) {
+            accountsSearchEmpty.hidden = !query || visibleCount > 0;
+        }
     }
 
     function prepareConfigPayload(payload, originalCfg = {}) {
@@ -1773,6 +1804,12 @@
         }
         if (mobileBackBtn) {
             mobileBackBtn.addEventListener('click', mobileBack);
+        }
+        if (accountSearchInput) {
+            accountSearchInput.addEventListener('input', (event) => {
+                applyAccountFilter(event.target && event.target.value);
+            });
+            applyAccountFilter(accountSearchInput.value);
         }
 
         bindSwipeNavigation();

@@ -20,6 +20,14 @@
         <button class="btn btn-primary" onclick="goBack()">← В дашборд</button>
         <a class="btn btn-outline" href="{{ url_for('admin.config_visibility_matrix') }}">Матрица видимости</a>
         <button class="btn btn-outline" onclick="window.location.reload()">Обновить</button>
+        <label class="manage-modern__search">
+            <span class="manage-modern__search-icon" aria-hidden="true">
+                <svg viewBox="0 0 20 20" focusable="false">
+                    <path d="M13.78 12.72a6 6 0 10-1.06 1.06l2.75 2.75a.75.75 0 101.06-1.06zM12 9a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z" fill="currentColor" />
+                </svg>
+            </span>
+            <input type="search" class="manage-modern__search-input" data-role="account-search" placeholder="Поиск ферм" aria-label="Поиск фермы">
+        </label>
     </div>
 
     <div class="manage-modern__mobile-nav" data-role="mobile-nav">
@@ -39,6 +47,7 @@
                             data-account-id="{{ acc.id }}"
                             data-account-name="{{ acc.name }}"
                             data-server-name="{{ acc.server.name if acc.server else 'N/A' }}"
+                            data-owner-name="{{ acc.owner.username if acc.owner else '' }}"
                             data-account-active="{{ 1 if acc.is_active else 0 }}"
                             data-payment-blocked="{{ 1 if acc.blocked_for_payment else 0 }}"
                             type="button">
@@ -63,6 +72,9 @@
                         </label>
                     </button>
                 {% endfor %}
+                <div class="manage-modern__search-empty" data-role="accounts-search-empty" hidden>
+                    Фермы не найдены по вашему запросу.
+                </div>
             {% else %}
                 <div class="manage-empty">Активных ферм нет.</div>
             {% endif %}

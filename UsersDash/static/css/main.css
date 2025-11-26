@@ -1367,6 +1367,47 @@ h1 {
   flex-wrap: wrap;
 }
 
+.manage-modern__search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  color: #cbd5e1;
+  height: 36px;
+}
+
+.manage-modern__search-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: #94a3b8;
+}
+
+.manage-modern__search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.manage-modern__search-input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e5e7eb;
+  font-size: 14px;
+  min-width: 170px;
+  padding: 0;
+}
+
+.manage-modern__search-input::placeholder {
+  color: #94a3b8;
+  opacity: 0.9;
+}
+
 .manage-modern__mobile-nav {
   display: none;
   align-items: center;
@@ -1522,6 +1563,16 @@ h1 {
   overflow-wrap: anywhere;
 }
 
+.manage-modern__account.is-hidden {
+  display: none;
+}
+
+.manage-modern__search-empty {
+  margin: 8px 10px;
+  color: #9ca3af;
+  font-size: 14px;
+}
+
 @media (max-width: 960px) {
   .manage-modern {
     gap: 10px;
@@ -1535,6 +1586,15 @@ h1 {
   .manage-modern__toolbar {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .manage-modern__search {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
+  .manage-modern__search-input {
+    width: 100%;
   }
 
   .manage-modern__mobile-nav {
