@@ -4,6 +4,10 @@
 
 import os
 import re
+import csv
+import io
+import json
+import difflib
 from datetime import datetime
 import traceback
 from typing import Any
@@ -17,12 +21,21 @@ from flask import (
     render_template,
     request,
     url_for,
+    Response,
 )
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
 from sqlalchemy.orm import joinedload
 
-from UsersDash.models import Account, ClientConfigVisibility, FarmData, Server, User, db
+from UsersDash.models import (
+    Account,
+    ClientConfigVisibility,
+    FarmData,
+    Server,
+    SettingsAuditLog,
+    User,
+    db,
+)
 from UsersDash.services.db_backup import backup_database
 from UsersDash.services import client_config_visibility
 from UsersDash.services.remote_api import (
@@ -1562,3 +1575,143 @@ def admin_farm_data_pull_apply():
         return jsonify({"ok": False, "error": "Ошибка при применении данных"}), 500
 
     return jsonify({"ok": True, "updated": updated, "warnings": warnings})
+
+
+# -------------------- Лог настроек --------------------
+
+
+def _parse_date_param(value: str | None):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _export_settings_log(entries, export_format: str) -> Response:
+    headers = {
+        "Content-Disposition": f"attachment; filename=settings_log.{export_format}",
+    }
+
+    if export_format == "json":
+        payload = [
+            {
+                "id": log.id,
+                "user": log.user.username if log.user else None,
+                "actor": log.actor.username if log.actor else None,
+                "action_type": log.action_type,
+                "field_name": log.field_name,
+                "old_value": log.old_value,
+                "new_value": log.new_value,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in entries
+        ]
+        return Response(json.dumps(payload, ensure_ascii=False), mimetype="application/json", headers=headers)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "user", "actor", "action", "field", "old", "new", "created_at"])
+    for log in entries:
+        writer.writerow(
+            [
+                log.id,
+                log.user.username if log.user else "—",
+                log.actor.username if log.actor else "—",
+                log.action_type,
+                log.field_name or "",
+                (log.old_value or "").replace("\n", " "),
+                (log.new_value or "").replace("\n", " "),
+                log.created_at,
+            ]
+        )
+
+    return Response(output.getvalue(), mimetype="text/csv", headers=headers)
+
+
+@admin_bp.route("/settings-log")
+@login_required
+def settings_log():
+    admin_required()
+
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(100, int(request.args.get("per_page", 25)))
+    action_type = request.args.get("action")
+    field_query = request.args.get("field")
+    user_id = request.args.get("user_id")
+    actor_id = request.args.get("actor_id")
+    start_date = _parse_date_param(request.args.get("start"))
+    end_date = _parse_date_param(request.args.get("end"))
+    export_format = request.args.get("format")
+    search_term = request.args.get("search")
+    sort_dir = request.args.get("sort", "desc")
+
+    query = SettingsAuditLog.query.options(
+        joinedload(SettingsAuditLog.user),
+        joinedload(SettingsAuditLog.actor),
+        joinedload(SettingsAuditLog.account),
+    )
+
+    if action_type:
+        query = query.filter(SettingsAuditLog.action_type == action_type)
+    if field_query:
+        query = query.filter(SettingsAuditLog.field_name.ilike(f"%{field_query}%"))
+    if user_id:
+        query = query.filter(SettingsAuditLog.user_id == user_id)
+    if actor_id:
+        query = query.filter(SettingsAuditLog.actor_id == actor_id)
+    if start_date:
+        query = query.filter(SettingsAuditLog.created_at >= start_date)
+    if end_date:
+        query = query.filter(SettingsAuditLog.created_at <= end_date)
+    if search_term:
+        query = query.filter(SettingsAuditLog.new_value.ilike(f"%{search_term}%"))
+
+    order = SettingsAuditLog.created_at.asc() if sort_dir == "asc" else SettingsAuditLog.created_at.desc()
+    query = query.order_by(order)
+
+    if export_format in {"csv", "json"}:
+        entries = query.all()
+        return _export_settings_log(entries, export_format)
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    return render_template(
+        "admin/settings_audit_log.html",
+        logs=pagination.items,
+        pagination=pagination,
+        filters={
+            "action": action_type,
+            "field": field_query,
+            "user_id": user_id,
+            "actor_id": actor_id,
+            "start": request.args.get("start"),
+            "end": request.args.get("end"),
+            "search": search_term,
+            "sort": sort_dir,
+        },
+    )
+
+
+@admin_bp.route("/settings-log/<int:log_id>/diff")
+@login_required
+def settings_log_diff(log_id: int):
+    admin_required()
+
+    log_entry = SettingsAuditLog.query.get_or_404(log_id)
+    old_val = (log_entry.old_value or "").split("\n")
+    new_val = (log_entry.new_value or "").split("\n")
+    diff_lines = list(
+        difflib.unified_diff(
+            old_val,
+            new_val,
+            fromfile="old",
+            tofile="new",
+            lineterm="",
+        )
+    )
+
+    return jsonify({
+        "diff": "\n".join(diff_lines),
+        "id": log_entry.id,
+    })
