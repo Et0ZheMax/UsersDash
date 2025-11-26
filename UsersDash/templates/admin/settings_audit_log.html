@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Лог настроек{% endblock %}
+
+{% block content %}
+<h1>Лог настроек</h1>
+
+<form method="get" class="form-grid">
+    <div class="form-group">
+        <label>Пользователь (ID)</label>
+        <input type="text" name="user_id" value="{{ filters.user_id or '' }}" class="form-input" placeholder="123">
+    </div>
+    <div class="form-group">
+        <label>Администратор / актор (ID)</label>
+        <input type="text" name="actor_id" value="{{ filters.actor_id or '' }}" class="form-input" placeholder="123">
+    </div>
+    <div class="form-group">
+        <label>Тип действия</label>
+        <input type="text" name="action" value="{{ filters.action or '' }}" class="form-input" placeholder="step_update">
+    </div>
+    <div class="form-group">
+        <label>Поле</label>
+        <input type="text" name="field" value="{{ filters.field or '' }}" class="form-input" placeholder="step:1">
+    </div>
+    <div class="form-group">
+        <label>Поиск по значению</label>
+        <input type="text" name="search" value="{{ filters.search or '' }}" class="form-input" placeholder="telegram">
+    </div>
+    <div class="form-group">
+        <label>С даты (ISO)</label>
+        <input type="text" name="start" value="{{ filters.start or '' }}" class="form-input" placeholder="2024-01-01">
+    </div>
+    <div class="form-group">
+        <label>По дату (ISO)</label>
+        <input type="text" name="end" value="{{ filters.end or '' }}" class="form-input" placeholder="2024-12-31">
+    </div>
+    <div class="form-group">
+        <label>Сортировка</label>
+        <select name="sort" class="form-input">
+            <option value="desc" {% if filters.sort != 'asc' %}selected{% endif %}>Новые сверху</option>
+            <option value="asc" {% if filters.sort == 'asc' %}selected{% endif %}>Старые сверху</option>
+        </select>
+    </div>
+    <div class="form-actions">
+        <button type="submit" class="btn">Фильтровать</button>
+        <a class="btn btn-outline" href="{{ url_for('admin.settings_log') }}">Сбросить</a>
+        {% set qs = request.query_string.decode('utf-8') %}
+        <a class="btn btn-outline" href="{{ url_for('admin.settings_log') }}{% if qs %}?{{ qs }}&{% else %}?{% endif %}format=csv">Экспорт CSV</a>
+        <a class="btn btn-outline" href="{{ url_for('admin.settings_log') }}{% if qs %}?{{ qs }}&{% else %}?{% endif %}format=json">Экспорт JSON</a>
+    </div>
+</form>
+
+<div class="table-responsive">
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Дата</th>
+            <th>Пользователь</th>
+            <th>Актор</th>
+            <th>Аккаунт</th>
+            <th>Действие</th>
+            <th>Поле</th>
+            <th>Старое значение</th>
+            <th>Новое значение</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for log in logs %}
+            <tr>
+                <td>{{ log.created_at or '—' }}</td>
+                <td>{{ log.user.username if log.user else '—' }}</td>
+                <td>{{ log.actor.username if log.actor else '—' }}</td>
+                <td>{{ log.account.name if log.account else '—' }}</td>
+                <td>{{ log.action_type }}</td>
+                <td>{{ log.field_name or '—' }}</td>
+                <td class="mono small">{{ (log.old_value or '—')|truncate(80) }}</td>
+                <td class="mono small">{{ (log.new_value or '—')|truncate(80) }}</td>
+                <td>
+                    <button class="btn btn-outline" data-action="show-diff" data-log-id="{{ log.id }}">Показать дифф</button>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="9" class="muted">Нет записей по заданным фильтрам.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if pagination.pages > 1 %}
+<div class="pagination">
+    {% if pagination.has_prev %}
+        <a class="btn btn-outline" href="{{ url_for('admin.settings_log', page=pagination.prev_num, **request.args.to_dict(flat=True)) }}">Назад</a>
+    {% endif %}
+    <span class="pagination-label">Страница {{ pagination.page }} / {{ pagination.pages }}</span>
+    {% if pagination.has_next %}
+        <a class="btn btn-outline" href="{{ url_for('admin.settings_log', page=pagination.next_num, **request.args.to_dict(flat=True)) }}">Вперёд</a>
+    {% endif %}
+</div>
+{% endif %}
+
+<div class="modal" id="diff-modal" hidden>
+    <div class="modal-content">
+        <h3>Дифф</h3>
+        <pre data-role="diff-body" class="mono"></pre>
+        <div class="form-actions">
+            <button class="btn" data-action="close-diff">Закрыть</button>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const diffModal = document.getElementById('diff-modal');
+    const diffBody = diffModal?.querySelector('[data-role="diff-body"]');
+
+    const showDiff = async (id) => {
+        const res = await fetch(`{{ url_for('admin.settings_log') }}/${id}/diff`);
+        if (!res.ok) {
+            alert('Не удалось получить дифф');
+            return;
+        }
+        const data = await res.json();
+        if (diffBody) {
+            diffBody.textContent = data.diff || '—';
+            diffModal.hidden = false;
+        }
+    };
+
+    document.addEventListener('click', (event) => {
+        const target = event.target;
+        if (target.matches('[data-action="show-diff"]')) {
+            const id = target.getAttribute('data-log-id');
+            showDiff(id);
+        }
+        if (target.matches('[data-action="close-diff"]')) {
+            diffModal.hidden = true;
+        }
+    });
+})();
+</script>
+{% endblock %}

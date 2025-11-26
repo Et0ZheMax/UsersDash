@@ -245,4 +245,37 @@ class ActionLog(db.Model):
     def __repr__(self):
         return f"<ActionLog {self.action_type} by={self.user_id} acc={self.account_id}>"
 
+
+class SettingsAuditLog(db.Model):
+    __tablename__ = "settings_audit_log"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    actor_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=True)
+
+    action_type = db.Column(db.String(64), nullable=False)
+    field_name = db.Column(db.String(128), nullable=True, index=True)
+    old_value = db.Column(db.Text, nullable=True)
+    new_value = db.Column(db.Text, nullable=True)
+    extra_json = db.Column(db.Text, nullable=True)
+
+    ip_address = db.Column(db.String(64), nullable=True)
+    user_agent = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    user = db.relationship("User", foreign_keys=[user_id])
+    actor = db.relationship("User", foreign_keys=[actor_id])
+    account = db.relationship("Account")
+
+    __table_args__ = (
+        db.Index("idx_settings_audit_user_created", "user_id", "created_at"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SettingsAuditLog action={self.action_type} user={self.user_id} "
+            f"actor={self.actor_id}>"
+        )
+
   

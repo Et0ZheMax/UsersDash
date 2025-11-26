@@ -26,6 +26,7 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     update_account_step_settings,
 )
+from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
 from UsersDash.services.tariffs import is_tariff_billable, summarize_tariffs
 
@@ -286,6 +287,21 @@ def _build_visibility_map(raw_steps: list[dict]) -> dict:
         ]
 
     return visibility_map
+
+
+def _get_step_snapshot(account: Account, step_idx: int) -> dict | None:
+    """Возвращает словарь шага настроек для аудита."""
+
+    raw_settings = fetch_account_settings(account)
+    steps, _ = _extract_steps_and_menu(raw_settings)
+    if not isinstance(steps, list):
+        return None
+
+    if step_idx < 0 or step_idx >= len(steps):
+        return None
+
+    step = steps[step_idx]
+    return step if isinstance(step, dict) else None
 
 
 def _apply_visibility_to_steps(raw_steps: list[dict], visibility_map: dict, *, is_admin: bool) -> list[dict]:
@@ -618,6 +634,18 @@ def account_settings(account_id: int):
             "is_active": is_active,
         })
 
+    log_settings_action(
+        account.owner,
+        current_user,
+        "settings_page_opened",
+        {
+            "account": account,
+            "field": "page",
+            "old_value": None,
+            "new_value": "view",
+        },
+    )
+
     return render_template(
         "client/account_settings.html",
         account=account,
@@ -702,7 +730,23 @@ def account_toggle_step(account_id: int, step_idx: int):
 
     new_active = bool(payload.get("is_active"))
 
-    ok, msg = update_account_step_settings(account, step_idx, {"IsActive": new_active})
+    existing_step = _get_step_snapshot(account, step_idx)
+    old_active = bool(existing_step.get("IsActive", True)) if existing_step else None
+
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "step_toggle",
+        {
+            "account": account,
+            "field": f"step:{step_idx}:IsActive",
+            "old_value": old_active,
+            "new_value": new_active,
+        },
+    ) as audit_ctx:
+        ok, msg = update_account_step_settings(account, step_idx, {"IsActive": new_active})
+        audit_ctx["result"] = "ok" if ok else "failed"
+
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": msg}), status
 
@@ -738,7 +782,28 @@ def manage_update_step(account_id: int, step_idx: int):
     if not update_payload:
         return jsonify({"ok": False, "error": "no valid fields"}), 400
 
-    ok, msg = update_account_step_settings(account, step_idx, update_payload)
+    existing_step = _get_step_snapshot(account, step_idx)
+    existing_config = existing_step.get("Config") if isinstance(existing_step, dict) else None
+    existing_schedule = existing_step.get("ScheduleRules") if isinstance(existing_step, dict) else None
+
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "step_update",
+        {
+            "account": account,
+            "field": f"step:{step_idx}",
+            "old_value": {
+                "IsActive": existing_step.get("IsActive") if existing_step else None,
+                "Config": existing_config,
+                "ScheduleRules": existing_schedule,
+            },
+            "new_value": update_payload,
+        },
+    ) as audit_ctx:
+        ok, msg = update_account_step_settings(account, step_idx, update_payload)
+        audit_ctx["result"] = "ok" if ok else "failed"
+
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": msg}), status
 
