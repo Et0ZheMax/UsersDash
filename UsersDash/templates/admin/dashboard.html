@@ -301,7 +301,6 @@
                     applyBlockedState(accountId, true);
                     markForRemoval(accountId);
                 }
-                closeModal();
             } catch (err) {
                 console.error(err);
                 alert(err.message || 'Не удалось обновить оплату');

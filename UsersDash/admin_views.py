@@ -227,6 +227,9 @@ def admin_dashboard():
 
     payment_cards = []
     for acc in payment_accounts:
+        if acc.blocked_for_payment:
+            # Уже отключенные за неоплату не показываем повторно в списке платежей
+            continue
         pay_date = acc.next_payment_at.date()
         days_left = (pay_date - today_date).days
         if days_left <= 0:

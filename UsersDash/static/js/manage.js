@@ -186,8 +186,6 @@
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
     const layoutRoot = document.querySelector('[data-role="manage-layout"]');
     const manageRoot = document.querySelector('.manage-modern');
-    const accountSearchInput = document.querySelector('[data-role="account-search"]');
-    const accountsSearchEmpty = document.querySelector('[data-role="accounts-search-empty"]');
     const explicitAdminFlag = (typeof window.manageIsAdmin !== "undefined") ? window.manageIsAdmin : false;
     const isAdminManage = Boolean(
         explicitAdminFlag
