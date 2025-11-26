@@ -523,10 +523,12 @@ def manage_page():
     accounts = (
         Account.query
         .options(joinedload(Account.server))
-        .filter_by(owner_id=current_user.id, is_active=True)
-        .order_by(Account.name.asc())
+        .filter_by(owner_id=current_user.id)
+        .order_by(Account.is_active.desc(), Account.name.asc())
         .all()
     )
+
+    active_accounts_count = sum(1 for acc in accounts if acc.is_active)
 
     selected_account = None
     selected_id = request.args.get("account_id")
@@ -536,14 +538,14 @@ def manage_page():
         except (TypeError, ValueError):
             selected_id_int = None
     else:
-        selected_id_int = accounts[0].id if accounts else None
+        selected_id_int = None
 
     for acc in accounts:
         if selected_id_int and acc.id == selected_id_int:
             selected_account = acc
             break
-    if not selected_account and accounts:
-        selected_account = accounts[0]
+    if not selected_account:
+        selected_account = next((acc for acc in accounts if acc.is_active), None) or (accounts[0] if accounts else None)
 
     view_steps = []
     is_admin = getattr(current_user, "role", None) == "admin"
@@ -576,6 +578,7 @@ def manage_page():
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
+        active_accounts_count=active_accounts_count,
     )
 
 
@@ -665,7 +668,7 @@ def manage_account_details(account_id: int):
     )
 
     if getattr(current_user, "role", None) != "admin":
-        query = query.filter_by(owner_id=current_user.id, is_active=True)
+        query = query.filter_by(owner_id=current_user.id)
 
     account = query.first()
     if not account:
@@ -761,7 +764,7 @@ def manage_update_step(account_id: int, step_idx: int):
     )
 
     if getattr(current_user, "role", None) != "admin":
-        query = query.filter_by(owner_id=current_user.id, is_active=True)
+        query = query.filter_by(owner_id=current_user.id)
 
     account = query.first()
     if not account:
@@ -806,6 +809,47 @@ def manage_update_step(account_id: int, step_idx: int):
 
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": msg}), status
+
+
+@client_bp.route("/manage/account/<int:account_id>/toggle-active", methods=["POST"])
+@login_required
+def manage_toggle_account_active(account_id: int):
+    query = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter(Account.id == account_id)
+    )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter_by(owner_id=current_user.id)
+
+    account = query.first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    if "is_active" not in payload:
+        return jsonify({"ok": False, "error": "is_active is required"}), 400
+
+    new_active = bool(payload.get("is_active"))
+    old_active = bool(account.is_active)
+
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "account_toggle",
+        {
+            "account": account,
+            "field": "account:IsActive",
+            "old_value": old_active,
+            "new_value": new_active,
+        },
+    ) as audit_ctx:
+        account.is_active = new_active
+        db.session.commit()
+        audit_ctx["result"] = "ok"
+
+    return jsonify({"ok": True, "is_active": account.is_active})
 
 
 @client_bp.route("/account/<int:account_id>/refresh", methods=["POST"])

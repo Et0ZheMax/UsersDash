@@ -12,7 +12,7 @@
         </div>
         <div class="manage-summary">
             <div class="summary-label">Активных ферм</div>
-            <div class="summary-value">{{ accounts|length }}</div>
+            <div class="summary-value">{{ active_accounts_count }}</div>
         </div>
     </div>
 
@@ -35,14 +35,27 @@
         <div class="manage-modern__column manage-modern__column--accounts manage-accounts" data-role="manage-accounts">
             {% if accounts %}
                 {% for acc in accounts %}
-                    <button class="manage-modern__account {% if selected_account and acc.id == selected_account.id %}is-active{% endif %}"
+                    <button class="manage-modern__account {% if selected_account and acc.id == selected_account.id %}is-active{% endif %} {% if not acc.is_active %}is-disabled{% endif %}"
                             data-account-id="{{ acc.id }}"
                             data-account-name="{{ acc.name }}"
-                            data-server-name="{{ acc.server.name if acc.server else 'N/A' }}">
-                        <div class="manage-modern__account-name">{{ acc.name }}</div>
-                        <div class="manage-modern__account-meta">
-                            {{ acc.server.name if acc.server else 'N/A' }} — {{ acc.owner.username if acc.owner else '—' }}
+                            data-server-name="{{ acc.server.name if acc.server else 'N/A' }}"
+                            data-account-active="{{ 1 if acc.is_active else 0 }}"
+                            type="button">
+                        <div class="manage-modern__account-body">
+                            <div class="manage-modern__account-name">{{ acc.name }}</div>
+                            <div class="manage-modern__account-meta">
+                                {{ acc.server.name if acc.server else 'N/A' }} — {{ acc.owner.username if acc.owner else '—' }}
+                            </div>
                         </div>
+                        <label class="ios-switch manage-modern__account-toggle">
+                            <input class="ios-switch__input"
+                                   type="checkbox"
+                                   data-role="account-toggle"
+                                   data-account-id="{{ acc.id }}"
+                                   data-active-state="{{ 1 if acc.is_active else 0 }}"
+                                   {% if acc.is_active %}checked{% endif %}>
+                            <span class="ios-switch__slider" aria-hidden="true"></span>
+                        </label>
                     </button>
                 {% endfor %}
             {% else %}
@@ -127,6 +140,7 @@
     {% set details_url = url_for('client.manage_account_details', account_id=0) %}
     {% set toggle_url = url_for('client.account_toggle_step', account_id=0, step_idx=0) %}
     {% set update_url = url_for('client.manage_update_step', account_id=0, step_idx=0) %}
+    {% set account_toggle_url = url_for('client.manage_toggle_account_active', account_id=0) %}
 
     window.manageInitialState = {
         selectedAccountId: {{ selected_account.id if selected_account else 'null' }},
@@ -141,6 +155,7 @@
         detailsUrlTemplate: {{ details_url.replace('0', '__ACCOUNT__', 1)|tojson }},
         toggleUrlTemplate: {{ toggle_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
         updateUrlTemplate: {{ update_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
+        accountToggleUrlTemplate: {{ account_toggle_url.replace('0', '__ACCOUNT__', 1)|tojson }},
     };
 
     function goBack() {

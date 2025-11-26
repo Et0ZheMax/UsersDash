@@ -182,10 +182,11 @@ def admin_dashboard():
             joinedload(Account.server),
             joinedload(Account.owner),
         )
-        .filter_by(is_active=True)
-        .order_by(Account.server_id.asc(), Account.name.asc())
+        .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
+
+    active_accounts_count = sum(1 for acc in accounts if acc.is_active)
 
     resources_map = fetch_resources_for_accounts(accounts)
     accounts_data = []
@@ -254,7 +255,7 @@ def info_message_page():
 @admin_bp.route("/manage", endpoint="manage")
 @login_required
 def manage():
-    """Страница manage для админа с доступом ко всем активным фермам."""
+    """Страница manage для админа с доступом ко всем фермам."""
 
     admin_required()
 
@@ -270,10 +271,11 @@ def manage():
             joinedload(Account.server),
             joinedload(Account.owner),
         )
-        .filter_by(is_active=True)
-        .order_by(Account.server_id.asc(), Account.name.asc())
+        .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
+
+    active_accounts_count = sum(1 for acc in accounts if acc.is_active)
 
     selected_account = None
     selected_id = request.args.get("account_id")
@@ -283,14 +285,14 @@ def manage():
         except (TypeError, ValueError):
             selected_id_int = None
     else:
-        selected_id_int = accounts[0].id if accounts else None
+        selected_id_int = None
 
     for acc in accounts:
         if selected_id_int and acc.id == selected_id_int:
             selected_account = acc
             break
-    if not selected_account and accounts:
-        selected_account = accounts[0]
+    if not selected_account:
+        selected_account = next((acc for acc in accounts if acc.is_active), None) or (accounts[0] if accounts else None)
 
     view_steps = []
     steps_error = None
@@ -322,6 +324,7 @@ def manage():
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
+        active_accounts_count=active_accounts_count,
     )
 
 

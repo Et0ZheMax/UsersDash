@@ -1447,6 +1447,9 @@ h1 {
 }
 
 .manage-modern__account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   width: 100%;
   text-align: left;
   background: none;
@@ -1466,6 +1469,19 @@ h1 {
 .manage-modern__account.is-active {
   border-color: rgba(76, 127, 255, 0.8);
   background: rgba(76, 127, 255, 0.12);
+}
+
+.manage-modern__account.is-disabled {
+  opacity: 0.65;
+}
+
+.manage-modern__account-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.manage-modern__account-toggle {
+  flex-shrink: 0;
 }
 
 .manage-modern__account-name {
