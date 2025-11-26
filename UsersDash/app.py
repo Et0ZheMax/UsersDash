@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from flask import Flask, g, redirect, url_for
 from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
+from sqlalchemy import inspect, text
 
 from UsersDash.config import Config
 from UsersDash.models import db, User
@@ -145,6 +146,31 @@ def ensure_default_admin():
     print("[INFO] Создан дефолтный администратор: логин 'admin', пароль 'admin'.")
 
 
+def ensure_blocked_for_payment_column():
+    """Добавляет колонку blocked_for_payment в accounts, если её нет (SQLite)."""
+
+    try:
+        engine = db.engine
+        if engine.url.get_backend_name() != "sqlite":
+            return
+
+        inspector = inspect(engine)
+        columns = [col["name"] for col in inspector.get_columns("accounts")]
+        if "blocked_for_payment" in columns:
+            return
+
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE accounts "
+                    "ADD COLUMN blocked_for_payment BOOLEAN DEFAULT 0 NOT NULL"
+                )
+            )
+        print("[MIGRATE] Добавлена колонка accounts.blocked_for_payment")
+    except Exception as exc:
+        print(f"[MIGRATE] Не удалось добавить колонку blocked_for_payment: {exc}")
+
+
 def _run_midnight_backup(app: Flask):
     """Фоновая задача: ежедневный бэкап БД в 00:00."""
 
@@ -191,6 +217,7 @@ def create_app() -> Flask:
     # Создаём таблицы, если их ещё нет
     with app.app_context():
         db.create_all()
+        ensure_blocked_for_payment_column()
         ensure_default_admin()
 
     # Регистрируем blueprints

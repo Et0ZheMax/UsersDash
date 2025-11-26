@@ -35,23 +35,28 @@
         <div class="manage-modern__column manage-modern__column--accounts manage-accounts" data-role="manage-accounts">
             {% if accounts %}
                 {% for acc in accounts %}
-                    <button class="manage-modern__account {% if selected_account and acc.id == selected_account.id %}is-active{% endif %} {% if not acc.is_active %}is-disabled{% endif %}"
+                    <button class="manage-modern__account {% if selected_account and acc.id == selected_account.id %}is-active{% endif %} {% if not acc.is_active %}is-disabled{% endif %} {% if acc.blocked_for_payment %}is-payment-blocked{% endif %}"
                             data-account-id="{{ acc.id }}"
                             data-account-name="{{ acc.name }}"
                             data-server-name="{{ acc.server.name if acc.server else 'N/A' }}"
                             data-account-active="{{ 1 if acc.is_active else 0 }}"
+                            data-payment-blocked="{{ 1 if acc.blocked_for_payment else 0 }}"
                             type="button">
                         <div class="manage-modern__account-body">
                             <div class="manage-modern__account-name">{{ acc.name }}</div>
                             <div class="manage-modern__account-meta">
                                 {{ acc.server.name if acc.server else 'N/A' }} — {{ acc.owner.username if acc.owner else '—' }}
                             </div>
+                            {% if acc.blocked_for_payment %}
+                                <div class="manage-modern__account-note">Отключено до оплаты</div>
+                            {% endif %}
                         </div>
                         <label class="ios-switch manage-modern__account-toggle">
                             <input class="ios-switch__input"
                                    type="checkbox"
                                    data-role="account-toggle"
                                    data-account-id="{{ acc.id }}"
+                                   data-payment-blocked="{{ 1 if acc.blocked_for_payment else 0 }}"
                                    data-active-state="{{ 1 if acc.is_active else 0 }}"
                                    {% if acc.is_active %}checked{% endif %}>
                             <span class="ios-switch__slider" aria-hidden="true"></span>
@@ -142,6 +147,7 @@
     {% set update_url = url_for('client.manage_update_step', account_id=0, step_idx=0) %}
     {% set account_toggle_url = url_for('client.manage_toggle_account_active', account_id=0) %}
 
+    window.manageIsAdmin = true;
     window.manageInitialState = {
         selectedAccountId: {{ selected_account.id if selected_account else 'null' }},
         selectedAccountName: {{ (selected_account.name if selected_account else '')|tojson }},

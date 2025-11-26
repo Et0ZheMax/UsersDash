@@ -82,6 +82,9 @@ class Account(db.Model):
     # Активна ли ферма
     is_active = db.Column(db.Boolean, default=True, nullable=False)
 
+    # Блокировка за неоплату (клиенты не могут включить сами)
+    blocked_for_payment = db.Column(db.Boolean, default=False, nullable=False)
+
     # Игровое королевство (мир) и заметки по ферме
     game_world = db.Column(db.Text, nullable=True)
     notes = db.Column(db.Text, nullable=True)
