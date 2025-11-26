@@ -4,6 +4,15 @@
 
 import os
 import sqlite3
+import sys
+from pathlib import Path
+
+# Позволяем запускать скрипт напрямую из любой директории
+CURRENT_FILE = Path(__file__).resolve()
+PACKAGE_ROOT = CURRENT_FILE.parent
+REPO_ROOT = PACKAGE_ROOT.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from UsersDash.config import Config
 
