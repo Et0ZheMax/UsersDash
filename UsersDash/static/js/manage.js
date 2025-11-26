@@ -186,11 +186,14 @@
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
     const layoutRoot = document.querySelector('[data-role="manage-layout"]');
     const manageRoot = document.querySelector('.manage-modern');
+    const explicitAdminFlag = (typeof window.manageIsAdmin !== "undefined") ? window.manageIsAdmin : false;
     const isAdminManage = Boolean(
-        (window.manageInitialState && window.manageInitialState.menu && window.manageInitialState.menu.is_admin_manage)
+        explicitAdminFlag
+        || (window.manageInitialState && window.manageInitialState.menu && window.manageInitialState.menu.is_admin_manage)
         || (window.manageInitialState && window.manageInitialState.is_admin_manage)
         || ((window.location && window.location.pathname) ? window.location.pathname.includes('/admin/') : false)
     );
+    const paymentWarning = document.querySelector('[data-role="payment-warning"]');
 
     function escapeHtml(str) {
         return (str || "").replace(/[&<>"]+/g, (ch) => ({
@@ -1192,26 +1195,47 @@
         items.forEach((btn) => {
             const isActive = String(btn.dataset.accountId) === String(accountId);
             btn.classList.toggle("is-active", isActive);
+            if (isActive) {
+                updatePaymentWarning(btn);
+            }
         });
     }
 
-    function applyAccountActiveState(btn, isActive) {
+    function applyAccountActiveState(btn, isActive, paymentBlockedOverride) {
         if (!btn) return;
         btn.dataset.accountActive = isActive ? "1" : "0";
+        if (typeof paymentBlockedOverride === "boolean") {
+            btn.dataset.paymentBlocked = paymentBlockedOverride ? "1" : "0";
+        }
+        const paymentBlocked = btn.dataset.paymentBlocked === "1";
+
         btn.classList.toggle("is-disabled", !isActive);
+        btn.classList.toggle("is-payment-blocked", paymentBlocked);
         const toggle = btn.querySelector('input[data-role="account-toggle"]');
         if (toggle) {
             toggle.checked = isActive;
             toggle.dataset.activeState = isActive ? "1" : "0";
+            toggle.dataset.paymentBlocked = paymentBlocked ? "1" : "0";
+            toggle.disabled = paymentBlocked && !isAdminManage;
         }
+    }
+
+    function updatePaymentWarning(selectedBtn) {
+        if (!paymentWarning) return;
+        const isBlocked = !!(selectedBtn && selectedBtn.dataset.paymentBlocked === "1");
+        paymentWarning.hidden = !isBlocked;
     }
 
     function syncAccountsUi() {
         if (!accountsRoot) return;
         accountsRoot.querySelectorAll('[data-account-id]').forEach((btn) => {
             const isActive = btn.dataset.accountActive !== "0";
-            applyAccountActiveState(btn, isActive);
+            const paymentBlocked = btn.dataset.paymentBlocked === "1";
+            applyAccountActiveState(btn, isActive, paymentBlocked);
         });
+        const current = accountsRoot.querySelector('.manage-modern__account.is-active')
+            || accountsRoot.querySelector('[data-account-id]');
+        updatePaymentWarning(current);
     }
 
     async function toggleStep(accountId, stepIdx, nextActive, control) {
@@ -1244,6 +1268,14 @@
         if (!accountId) return;
         const desiredState = Boolean(nextActive);
         const prevState = control ? control.dataset.activeState === "1" : null;
+        const paymentBlocked = control ? control.dataset.paymentBlocked === "1" : false;
+        if (paymentBlocked && !isAdminManage && desiredState) {
+            if (control && prevState !== null) {
+                control.checked = prevState;
+            }
+            alert("Ферма отключена до оплаты. Напишите @tvoinetakoi, чтобы возобновить работу.");
+            return;
+        }
         if (control) control.disabled = true;
         try {
             const url = replaceTemplate(state.accountToggleUrlTemplate, accountId);
@@ -1255,7 +1287,17 @@
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) throw new Error(data.error || "Не удалось обновить ферму");
             const btn = accountsRoot && accountsRoot.querySelector(`[data-account-id="${accountId}"]`);
-            applyAccountActiveState(btn, desiredState);
+            const blockedFlag = typeof data.blocked_for_payment === "boolean"
+                ? data.blocked_for_payment
+                : (btn ? btn.dataset.paymentBlocked === "1" : false);
+            if (btn) {
+                btn.dataset.paymentBlocked = blockedFlag ? "1" : "0";
+            }
+            applyAccountActiveState(btn, desiredState, blockedFlag);
+            if (control) control.dataset.paymentBlocked = blockedFlag ? "1" : "0";
+            if (btn && String(state.selectedAccountId) === String(accountId)) {
+                updatePaymentWarning(btn);
+            }
         } catch (err) {
             console.error(err);
             if (control && prevState !== null) {
@@ -1574,6 +1616,7 @@
         }
         const accountId = btn.dataset.accountId;
         if (!accountId) return;
+        updatePaymentWarning(btn);
         loadSteps(accountId, {
             name: btn.dataset.accountName,
             server: btn.dataset.serverName,
