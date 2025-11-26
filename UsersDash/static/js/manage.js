@@ -164,6 +164,7 @@
         detailsUrlTemplate: "",
         toggleUrlTemplate: "",
         updateUrlTemplate: "",
+        accountToggleUrlTemplate: "",
         selectedStepIndex: null,
         scheduleDrafts: {},
     }, window.manageInitialState || {});
@@ -171,6 +172,7 @@
     state.detailsUrlTemplate = state.detailsUrlTemplate || "/manage/account/__ACCOUNT__/details";
     state.toggleUrlTemplate = state.toggleUrlTemplate || "/account/__ACCOUNT__/settings/step/__STEP__/toggle";
     state.updateUrlTemplate = state.updateUrlTemplate || "/manage/account/__ACCOUNT__/settings/__STEP__";
+    state.accountToggleUrlTemplate = state.accountToggleUrlTemplate || "/manage/account/__ACCOUNT__/toggle-active";
 
     const accountsRoot = document.querySelector('[data-role="manage-accounts"]');
     const stepsRoot = document.querySelector('[data-role="manage-steps"]');
@@ -1193,6 +1195,25 @@
         });
     }
 
+    function applyAccountActiveState(btn, isActive) {
+        if (!btn) return;
+        btn.dataset.accountActive = isActive ? "1" : "0";
+        btn.classList.toggle("is-disabled", !isActive);
+        const toggle = btn.querySelector('input[data-role="account-toggle"]');
+        if (toggle) {
+            toggle.checked = isActive;
+            toggle.dataset.activeState = isActive ? "1" : "0";
+        }
+    }
+
+    function syncAccountsUi() {
+        if (!accountsRoot) return;
+        accountsRoot.querySelectorAll('[data-account-id]').forEach((btn) => {
+            const isActive = btn.dataset.accountActive !== "0";
+            applyAccountActiveState(btn, isActive);
+        });
+    }
+
     async function toggleStep(accountId, stepIdx, nextActive, control) {
         if (!accountId) return;
         const desiredState = Boolean(nextActive);
@@ -1214,6 +1235,34 @@
         } catch (err) {
             console.error(err);
             alert(err.message || "Не удалось обновить шаг");
+        } finally {
+            if (control) control.disabled = false;
+        }
+    }
+
+    async function toggleAccountActive(accountId, nextActive, control) {
+        if (!accountId) return;
+        const desiredState = Boolean(nextActive);
+        const prevState = control ? control.dataset.activeState === "1" : null;
+        if (control) control.disabled = true;
+        try {
+            const url = replaceTemplate(state.accountToggleUrlTemplate, accountId);
+            const resp = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
+                body: JSON.stringify({ is_active: desiredState }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) throw new Error(data.error || "Не удалось обновить ферму");
+            const btn = accountsRoot && accountsRoot.querySelector(`[data-account-id="${accountId}"]`);
+            applyAccountActiveState(btn, desiredState);
+        } catch (err) {
+            console.error(err);
+            if (control && prevState !== null) {
+                control.checked = prevState;
+                control.dataset.activeState = prevState ? "1" : "0";
+            }
+            alert(err.message || "Не удалось обновить ферму");
         } finally {
             if (control) control.disabled = false;
         }
@@ -1511,6 +1560,13 @@
     }
 
     function handleAccountClick(event) {
+        if (
+            event.target.closest('[data-role="account-toggle"]')
+            || event.target.closest('.manage-modern__account-toggle')
+        ) {
+            event.stopPropagation();
+            return;
+        }
         const btn = event.target.closest('[data-account-id]');
         if (!btn) return;
         if (event.preventDefault) {
@@ -1525,6 +1581,15 @@
         if (isMobile()) {
             setMobileView('steps');
         }
+    }
+
+    function handleAccountToggle(event) {
+        const toggleInput = event.target.closest('input[data-role="account-toggle"]');
+        if (!toggleInput) return;
+        event.stopPropagation();
+        const accountId = toggleInput.dataset.accountId;
+        if (!accountId) return;
+        toggleAccountActive(accountId, toggleInput.checked, toggleInput);
     }
 
     function handleStepToggleChange(event) {
@@ -1657,6 +1722,7 @@
     function init() {
         if (accountsRoot) {
             accountsRoot.addEventListener('click', handleAccountClick);
+            accountsRoot.addEventListener('change', handleAccountToggle);
         }
         if (stepsRoot) {
             stepsRoot.addEventListener('click', handleStepsClick);
@@ -1668,6 +1734,8 @@
 
         bindSwipeNavigation();
         window.addEventListener('resize', handleResize);
+
+        syncAccountsUi();
 
         state.visibilityMap = normalizeVisibilityMap(state.visibilityMap || state.visibility_map || {});
 
