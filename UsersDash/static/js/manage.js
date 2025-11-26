@@ -290,6 +290,35 @@
         return normalized;
     }
 
+    function getAccountButtons() {
+        return accountsRoot
+            ? Array.from(accountsRoot.querySelectorAll('[data-account-id]'))
+            : [];
+    }
+
+    function applyAccountFilter(rawQuery) {
+        if (!accountsRoot) return;
+        const query = (rawQuery || "").trim().toLowerCase();
+        let visibleCount = 0;
+
+        getAccountButtons().forEach((btn) => {
+            const haystack = [
+                btn.dataset.accountName || "",
+                btn.dataset.serverName || "",
+                btn.dataset.ownerName || "",
+            ].join(" ").toLowerCase();
+
+            const matches = haystack.includes(query);
+            const keepVisible = !query || matches;
+            btn.classList.toggle("is-hidden", !keepVisible);
+            if (keepVisible) visibleCount += 1;
+        });
+
+        if (accountsSearchEmpty) {
+            accountsSearchEmpty.hidden = !query || visibleCount > 0;
+        }
+    }
+
     function prepareConfigPayload(payload, originalCfg = {}) {
         const result = {};
 
@@ -1773,6 +1802,12 @@
         }
         if (mobileBackBtn) {
             mobileBackBtn.addEventListener('click', mobileBack);
+        }
+        if (accountSearchInput) {
+            accountSearchInput.addEventListener('input', (event) => {
+                applyAccountFilter(event.target && event.target.value);
+            });
+            applyAccountFilter(accountSearchInput.value);
         }
 
         bindSwipeNavigation();
