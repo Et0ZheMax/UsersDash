@@ -8,7 +8,7 @@ import csv
 import io
 import json
 import difflib
-from datetime import datetime
+from datetime import datetime, timedelta
 import traceback
 from typing import Any
 
@@ -214,6 +214,50 @@ def admin_dashboard():
             }
         )
 
+    today_date = datetime.utcnow().date()
+    payment_accounts = [acc for acc in accounts if acc.next_payment_at]
+    farmdata_by_owner: dict[int, dict[str, FarmData]] = {}
+    if payment_accounts:
+        owner_ids = {acc.owner_id for acc in payment_accounts if acc.owner_id}
+        if owner_ids:
+            farmdata_entries = FarmData.query.filter(FarmData.user_id.in_(owner_ids)).all()
+            for fd in farmdata_entries:
+                owner_map = farmdata_by_owner.setdefault(fd.user_id, {})
+                owner_map[fd.farm_name] = fd
+
+    payment_cards = []
+    for acc in payment_accounts:
+        pay_date = acc.next_payment_at.date()
+        days_left = (pay_date - today_date).days
+        if days_left <= 0:
+            status = "due"
+        elif days_left <= 3:
+            status = "upcoming"
+        else:
+            continue
+
+        telegram_tag = None
+        owner_map = farmdata_by_owner.get(acc.owner_id, {})
+        fd = owner_map.get(acc.name)
+        if fd and fd.telegram_tag:
+            telegram_tag = fd.telegram_tag.lstrip("@")
+
+        telegram_link = f"https://t.me/{telegram_tag}" if telegram_tag else None
+
+        payment_cards.append(
+            {
+                "account": acc,
+                "pay_date": pay_date,
+                "status": status,
+                "amount": acc.next_payment_amount,
+                "days_left": days_left,
+                "telegram_link": telegram_link,
+                "blocked_for_payment": acc.blocked_for_payment,
+            }
+        )
+
+    payment_cards.sort(key=lambda x: (x["pay_date"], 0 if x["status"] == "due" else 1))
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -222,6 +266,54 @@ def admin_dashboard():
         total_accounts=total_accounts,
         total_servers=total_servers,
         accounts_data=accounts_data,
+        payment_cards=payment_cards,
+    )
+
+
+@admin_bp.route("/payments/<int:account_id>/mark-paid", methods=["POST"])
+@login_required
+def mark_account_paid(account_id: int):
+    admin_required()
+
+    account = Account.query.options(joinedload(Account.owner)).filter_by(id=account_id).first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    base_date = account.next_payment_at.date() if account.next_payment_at else datetime.utcnow().date()
+    next_date = base_date + timedelta(days=30)
+    account.next_payment_at = datetime.combine(next_date, datetime.min.time())
+    account.is_active = True
+    account.blocked_for_payment = False
+
+    db.session.commit()
+
+    return jsonify(
+        {
+            "ok": True,
+            "next_payment_at": account.next_payment_at.strftime("%Y-%m-%d"),
+            "blocked_for_payment": account.blocked_for_payment,
+        }
+    )
+
+
+@admin_bp.route("/payments/<int:account_id>/mark-unpaid", methods=["POST"])
+@login_required
+def mark_account_unpaid(account_id: int):
+    admin_required()
+
+    account = Account.query.filter_by(id=account_id).first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    account.is_active = False
+    account.blocked_for_payment = True
+    db.session.commit()
+
+    return jsonify(
+        {
+            "ok": True,
+            "blocked_for_payment": account.blocked_for_payment,
+        }
     )
 
 

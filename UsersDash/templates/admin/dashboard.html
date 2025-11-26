@@ -30,6 +30,75 @@
 
 <p>Используйте верхнее меню для управления пользователями, серверами и фермами.</p>
 
+{% if payment_cards %}
+    <div class="admin-payment-panel">
+        <div class="admin-payment-panel__header">
+            <div>
+                <h2 class="admin-payment-panel__title">Ближайшие оплаты</h2>
+                <div class="admin-payment-panel__subtitle">
+                    Просмотр просроченных и ближайших платежей. Список прокручивается, если позиций много.
+                </div>
+            </div>
+        </div>
+        <div class="admin-payment-panel__list" data-role="payments-list">
+            {% for item in payment_cards %}
+                {% set acc = item.account %}
+                {% set owner_name = acc.owner.username if acc.owner else '—' %}
+                {% set server_name = acc.server.name if acc.server else 'N/A' %}
+                {% set message_text = 'Привет! Нужно продлить бота на ферме ' ~ acc.name ~ '.' %}
+                <div class="admin-payment-card admin-payment-card--{{ item.status }} {% if item.blocked_for_payment %}is-blocked{% endif %}"
+                     data-payment-card
+                     data-account-id="{{ acc.id }}"
+                     data-account-name="{{ acc.name }}"
+                     data-owner="{{ owner_name }}"
+                     data-server="{{ server_name }}"
+                     data-pay-date="{{ item.pay_date.strftime('%d.%m.%Y') }}"
+                     data-amount="{{ item.amount if item.amount is not none else '' }}"
+                     data-status="{{ item.status }}"
+                     data-telegram-link="{{ item.telegram_link or '' }}"
+                     data-blocked="{{ 1 if item.blocked_for_payment else 0 }}">
+                    <div class="admin-payment-card__main">
+                        <div class="admin-payment-card__title">{{ acc.name }}</div>
+                        <div class="admin-payment-card__meta">{{ owner_name }} — {{ server_name }}</div>
+                        <div class="admin-payment-card__date">Оплата до {{ item.pay_date.strftime('%d.%m.%Y') }}</div>
+                        {% if item.amount is not none %}
+                            <div class="admin-payment-card__amount">{{ item.amount }} ₽</div>
+                        {% endif %}
+                        {% if item.blocked_for_payment %}
+                            <div class="admin-payment-card__badge">Отключена за неоплату</div>
+                        {% endif %}
+                    </div>
+                    <div class="admin-payment-card__actions">
+                        <button type="button" class="icon-btn" data-role="payment-paid" title="Оплата получена">✔</button>
+                        <button type="button" class="icon-btn icon-btn--danger" data-role="payment-unpaid" title="Отключить за неоплату">✖</button>
+                        {% if item.telegram_link %}
+                            <a class="icon-btn" target="_blank" rel="noopener"
+                               href="{{ item.telegram_link }}?text={{ message_text|urlencode }}"
+                               title="Написать клиенту">✎</a>
+                        {% else %}
+                            <span class="icon-btn icon-btn--disabled" title="Нет контакта">✎</span>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="admin-payment-modal" data-role="payment-modal" hidden>
+        <div class="admin-payment-modal__dialog">
+            <button class="admin-payment-modal__close" type="button" data-role="payment-modal-close" aria-label="Закрыть">×</button>
+            <div class="admin-payment-modal__body">
+                <div class="admin-payment-modal__title" data-role="modal-title"></div>
+                <div class="admin-payment-modal__row" data-role="modal-owner"></div>
+                <div class="admin-payment-modal__row" data-role="modal-server"></div>
+                <div class="admin-payment-modal__row" data-role="modal-date"></div>
+                <div class="admin-payment-modal__row" data-role="modal-amount"></div>
+                <div class="admin-payment-modal__status" data-role="modal-status"></div>
+            </div>
+        </div>
+    </div>
+{% endif %}
+
 {% if accounts_data %}
     <h2 style="margin-top: 32px;">Ресурсы ферм</h2>
     <div class="dashboard-filters">
@@ -113,5 +182,113 @@
     </div>
 {% else %}
     <p>Активные фермы не найдены.</p>
+{% endif %}
+
+{% if payment_cards %}
+<script>
+    (() => {
+        const listEl = document.querySelector('[data-role="payments-list"]');
+        const modal = document.querySelector('[data-role="payment-modal"]');
+        if (!listEl) return;
+
+        const paidUrl = {{ url_for('admin.mark_account_paid', account_id=0)|tojson }};
+        const unpaidUrl = {{ url_for('admin.mark_account_unpaid', account_id=0)|tojson }};
+
+        const modalTitle = document.querySelector('[data-role="modal-title"]');
+        const modalOwner = document.querySelector('[data-role="modal-owner"]');
+        const modalServer = document.querySelector('[data-role="modal-server"]');
+        const modalDate = document.querySelector('[data-role="modal-date"]');
+        const modalAmount = document.querySelector('[data-role="modal-amount"]');
+        const modalStatus = document.querySelector('[data-role="modal-status"]');
+
+        function closeModal() {
+            if (modal) {
+                modal.hidden = true;
+                modal.classList.remove('is-open');
+            }
+        }
+
+        function openModal(card) {
+            if (!modal || !card) return;
+            modal.hidden = false;
+            modal.classList.add('is-open');
+            if (modalTitle) modalTitle.textContent = card.dataset.accountName || '';
+            if (modalOwner) modalOwner.textContent = `Клиент: ${card.dataset.owner || '—'}`;
+            if (modalServer) modalServer.textContent = `Сервер: ${card.dataset.server || 'N/A'}`;
+            if (modalDate) modalDate.textContent = `Оплата до: ${card.dataset.payDate || '—'}`;
+            if (modalAmount) {
+                const amount = card.dataset.amount;
+                modalAmount.textContent = amount ? `Сумма: ${amount} ₽` : 'Сумма: не указана';
+            }
+            if (modalStatus) {
+                const status = card.dataset.status;
+                const blocked = card.dataset.blocked === '1';
+                if (blocked) {
+                    modalStatus.textContent = 'Отключена за неоплату';
+                } else {
+                    modalStatus.textContent = status === 'due' ? 'Просрочено' : 'Скоро оплата';
+                }
+            }
+        }
+
+        async function handleAction(card, kind) {
+            if (!card) return;
+            const accountId = card.dataset.accountId;
+            const endpoint = kind === 'paid' ? paidUrl : unpaidUrl;
+            const url = (endpoint || '').replace('0', accountId);
+            const btns = card.querySelectorAll('.icon-btn');
+            btns.forEach((btn) => {
+                if ('disabled' in btn) btn.disabled = true;
+                btn.classList.add('is-loading');
+            });
+            try {
+                const resp = await fetch(url, { method: 'POST', headers: { 'x-skip-loader': '1' } });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.ok) throw new Error(data.error || 'Не удалось обновить оплату');
+                if (kind === 'paid') {
+                    card.remove();
+                    closeModal();
+                } else {
+                    card.dataset.blocked = '1';
+                    card.classList.add('is-blocked');
+                    closeModal();
+                }
+            } catch (err) {
+                console.error(err);
+                alert(err.message || 'Не удалось обновить оплату');
+            } finally {
+                btns.forEach((btn) => {
+                    if ('disabled' in btn) btn.disabled = false;
+                    btn.classList.remove('is-loading');
+                });
+            }
+        }
+
+        listEl.addEventListener('click', (event) => {
+            const card = event.target.closest('[data-payment-card]');
+            if (!card) return;
+            if (event.target.closest('[data-role="payment-paid"]')) {
+                event.stopPropagation();
+                handleAction(card, 'paid');
+                return;
+            }
+            if (event.target.closest('[data-role="payment-unpaid"]')) {
+                event.stopPropagation();
+                handleAction(card, 'unpaid');
+                return;
+            }
+            openModal(card);
+        });
+
+        if (modal) {
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal) closeModal();
+            });
+        }
+
+        const closeBtn = document.querySelector('[data-role="payment-modal-close"]');
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    })();
+</script>
 {% endif %}
 {% endblock %}
