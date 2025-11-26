@@ -91,6 +91,32 @@
     </div>
 </div>
 
+{% if blocked_accounts %}
+    <div class="payment-warning-card">
+        <div class="payment-warning-title">Ферма отключена до оплаты</div>
+        <div class="payment-warning-text">
+            Мы временно остановили одну или несколько ферм за отсутствие оплаты.
+            Напишите нам в Telegram — <a href="https://t.me/tvoinetakoi" target="_blank" rel="noopener">@tvoinetakoi</a>,
+            чтобы продлить аренду и возобновить работу.
+        </div>
+        <ul class="payment-warning-list">
+            {% for acc in blocked_accounts %}
+                <li class="payment-warning-item">
+                    <div class="payment-warning-line">
+                        <span class="payment-warning-name">{{ acc.name }}</span>
+                        <span class="payment-warning-meta">
+                            {{ acc.server.name if acc.server else 'N/A' }}
+                        </span>
+                        {% if acc.next_payment_at %}
+                            <span class="payment-warning-date">Оплата до {{ acc.next_payment_at.strftime('%d.%m.%Y') }}</span>
+                        {% endif %}
+                    </div>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+{% endif %}
+
 
 {% if accounts_data %}
     <div class="table-responsive">
