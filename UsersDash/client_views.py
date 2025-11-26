@@ -434,6 +434,14 @@ def dashboard():
         .all()
     )
 
+    blocked_accounts = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter_by(owner_id=current_user.id, blocked_for_payment=True)
+        .order_by(Account.name.asc())
+        .all()
+    )
+
     total_accounts = len(accounts)
 
     # Ближайшие оплаты по фермам (если в БД есть такие данные)
@@ -471,6 +479,7 @@ def dashboard():
             tariffs_summary=[],
             tariffs_total=0,
             farmdata_status=farmdata_status,
+            blocked_accounts=blocked_accounts,
             info_message=info_message,
         )
 
@@ -508,6 +517,7 @@ def dashboard():
         tariffs_summary=tariffs_summary,
         tariffs_total=tariffs_total,
         farmdata_status=farmdata_status,
+        blocked_accounts=blocked_accounts,
         info_message=info_message,
     )
 
@@ -833,6 +843,18 @@ def manage_toggle_account_active(account_id: int):
 
     new_active = bool(payload.get("is_active"))
     old_active = bool(account.is_active)
+    is_admin = getattr(current_user, "role", None) == "admin"
+
+    if account.blocked_for_payment and new_active and not is_admin:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Ферма отключена до оплаты. Свяжитесь с поддержкой, чтобы возобновить работу.",
+                }
+            ),
+            403,
+        )
 
     with settings_audit_context(
         account.owner,
@@ -846,10 +868,18 @@ def manage_toggle_account_active(account_id: int):
         },
     ) as audit_ctx:
         account.is_active = new_active
+        if new_active and account.blocked_for_payment and is_admin:
+            account.blocked_for_payment = False
         db.session.commit()
         audit_ctx["result"] = "ok"
 
-    return jsonify({"ok": True, "is_active": account.is_active})
+    return jsonify(
+        {
+            "ok": True,
+            "is_active": account.is_active,
+            "blocked_for_payment": account.blocked_for_payment,
+        }
+    )
 
 
 @client_bp.route("/account/<int:account_id>/refresh", methods=["POST"])
