@@ -188,6 +188,10 @@
     const configSubtitleEl = document.querySelector('[data-role="config-subtitle"]');
     const accountSearchInput = document.querySelector('[data-role="account-search"]');
     const accountsSearchEmpty = document.querySelector('[data-role="accounts-search-empty"]');
+    const defaultsToolbarBtn = document.querySelector('[data-role="apply-defaults"]');
+    const defaultsModal = document.querySelector('[data-role="defaults-modal"]');
+    const defaultsConfirmBtn = document.querySelector('[data-role="defaults-confirm"]');
+    const defaultsModalClosers = Array.from(document.querySelectorAll('[data-role="defaults-modal-close"]'));
     const mobileNavTitle = document.querySelector('[data-role="mobile-title"]');
     const mobileNavSubtitle = document.querySelector('[data-role="mobile-subtitle"]');
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
@@ -992,6 +996,47 @@
                 ? (state.selectedAccountName || "")
                 : "Параметры появятся после выбора шага";
         }
+
+        updateDefaultsButtonState();
+    }
+
+    function updateDefaultsButtonState() {
+        if (!defaultsToolbarBtn) return;
+        const hasAccount = Boolean(state.selectedAccountId);
+        const canUseDefaults = hasAccount && state.selectedAccountHasDefaults && !applyDefaultsInProgress;
+
+        defaultsToolbarBtn.hidden = !hasAccount;
+        defaultsToolbarBtn.disabled = !canUseDefaults;
+
+        if (hasAccount && !state.selectedAccountHasDefaults) {
+            defaultsToolbarBtn.title = "Для этого тарифа нет схемы по умолчанию.";
+        } else {
+            defaultsToolbarBtn.removeAttribute("title");
+        }
+    }
+
+    function openDefaultsConfirm() {
+        if (defaultsToolbarBtn && defaultsToolbarBtn.disabled) return;
+        if (!state.selectedAccountId || !state.selectedAccountHasDefaults || applyDefaultsInProgress) return;
+        if (!defaultsModal) {
+            applyDefaultsForCurrentAccount(defaultsToolbarBtn);
+            return;
+        }
+
+        defaultsModal.hidden = false;
+        requestAnimationFrame(() => defaultsModal.classList.add("is-visible"));
+        document.body.classList.add("has-modal");
+    }
+
+    function closeDefaultsConfirm() {
+        if (!defaultsModal) return;
+        defaultsModal.classList.remove("is-visible");
+        document.body.classList.remove("has-modal");
+        setTimeout(() => {
+            if (!defaultsModal.classList.contains("is-visible")) {
+                defaultsModal.hidden = true;
+            }
+        }, 160);
     }
 
 
@@ -1131,17 +1176,9 @@
             tariffBadge.textContent = `Тариф: ${state.selectedAccountTariffPrice} ₽`;
         }
 
-        const defaultsBtn = document.createElement("button");
-        defaultsBtn.type = "button";
-        defaultsBtn.className = "btn btn-outline btn-small";
-        defaultsBtn.textContent = "По умолчанию";
-        defaultsBtn.disabled = !state.selectedAccountHasDefaults;
-        defaultsBtn.addEventListener("click", () => applyDefaultsForCurrentAccount(defaultsBtn));
-
         if (tariffBadge.textContent) {
             actions.appendChild(tariffBadge);
         }
-        actions.appendChild(defaultsBtn);
         header.appendChild(actions);
         configRoot.appendChild(header);
 
@@ -1454,6 +1491,7 @@
         }
 
         applyDefaultsInProgress = true;
+        updateDefaultsButtonState();
         const originalText = btn ? btn.textContent : "";
         if (btn) {
             btn.disabled = true;
@@ -1482,6 +1520,7 @@
                 btn.disabled = false;
                 btn.textContent = originalText || "По умолчанию";
             }
+            updateDefaultsButtonState();
         }
     }
 
@@ -1634,10 +1673,13 @@
         if (!accountId || state.isLoading) return;
         state.isLoading = true;
         state.scheduleDrafts = {};
+        state.selectedAccountId = accountId;
+        state.selectedAccountHasDefaults = false;
         if (meta.name) state.selectedAccountName = meta.name;
         if (meta.server) state.selectedServerName = meta.server;
         highlightAccount(accountId);
         renderEmptyState("Загружаем настройки...");
+        updateDefaultsButtonState();
 
         try {
             const url = replaceTemplate(state.detailsUrlTemplate, accountId);
@@ -1683,6 +1725,8 @@
                 payload_keys: data ? Object.keys(data) : [],
                 normalized_steps: Array.isArray(rawSteps) ? rawSteps.length : 0,
             };
+
+            updateDefaultsButtonState();
 
             const startOnMobile = isMobile();
             const firstStepIdx = (viewSteps && viewSteps.length) ? viewSteps[0].raw_index : null;
@@ -1886,10 +1930,47 @@
             applyAccountFilter(accountSearchInput.value);
         }
 
+        if (defaultsToolbarBtn) {
+            defaultsToolbarBtn.addEventListener('click', openDefaultsConfirm);
+        }
+        defaultsModalClosers.forEach((el) => {
+            el.addEventListener('click', closeDefaultsConfirm);
+        });
+        if (defaultsConfirmBtn) {
+            defaultsConfirmBtn.addEventListener('click', async () => {
+                const originalText = defaultsConfirmBtn.textContent;
+                defaultsConfirmBtn.disabled = true;
+                defaultsConfirmBtn.textContent = "Сбрасываем...";
+                closeDefaultsConfirm();
+                try {
+                    await applyDefaultsForCurrentAccount(defaultsToolbarBtn || defaultsConfirmBtn);
+                } finally {
+                    defaultsConfirmBtn.disabled = false;
+                    defaultsConfirmBtn.textContent = originalText;
+                }
+            });
+        }
+
+        if (defaultsModal) {
+            defaultsModal.addEventListener('click', (event) => {
+                if (event.target === defaultsModal) {
+                    closeDefaultsConfirm();
+                }
+            });
+        }
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeDefaultsConfirm();
+            }
+        });
+
         bindSwipeNavigation();
         window.addEventListener('resize', handleResize);
 
         syncAccountsUi();
+
+        updateDefaultsButtonState();
 
         state.visibilityMap = normalizeVisibilityMap(state.visibilityMap || state.visibility_map || {});
 

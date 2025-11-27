@@ -1374,6 +1374,114 @@ h1 {
   gap: 12px;
 }
 
+.has-modal {
+  overflow: hidden;
+}
+
+.manage-confirm[hidden] { display: none; }
+
+.manage-confirm {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(6, 9, 15, 0.6);
+  z-index: 2100;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.manage-confirm.is-visible {
+  opacity: 1;
+}
+
+.manage-confirm__dialog {
+  position: relative;
+  width: min(440px, 100%);
+  background: #0c1018;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 18px 20px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  transform: translateY(8px);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.manage-confirm.is-visible .manage-confirm__dialog {
+  transform: translateY(0);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.45);
+}
+
+.manage-confirm__backdrop {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+}
+
+.manage-confirm__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(76, 127, 255, 0.14);
+  color: #e4e7ff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.manage-confirm__content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+  z-index: 1;
+}
+
+.manage-confirm__title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #e5e7eb;
+}
+
+.manage-confirm__text {
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.manage-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 640px) {
+  .manage-confirm__dialog {
+    padding: 16px;
+    gap: 10px;
+  }
+
+  .manage-confirm__icon {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+
+  .manage-confirm__title {
+    font-size: 16px;
+  }
+}
+
 .manage-modern__toolbar {
   display: flex;
   gap: 8px;

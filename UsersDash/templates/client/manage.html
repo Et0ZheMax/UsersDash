@@ -19,6 +19,9 @@
     <div class="manage-modern__toolbar">
         <button class="btn btn-primary" onclick="goBack()">← Назад</button>
         <button class="btn btn-outline" onclick="window.location.reload()">Обновить</button>
+        <button class="btn btn-outline" type="button" data-role="apply-defaults" hidden disabled>
+            По умолчанию
+        </button>
     </div>
 
     <div class="manage-modern__mobile-nav" data-role="mobile-nav">
@@ -87,6 +90,21 @@
     </div>
 
     <div class="manage-modern__overlay" data-role="manage-overlay"></div>
+</div>
+
+<div class="manage-confirm" data-role="defaults-modal" hidden>
+    <div class="manage-confirm__backdrop" data-role="defaults-modal-close"></div>
+    <div class="manage-confirm__dialog">
+        <div class="manage-confirm__icon" aria-hidden="true">↺</div>
+        <div class="manage-confirm__content">
+            <div class="manage-confirm__title">Сброс настроек</div>
+            <div class="manage-confirm__text">Восстановить все значения настроек по умолчанию?</div>
+        </div>
+        <div class="manage-confirm__actions">
+            <button class="btn btn-outline" type="button" data-role="defaults-modal-close">Отмена</button>
+            <button class="btn btn-primary" type="button" data-role="defaults-confirm">Сбросить</button>
+        </div>
+    </div>
 </div>
 
 <div id="globalLoader">
