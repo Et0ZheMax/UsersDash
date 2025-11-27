@@ -11,7 +11,10 @@ from functools import lru_cache
 from pathlib import Path
 
 from UsersDash.models import Account
-from UsersDash.services.remote_api import update_account_step_settings
+from UsersDash.services.remote_api import (
+    fetch_account_settings,
+    update_account_step_settings,
+)
 from UsersDash.services.tariffs import get_tariff_name_by_price
 
 # Маппинг цены тарифа -> файл с дефолтной конфигурацией
@@ -96,7 +99,22 @@ def apply_defaults_for_account(account: Account, *, tariff_price: int | str | No
         tariff_name = get_tariff_name_by_price(price) or "неизвестный тариф"
         return False, f"Не найдена схема по умолчанию для тарифа '{tariff_name}'"
 
+    raw_settings = fetch_account_settings(account)
+    existing_steps = None
+    if isinstance(raw_settings, dict):
+        data_section = raw_settings.get("Data") or raw_settings.get("MenuData")
+        if isinstance(data_section, list):
+            existing_steps = len(data_section)
+    if existing_steps == 0:
+        return False, "Для аккаунта нет доступных шагов manage"
+
+    applied = 0
+    skipped = 0
     for idx, step in enumerate(defaults):
+        if existing_steps is not None and idx >= existing_steps:
+            skipped += 1
+            continue
+
         payload: dict = {}
         config = step.get("Config")
         if isinstance(config, dict):
@@ -112,5 +130,13 @@ def apply_defaults_for_account(account: Account, *, tariff_price: int | str | No
         ok, msg = update_account_step_settings(account, idx, payload)
         if not ok:
             return False, msg or "Не удалось обновить шаг"
+
+        applied += 1
+
+    if applied == 0:
+        return False, "Не удалось применить настройки — нет подходящих шагов"
+
+    if skipped:
+        return True, f"Применено {applied} шагов, пропущено {skipped}"
 
     return True, "OK"
