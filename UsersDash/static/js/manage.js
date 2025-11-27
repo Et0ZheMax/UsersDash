@@ -181,6 +181,8 @@
     const stepsSubtitleEl = document.querySelector('[data-role="steps-subtitle"]');
     const configTitleEl = document.querySelector('[data-role="config-title"]');
     const configSubtitleEl = document.querySelector('[data-role="config-subtitle"]');
+    const accountSearchInput = document.querySelector('[data-role="account-search"]');
+    const accountsSearchEmpty = document.querySelector('[data-role="accounts-search-empty"]');
     const mobileNavTitle = document.querySelector('[data-role="mobile-title"]');
     const mobileNavSubtitle = document.querySelector('[data-role="mobile-subtitle"]');
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
