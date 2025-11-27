@@ -158,12 +158,16 @@
     {% set toggle_url = url_for('client.account_toggle_step', account_id=0, step_idx=0) %}
     {% set update_url = url_for('client.manage_update_step', account_id=0, step_idx=0) %}
     {% set account_toggle_url = url_for('client.manage_toggle_account_active', account_id=0) %}
+    {% set apply_defaults_url = url_for('client.manage_apply_defaults', account_id=0) %}
 
     window.manageIsAdmin = true;
     window.manageInitialState = {
         selectedAccountId: {{ selected_account.id if selected_account else 'null' }},
         selectedAccountName: {{ (selected_account.name if selected_account else '')|tojson }},
         selectedServerName: {{ (selected_account.server.name if selected_account and selected_account.server else '')|tojson }},
+        selectedAccountTariffPrice: {{ selected_tariff_price if selected_tariff_price is not none else 'null' }},
+        selectedAccountTariffName: {{ (selected_tariff_name or '')|tojson }},
+        selectedAccountHasDefaults: {{ selected_has_defaults|tojson }},
         steps: {{ view_steps|tojson }},
         rawSteps: {{ raw_steps|tojson }},
         raw_steps: {{ raw_steps|tojson }},
@@ -174,6 +178,7 @@
         toggleUrlTemplate: {{ toggle_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
         updateUrlTemplate: {{ update_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
         accountToggleUrlTemplate: {{ account_toggle_url.replace('0', '__ACCOUNT__', 1)|tojson }},
+        applyDefaultsUrlTemplate: {{ apply_defaults_url.replace('0', '__ACCOUNT__', 1)|tojson }},
     };
 
     function goBack() {

@@ -43,7 +43,8 @@ from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_rssv7_accounts_meta,
 )
-from UsersDash.services.tariffs import TARIFF_PRICE_MAP
+from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
+from UsersDash.services.tariffs import TARIFF_PRICE_MAP, get_tariff_name_by_price
 from UsersDash.services.info_message import (
     get_global_info_message,
     set_global_info_message_text,
@@ -395,6 +396,9 @@ def manage():
     menu_data = None
     debug_info = None
     visibility_map = {}
+    selected_tariff_price = selected_account.next_payment_amount if selected_account else None
+    selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
+    selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(
@@ -420,6 +424,9 @@ def manage():
         steps_error=steps_error,
         debug_info=debug_info,
         active_accounts_count=active_accounts_count,
+        selected_tariff_price=selected_tariff_price,
+        selected_tariff_name=selected_tariff_name,
+        selected_has_defaults=selected_has_defaults,
     )
 
 
@@ -1148,6 +1155,8 @@ def admin_farm_data_save():
         return int(cleaned) if cleaned.isdigit() else None
 
     warnings = []
+    defaults_to_apply: list[tuple[Account, int]] = []
+    defaults_results: list[dict[str, str]] = []
 
     for row in items:
         acc_id = int(row.get("account_id", 0))
@@ -1188,7 +1197,10 @@ def admin_farm_data_save():
         else:
             parsed_tariff = parse_tariff(tariff_raw)
             if parsed_tariff is not None:
+                previous_tariff = acc.next_payment_amount
                 acc.next_payment_amount = parsed_tariff
+                if parsed_tariff != previous_tariff:
+                    defaults_to_apply.append((acc, parsed_tariff))
             else:
                 warnings.append(
                     f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
@@ -1201,7 +1213,27 @@ def admin_farm_data_save():
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
 
-    return jsonify({"ok": True, "warnings": warnings})
+    for acc, tariff_price in defaults_to_apply:
+        tariff_label = get_tariff_name_by_price(tariff_price) or str(tariff_price)
+        ok, msg = apply_defaults_for_account(acc, tariff_price=tariff_price)
+        defaults_results.append(
+            {
+                "account": acc.name,
+                "tariff": tariff_label,
+                "ok": ok,
+                "message": msg,
+            }
+        )
+        if not ok:
+            warnings.append(
+                f"{acc.name}: не удалось применить настройки по умолчанию ({msg})"
+            )
+        else:
+            print(
+                f"[defaults] applied {tariff_label} for {acc.name}: {msg}".strip()
+            )
+
+    return jsonify({"ok": True, "warnings": warnings, "defaults_results": defaults_results})
 
 @admin_bp.route("/farm-data/sync-preview", methods=["GET"])
 @login_required

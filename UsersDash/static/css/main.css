@@ -1233,6 +1233,17 @@ h1 {
   margin-bottom: 10px;
 }
 
+.config-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.config-tariff {
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
 .config-title {
   font-weight: 700;
   font-size: 1rem;
