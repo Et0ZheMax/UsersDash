@@ -28,7 +28,15 @@ from UsersDash.services.remote_api import (
 )
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
-from UsersDash.services.tariffs import is_tariff_billable, summarize_tariffs
+from UsersDash.services.default_settings import (
+    apply_defaults_for_account,
+    has_defaults_for_tariff,
+)
+from UsersDash.services.tariffs import (
+    get_tariff_name_by_price,
+    is_tariff_billable,
+    summarize_tariffs,
+)
 
 client_bp = Blueprint("client", __name__, url_prefix="")
 
@@ -564,6 +572,9 @@ def manage_page():
     menu_data = None
     debug_info = None
     visibility_map = {}
+    selected_tariff_price = selected_account.next_payment_amount if selected_account else None
+    selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
+    selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
@@ -589,6 +600,9 @@ def manage_page():
         steps_error=steps_error,
         debug_info=debug_info,
         active_accounts_count=active_accounts_count,
+        selected_tariff_price=selected_tariff_price,
+        selected_tariff_name=selected_tariff_name,
+        selected_has_defaults=selected_has_defaults,
     )
 
 
@@ -706,6 +720,9 @@ def manage_account_details(account_id: int):
                 "id": account.id,
                 "name": account.name,
                 "server": account.server.name if account.server else None,
+                "tariff_price": account.next_payment_amount,
+                "tariff_name": get_tariff_name_by_price(account.next_payment_amount),
+                "has_default_settings": has_defaults_for_tariff(account.next_payment_amount),
             },
             "steps": steps,
             "raw_steps": raw_steps,
@@ -819,6 +836,59 @@ def manage_update_step(account_id: int, step_idx: int):
 
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": msg}), status
+
+
+@client_bp.route("/manage/account/<int:account_id>/apply-defaults", methods=["POST"])
+@login_required
+def manage_apply_defaults(account_id: int):
+    query = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter(Account.id == account_id)
+    )
+
+    if getattr(current_user, "role", None) != "admin":
+        query = query.filter_by(owner_id=current_user.id)
+
+    account = query.first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    tariff_price = account.next_payment_amount
+    tariff_name = get_tariff_name_by_price(tariff_price)
+
+    if not tariff_price or not has_defaults_for_tariff(tariff_price):
+        return jsonify({"ok": False, "error": "Для тарифа этой фермы нет схемы по умолчанию."}), 400
+
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "apply_defaults",
+        {
+            "account": account,
+            "field": "apply_defaults",
+            "old_value": None,
+            "new_value": {
+                "tariff_price": tariff_price,
+                "tariff_name": tariff_name,
+            },
+        },
+    ) as audit_ctx:
+        ok, msg = apply_defaults_for_account(account, tariff_price=tariff_price)
+        audit_ctx["result"] = "ok" if ok else "failed"
+
+    status = 200 if ok else 500
+    return (
+        jsonify(
+            {
+                "ok": ok,
+                "message": msg,
+                "tariff_price": tariff_price,
+                "tariff_name": tariff_name,
+            }
+        ),
+        status,
+    )
 
 
 @client_bp.route("/manage/account/<int:account_id>/toggle-active", methods=["POST"])

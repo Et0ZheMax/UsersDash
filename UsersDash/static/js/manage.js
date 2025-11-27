@@ -155,6 +155,9 @@
         selectedAccountId: null,
         selectedAccountName: "",
         selectedServerName: "",
+        selectedAccountTariffPrice: null,
+        selectedAccountTariffName: "",
+        selectedAccountHasDefaults: false,
         steps: [],
         rawSteps: [],
         visibilityMap: {},
@@ -165,6 +168,7 @@
         toggleUrlTemplate: "",
         updateUrlTemplate: "",
         accountToggleUrlTemplate: "",
+        applyDefaultsUrlTemplate: "",
         selectedStepIndex: null,
         scheduleDrafts: {},
     }, window.manageInitialState || {});
@@ -173,6 +177,7 @@
     state.toggleUrlTemplate = state.toggleUrlTemplate || "/account/__ACCOUNT__/settings/step/__STEP__/toggle";
     state.updateUrlTemplate = state.updateUrlTemplate || "/manage/account/__ACCOUNT__/settings/__STEP__";
     state.accountToggleUrlTemplate = state.accountToggleUrlTemplate || "/manage/account/__ACCOUNT__/toggle-active";
+    state.applyDefaultsUrlTemplate = state.applyDefaultsUrlTemplate || "/manage/account/__ACCOUNT__/apply-defaults";
 
     const accountsRoot = document.querySelector('[data-role="manage-accounts"]');
     const stepsRoot = document.querySelector('[data-role="manage-steps"]');
@@ -1075,6 +1080,7 @@
     let configSaveInProgress = false;
     let configAutoSaveQueued = false;
     let lastConfigToastAt = 0;
+    let applyDefaultsInProgress = false;
 
     function renderConfig() {
         if (!configRoot) return;
@@ -1113,6 +1119,30 @@
                 ${step.IsActive ? "Активен" : "Выключен"}
             </span>
         `;
+
+        const actions = document.createElement("div");
+        actions.className = "config-header__actions";
+
+        const tariffBadge = document.createElement("div");
+        tariffBadge.className = "config-tariff";
+        if (state.selectedAccountTariffName) {
+            tariffBadge.textContent = `Тариф: ${state.selectedAccountTariffName}`;
+        } else if (state.selectedAccountTariffPrice !== null && state.selectedAccountTariffPrice !== undefined) {
+            tariffBadge.textContent = `Тариф: ${state.selectedAccountTariffPrice} ₽`;
+        }
+
+        const defaultsBtn = document.createElement("button");
+        defaultsBtn.type = "button";
+        defaultsBtn.className = "btn btn-outline btn-small";
+        defaultsBtn.textContent = "По умолчанию";
+        defaultsBtn.disabled = !state.selectedAccountHasDefaults;
+        defaultsBtn.addEventListener("click", () => applyDefaultsForCurrentAccount(defaultsBtn));
+
+        if (tariffBadge.textContent) {
+            actions.appendChild(tariffBadge);
+        }
+        actions.appendChild(defaultsBtn);
+        header.appendChild(actions);
         configRoot.appendChild(header);
 
         const form = document.createElement("div");
@@ -1416,6 +1446,45 @@
         setTimeout(() => toast.remove(), 2000);
     }
 
+    async function applyDefaultsForCurrentAccount(btn) {
+        if (!state.selectedAccountId || applyDefaultsInProgress) return;
+        if (!state.selectedAccountHasDefaults) {
+            alert("Для этого тарифа нет схемы по умолчанию.");
+            return;
+        }
+
+        applyDefaultsInProgress = true;
+        const originalText = btn ? btn.textContent : "";
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Применяем...";
+        }
+
+        try {
+            const url = replaceTemplate(state.applyDefaultsUrlTemplate, state.selectedAccountId);
+            const resp = await fetch(url, { method: "POST" });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error((data && data.error) || "Не удалось применить настройки по умолчанию");
+            }
+
+            await loadSteps(state.selectedAccountId, {
+                name: state.selectedAccountName,
+                server: state.selectedServerName,
+            });
+            showMiniToast("Настройки сброшены на тарифные", "success");
+        } catch (err) {
+            console.error(err);
+            alert(err && err.message ? err.message : "Не удалось применить настройки по умолчанию");
+        } finally {
+            applyDefaultsInProgress = false;
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = originalText || "По умолчанию";
+            }
+        }
+    }
+
     function scheduleConfigAutoSave(stepIdx, formEl, cfg) {
         if (!formEl || !cfg || formEl !== currentConfigForm) return;
         if (Number(formEl.dataset.stepIdx) !== stepIdx) return;
@@ -1600,6 +1669,11 @@
             state.selectedAccountId = accountId;
             state.selectedAccountName = account.name || state.selectedAccountName || meta.name || "";
             state.selectedServerName = account.server || state.selectedServerName || meta.server || "";
+            state.selectedAccountTariffPrice = (typeof account.tariff_price === "number" || typeof account.tariff_price === "string")
+                ? account.tariff_price
+                : null;
+            state.selectedAccountTariffName = account.tariff_name || "";
+            state.selectedAccountHasDefaults = !!account.has_default_settings;
             state.steps = viewSteps || [];
             state.rawSteps = rawSteps || [];
             state.visibilityMap = visibilityMap;
