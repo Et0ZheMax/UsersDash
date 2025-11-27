@@ -630,6 +630,13 @@
   
 
     };
+    // Алиасы тарифных шаблонов для совместимости с клиентами
+    TEMPLATES["500"] = TEMPLATES["650"];
+    TEMPLATES["OnlyFarm"] = TEMPLATES["650"];
+    TEMPLATES["1000"] = TEMPLATES["1100"];
+    TEMPLATES["Extended"] = TEMPLATES["1100"];
+    TEMPLATES["1400"] = TEMPLATES["PREM"];
+    TEMPLATES["Premium"] = TEMPLATES["PREM"];
 
     document.addEventListener('DOMContentLoaded', () => {
       // Сохраняем размеры
