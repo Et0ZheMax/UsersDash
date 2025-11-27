@@ -12,6 +12,7 @@ from pathlib import Path
 
 from UsersDash.models import Account
 from UsersDash.services.remote_api import (
+    apply_template_for_account,
     fetch_account_settings,
     update_account_step_settings,
 )
@@ -22,6 +23,12 @@ DEFAULT_CONFIG_FILES: dict[int, str] = {
     500: "OnlyFarm_defaults.json",
     1000: "Extended_defaults.json",
     1400: "Premium_defaults.json",
+}
+
+TARIFF_TEMPLATE_ALIASES: dict[int, list[str]] = {
+    500: ["500", "OnlyFarm"],
+    1000: ["1000", "Extended"],
+    1400: ["1400", "Premium"],
 }
 
 
@@ -37,6 +44,41 @@ def _normalize_price(price: int | str | None) -> int | None:
 
 def _configs_root() -> Path:
     return Path(__file__).resolve().parent.parent / "bot_farm_configs"
+
+
+def _template_candidates(price: int | str | None) -> list[str]:
+    normalized = _normalize_price(price)
+    candidates: list[str] = []
+    if normalized is None:
+        return candidates
+
+    aliases = TARIFF_TEMPLATE_ALIASES.get(normalized, [])
+    candidates.extend(aliases)
+
+    filename = DEFAULT_CONFIG_FILES.get(normalized)
+    if filename:
+        stem = Path(filename).stem
+        if stem:
+            candidates.append(stem)
+            if stem.endswith("_defaults"):
+                candidates.append(stem.replace("_defaults", ""))
+
+    tariff_name = get_tariff_name_by_price(normalized)
+    if tariff_name:
+        candidates.append(tariff_name)
+        candidates.append(tariff_name.replace(" ", ""))
+
+    unique: list[str] = []
+    seen = set()
+    for name in candidates:
+        key = name.strip()
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    return unique
 
 
 @lru_cache(maxsize=None)
@@ -94,10 +136,22 @@ def has_defaults_for_tariff(price: int | str | None) -> bool:
 
 def apply_defaults_for_account(account: Account, *, tariff_price: int | str | None = None) -> tuple[bool, str]:
     price = tariff_price if tariff_price is not None else getattr(account, "next_payment_amount", None)
+
+    template_attempts: list[str] = []
+    for template_name in _template_candidates(price):
+        ok, msg = apply_template_for_account(account, template_name)
+        if ok:
+            label = template_name
+            if msg and msg != "OK":
+                return True, msg
+            return True, f"Применён шаблон '{label}'"
+        template_attempts.append(f"{template_name}: {msg}")
+
     defaults = get_default_steps_for_tariff(price)
     if not defaults:
         tariff_name = get_tariff_name_by_price(price) or "неизвестный тариф"
-        return False, f"Не найдена схема по умолчанию для тарифа '{tariff_name}'"
+        extra = f"; попытки шаблонов: {', '.join(template_attempts)}" if template_attempts else ""
+        return False, f"Не найдена схема по умолчанию для тарифа '{tariff_name}'{extra}"
 
     raw_settings = fetch_account_settings(account)
     existing_steps = None
@@ -139,4 +193,10 @@ def apply_defaults_for_account(account: Account, *, tariff_price: int | str | No
     if skipped:
         return True, f"Применено {applied} шагов, пропущено {skipped}"
 
-    return True, "OK"
+    fallback_note = (
+        f" (шаблоны: {', '.join(template_attempts)})"
+        if template_attempts
+        else ""
+    )
+
+    return True, f"OK{fallback_note}".strip()

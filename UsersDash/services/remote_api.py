@@ -442,6 +442,55 @@ def update_account_step_settings(account, step_idx: int, payload: Dict[str, Any]
         print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
         return False, str(exc)
 
+
+def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
+    """
+    Применяет manage-шаблон к аккаунту через
+    POST /api/manage/account/<remote_id>/apply_template.
+
+    template — имя/ключ шаблона (например, "500", "OnlyFarm", ...).
+    """
+
+    server = getattr(account, "server", None)
+    if not server:
+        return False, "server is not set for account"
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return False, "api_base_url is empty"
+
+    server_resources = fetch_resources_for_server(server)
+    remote_id, _ = _resolve_remote_account(account, server_resources)
+    if not remote_id:
+        return False, "unable to resolve remote_id for account"
+
+    url = f"{base}/manage/account/{remote_id}/apply_template"
+
+    try:
+        resp = requests.post(url, json={"template": template}, timeout=DEFAULT_TIMEOUT)
+    except Exception as exc:
+        print(f"[remote_api] ERROR: POST {url} failed: {exc}")
+        return False, str(exc)
+
+    if 200 <= resp.status_code < 300:
+        try:
+            body = resp.json() or {}
+        except Exception:
+            body = {}
+
+        status = body.get("status") or body.get("ok")
+        message = body.get("message") or body.get("error") or "OK"
+        if status == "ok" or status is True:
+            return True, message
+
+        return False, message
+
+    try:
+        err_body = resp.json()
+    except Exception:
+        err_body = resp.text
+    return False, f"HTTP {resp.status_code}: {err_body}"
+
 def _build_server_base_url(server: Server) -> str:
     """
     Аккуратно собираем базовый URL для RssV7.
