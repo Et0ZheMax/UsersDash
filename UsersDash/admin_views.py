@@ -1156,6 +1156,7 @@ def admin_farm_data_save():
 
     warnings = []
     defaults_to_apply: list[tuple[Account, int]] = []
+    defaults_results: list[dict[str, str]] = []
 
     for row in items:
         acc_id = int(row.get("account_id", 0))
@@ -1213,13 +1214,26 @@ def admin_farm_data_save():
         return jsonify({"ok": False, "error": str(e)})
 
     for acc, tariff_price in defaults_to_apply:
+        tariff_label = get_tariff_name_by_price(tariff_price) or str(tariff_price)
         ok, msg = apply_defaults_for_account(acc, tariff_price=tariff_price)
+        defaults_results.append(
+            {
+                "account": acc.name,
+                "tariff": tariff_label,
+                "ok": ok,
+                "message": msg,
+            }
+        )
         if not ok:
             warnings.append(
                 f"{acc.name}: не удалось применить настройки по умолчанию ({msg})"
             )
+        else:
+            print(
+                f"[defaults] applied {tariff_label} for {acc.name}: {msg}".strip()
+            )
 
-    return jsonify({"ok": True, "warnings": warnings})
+    return jsonify({"ok": True, "warnings": warnings, "defaults_results": defaults_results})
 
 @admin_bp.route("/farm-data/sync-preview", methods=["GET"])
 @login_required
