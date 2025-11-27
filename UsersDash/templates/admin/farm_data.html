@@ -942,6 +942,22 @@ document.addEventListener("DOMContentLoaded", function () {
             if (Array.isArray(data.warnings) && data.warnings.length) {
                 showToast(data.warnings.join(" | "), "info");
             }
+            if (Array.isArray(data.defaults_results) && data.defaults_results.length) {
+                const failed = data.defaults_results.filter(function (row) { return row && row.ok === false; });
+                const applied = data.defaults_results.filter(function (row) { return row && row.ok === true; });
+                if (failed.length) {
+                    const messages = failed.map(function (row) {
+                        return `${row.account}: ${row.message || "ошибка применения шаблона"}`;
+                    });
+                    showToast(`Не удалось применить шаблон настроек: ${messages.join(" | ")}`, "error");
+                }
+                if (applied.length) {
+                    const appliedNames = applied.map(function (row) {
+                        return `${row.account} → ${row.tariff || "тариф"}`;
+                    });
+                    showToast(`Шаблон настроек применён (${appliedNames.join(", ")})`, "success");
+                }
+            }
         } catch (err) {
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
