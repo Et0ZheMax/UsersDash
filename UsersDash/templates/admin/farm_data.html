@@ -734,6 +734,13 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             applyPaymentStateToRow(row, Boolean(data.blocked_for_payment), Boolean(data.is_active));
+            if (data.next_payment_at) {
+                const nextPaymentInput = row.querySelector('input[name="next_payment_date"]');
+                if (nextPaymentInput) {
+                    nextPaymentInput.value = data.next_payment_at;
+                    nextPaymentInput.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }
             showToast(
                 kind === "paid" ? "Ферма включена после оплаты." : "Ферма отключена за неоплату.",
                 "success"
