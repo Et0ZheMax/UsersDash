@@ -25,6 +25,7 @@ from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_account_settings,
     update_account_step_settings,
+    update_account_active,
 )
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
@@ -937,6 +938,12 @@ def manage_toggle_account_active(account_id: int):
             "new_value": new_active,
         },
     ) as audit_ctx:
+        ok, msg = update_account_active(account, new_active)
+        if not ok:
+            audit_ctx["result"] = "failed"
+            db.session.rollback()
+            return jsonify({"ok": False, "error": f"Не удалось обновить профиль: {msg}"}), 500
+
         account.is_active = new_active
         if new_active and account.blocked_for_payment and is_admin:
             account.blocked_for_payment = False
