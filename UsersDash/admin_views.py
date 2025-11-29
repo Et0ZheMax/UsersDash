@@ -296,6 +296,7 @@ def mark_account_paid(account_id: int):
             "ok": True,
             "next_payment_at": account.next_payment_at.strftime("%Y-%m-%d"),
             "blocked_for_payment": account.blocked_for_payment,
+            "is_active": account.is_active,
         }
     )
 
@@ -317,6 +318,7 @@ def mark_account_unpaid(account_id: int):
         {
             "ok": True,
             "blocked_for_payment": account.blocked_for_payment,
+            "is_active": account.is_active,
         }
     )
 
