@@ -258,6 +258,19 @@ h1 {
     align-items: flex-start;
 }
 
+.tariff-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.tariff-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .tariff-label {
     font-size: 0.8rem;
     color: #8f96c4;
@@ -2346,6 +2359,12 @@ h1 {
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   text-decoration: none;
+}
+
+.icon-btn--compact {
+  padding: 4px 7px;
+  font-size: 12px;
+  line-height: 1;
 }
 
 .icon-btn:hover {
