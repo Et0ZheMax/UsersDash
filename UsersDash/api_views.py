@@ -116,6 +116,9 @@ def get_farms_v1():
             "kingdom": (fd.server if fd and fd.server else ""),
             "telegram_tag": (fd.telegram_tag if fd and fd.telegram_tag else ""),
             "next_payment_at": acc.next_payment_at.strftime("%Y-%m-%d") if acc.next_payment_at else "",
+            "is_active": bool(acc.is_active),
+            "active": bool(acc.is_active and not acc.blocked_for_payment),
+            "blocked_for_payment": bool(acc.blocked_for_payment),
             "tariff": acc.next_payment_amount if acc.next_payment_amount is not None else None,
         })
 

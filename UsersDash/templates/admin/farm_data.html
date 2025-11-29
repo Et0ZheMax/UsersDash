@@ -151,6 +151,10 @@
         border-bottom: 1px solid rgba(31, 41, 55, 0.8);
     }
 
+    .farmdata-row--blocked {
+        background: rgba(208, 107, 107, 0.08);
+    }
+
     table.farmdata-table tbody tr:last-child {
         border-bottom: none;
     }
@@ -346,7 +350,9 @@
                             {% set fd = item.farmdata %}
                             <tr data-account-id="{{ acc.id }}"
                                 data-owner-name="{{ owner.username }}"
-                                data-farm-name="{{ acc.name }}">
+                                data-farm-name="{{ acc.name }}"
+                                data-is-active="{{ 1 if acc.is_active else 0 }}"
+                                data-payment-blocked="{{ 1 if acc.blocked_for_payment else 0 }}">
                                 <td>
                                     <div class="farmdata-name-main">
                                         {{ owner.username }}
@@ -413,13 +419,38 @@
                                 </td>
                                 <td>
                                     <div class="tariff-cell" data-role="tariff-cell">
-                                        <input class="farmdata-input farmdata-input--price"
-                                               type="number"
-                                               min="0"
-                                               step="50"
-                                               name="tariff"
-                                               placeholder="₽"
-                                               value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
+                                        <div class="tariff-inline">
+                                            <input class="farmdata-input farmdata-input--price"
+                                                   type="number"
+                                                   min="0"
+                                                   step="50"
+                                                   name="tariff"
+                                                   placeholder="₽"
+                                                   value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
+                                            <div class="tariff-actions">
+                                                <a class="icon-btn icon-btn--compact"
+                                                   href="{{ url_for('admin.manage', account_id=acc.id) }}"
+                                                   title="Настройки фермы"
+                                                   target="_blank"
+                                                   rel="noopener">
+                                                    ⚙
+                                                </a>
+                                                <button type="button"
+                                                        class="icon-btn icon-btn--compact icon-btn--danger"
+                                                        data-role="farmdata-mark-unpaid"
+                                                        data-account-id="{{ acc.id }}"
+                                                        title="Отключить за неоплату">
+                                                    ✖
+                                                </button>
+                                                <button type="button"
+                                                        class="icon-btn icon-btn--compact"
+                                                        data-role="farmdata-mark-paid"
+                                                        data-account-id="{{ acc.id }}"
+                                                        title="Включить после оплаты">
+                                                    ✔
+                                                </button>
+                                            </div>
+                                        </div>
                                         <div class="tariff-label tariff-label--interactive" data-role="tariff-label"></div>
                                         <div class="tariff-dropdown" data-role="tariff-dropdown" hidden></div>
                                     </div>
@@ -643,6 +674,84 @@ document.addEventListener("DOMContentLoaded", function () {
         { price: 1000, name: TARIFF_PRICE_MAP["1000"] || TARIFF_PRICE_MAP[1000] || "Расширенный" },
         { price: 1400, name: PREMIUM_TARIFF_NAME }
     ].filter(function (opt) { return !!opt.name; });
+
+    const PAYMENT_URL_PAID = {{ url_for('admin.mark_account_paid', account_id=0)|tojson }};
+    const PAYMENT_URL_UNPAID = {{ url_for('admin.mark_account_unpaid', account_id=0)|tojson }};
+
+    function applyPaymentStateToRow(row, blocked, isActive) {
+        if (!row) return;
+        row.dataset.paymentBlocked = blocked ? "1" : "0";
+        row.dataset.isActive = isActive ? "1" : "0";
+        row.classList.toggle("farmdata-row--blocked", blocked);
+
+        const unpaidBtn = row.querySelector('[data-role="farmdata-mark-unpaid"]');
+        if (unpaidBtn) {
+            unpaidBtn.title = blocked ? "Ферма уже отключена за неоплату" : "Отключить за неоплату";
+        }
+
+        const paidBtn = row.querySelector('[data-role="farmdata-mark-paid"]');
+        if (paidBtn) {
+            paidBtn.title = blocked ? "Включить после оплаты" : "Отметить оплату";
+        }
+    }
+
+    function initPaymentRowStates() {
+        document.querySelectorAll('[data-role="admin-farmdata-table"] tbody tr[data-account-id]').forEach(function (row) {
+            const blocked = row.dataset.paymentBlocked === "1";
+            const active = row.dataset.isActive === "1";
+            applyPaymentStateToRow(row, blocked, active);
+        });
+    }
+
+    function setIconBtnLoading(btn, isLoading) {
+        if (!btn) return;
+        if (isLoading) {
+            btn.disabled = true;
+            btn.classList.add("is-loading");
+        } else {
+            btn.disabled = false;
+            btn.classList.remove("is-loading");
+        }
+    }
+
+    async function handlePaymentToggle(btn, kind) {
+        const row = btn.closest('tr[data-account-id]');
+        const accountId = btn.dataset.accountId || (row ? row.dataset.accountId : null);
+        if (!row || !accountId) {
+            showToast("Не удалось определить ферму.", "error");
+            return;
+        }
+
+        const endpoint = kind === "paid" ? PAYMENT_URL_PAID : PAYMENT_URL_UNPAID;
+        const url = (endpoint || "").replace("0", accountId);
+
+        setIconBtnLoading(btn, true);
+        try {
+            const resp = await fetch(url, { method: "POST", headers: { "x-skip-loader": "1" } });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось обновить оплату.");
+            }
+
+            applyPaymentStateToRow(row, Boolean(data.blocked_for_payment), Boolean(data.is_active));
+            if (data.next_payment_at) {
+                const nextPaymentInput = row.querySelector('input[name="next_payment_date"]');
+                if (nextPaymentInput) {
+                    nextPaymentInput.value = data.next_payment_at;
+                    nextPaymentInput.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }
+            showToast(
+                kind === "paid" ? "Ферма включена после оплаты." : "Ферма отключена за неоплату.",
+                "success"
+            );
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Не удалось обновить оплату.", "error");
+        } finally {
+            setIconBtnLoading(btn, false);
+        }
+    }
 
     function closeTariffDropdowns(exceptEl) {
         document.querySelectorAll('[data-role="tariff-dropdown"]').forEach(function (dropdown) {
@@ -1553,6 +1662,23 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         });
     }
+
+    document.addEventListener("click", function (event) {
+        const paidBtn = event.target.closest('[data-role="farmdata-mark-paid"]');
+        if (paidBtn) {
+            event.preventDefault();
+            handlePaymentToggle(paidBtn, "paid");
+            return;
+        }
+
+        const unpaidBtn = event.target.closest('[data-role="farmdata-mark-unpaid"]');
+        if (unpaidBtn) {
+            event.preventDefault();
+            handlePaymentToggle(unpaidBtn, "unpaid");
+        }
+    });
+
+    initPaymentRowStates();
 });
 </script>
 

@@ -38,6 +38,7 @@ from UsersDash.models import (
 )
 from UsersDash.services.db_backup import backup_database
 from UsersDash.services import client_config_visibility
+from UsersDash.services.audit import settings_audit_context
 from UsersDash.services.remote_api import (
     fetch_account_settings,
     fetch_resources_for_accounts,
@@ -286,16 +287,30 @@ def mark_account_paid(account_id: int):
     base_date = account.next_payment_at.date() if account.next_payment_at else datetime.utcnow().date()
     next_date = base_date + timedelta(days=30)
     account.next_payment_at = datetime.combine(next_date, datetime.min.time())
-    account.is_active = True
-    account.blocked_for_payment = False
 
-    db.session.commit()
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "account_toggle",
+        {
+            "account": account,
+            "field": "account:IsActive",
+            "old_value": account.is_active,
+            "new_value": True,
+            "reason": "mark_paid",
+        },
+    ) as audit_ctx:
+        account.is_active = True
+        account.blocked_for_payment = False
+        db.session.commit()
+        audit_ctx["result"] = "ok"
 
     return jsonify(
         {
             "ok": True,
             "next_payment_at": account.next_payment_at.strftime("%Y-%m-%d"),
             "blocked_for_payment": account.blocked_for_payment,
+            "is_active": account.is_active,
         }
     )
 
@@ -309,14 +324,28 @@ def mark_account_unpaid(account_id: int):
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
-    account.is_active = False
-    account.blocked_for_payment = True
-    db.session.commit()
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "account_toggle",
+        {
+            "account": account,
+            "field": "account:IsActive",
+            "old_value": account.is_active,
+            "new_value": False,
+            "reason": "mark_unpaid",
+        },
+    ) as audit_ctx:
+        account.is_active = False
+        account.blocked_for_payment = True
+        db.session.commit()
+        audit_ctx["result"] = "ok"
 
     return jsonify(
         {
             "ok": True,
             "blocked_for_payment": account.blocked_for_payment,
+            "is_active": account.is_active,
         }
     )
 
