@@ -432,12 +432,12 @@ h1 {
 /* KPI */
 
 .kpi-row {
-    --kpi-card-min-height: 80px;
+    --kpi-card-min-height: 110px;
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 12px;
-    align-items: stretch;
-    margin-bottom: 20px;
+    align-items: flex-start;
+    margin-bottom: 12px;
 }
 
 .kpi-row--stacked {
@@ -457,7 +457,6 @@ h1 {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    height: 100%;
 }
 
 .kpi-info-card {
@@ -478,9 +477,13 @@ h1 {
 .kpi-card .kpi-list,
 .kpi-card .status-list,
 .kpi-card .info-block-text {
-    max-height: 180px;
+    max-height: 200px;
     overflow-y: auto;
     padding-right: 6px;
+}
+
+.kpi-list--payments {
+    max-height: 220px;
 }
 
 .kpi-card .kpi-list::-webkit-scrollbar,
@@ -1037,7 +1040,9 @@ h1 {
 
 .nav-link-attention {
     border: 1px solid #ffc107;
-    color: #ffc107;
+    background: rgba(255, 193, 7, 0.14);
+    color: #ffe9a3;
+    font-weight: 700;
     animation: pulse-attention 1.5s infinite;
 }
 
@@ -2175,7 +2180,7 @@ h1 {
   border: 1px solid #2c334f;
   border-radius: 10px;
   padding: 16px 18px;
-  margin: 16px 0 12px;
+  margin: 12px 0 10px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
 }
 
