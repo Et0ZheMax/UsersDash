@@ -453,6 +453,7 @@ def manage():
     menu_data = None
     debug_info = None
     visibility_map = {}
+    script_labels_map: dict[str, str] = {}
     selected_tariff_price = selected_account.next_payment_amount if selected_account else None
     selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
     selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
@@ -462,10 +463,13 @@ def manage():
             raw_settings, return_debug=True
         )
         visibility_map = _build_visibility_map(raw_steps)
+        script_labels_map = _extract_script_labels_from_visibility(visibility_map)
         raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=True)
         if raw_steps:
             view_steps = _build_manage_view_steps(
-                raw_settings, steps_override=raw_steps
+                raw_settings,
+                steps_override=raw_steps,
+                script_labels_map=script_labels_map,
             )
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
@@ -477,6 +481,7 @@ def manage():
         view_steps=view_steps,
         raw_steps=raw_steps,
         visibility_map=visibility_map,
+        script_labels_map=script_labels_map,
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
@@ -635,6 +640,21 @@ def _collect_config_sources(manage_meta, server_meta, study_meta):
     return sources
 
 
+def _extract_script_labels_from_visibility(visibility_map: dict) -> dict[str, str]:
+    labels: dict[str, str] = {}
+
+    for script_id, items in (visibility_map or {}).items():
+        for item in items or []:
+            if (
+                item
+                and item.get("config_key") == client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
+                and item.get("client_label")
+            ):
+                labels[script_id] = item["client_label"]
+
+    return labels
+
+
 def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
     order_map = manage_meta.get("order_map") or {}
     script_labels = manage_meta.get("script_labels") or {}
@@ -681,6 +701,13 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
             ):
                 config_keys.add(rec.config_key)
 
+        for rec in combined_records:
+            if (
+                rec.script_id == script_id
+                and rec.config_key != client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
+            ):
+                config_keys.add(rec.config_key)
+
         script_label_rec = script_label_records.get(script_id)
         script_label = script_labels.get(script_id, script_id)
         script_label_from_db = False
@@ -700,12 +727,16 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
             source_labels = (sources_map.get(script_id) or {}).get(config_key, set())
             from_manage_js = "manage.js" in source_labels or config_key in config_labels
 
+            default_label = config_labels.get(config_key, config_key)
+            if config_key == client_config_visibility.STEP_HIDDEN_KEY:
+                default_label = "Скрыть шаг"
+
             rows.append(
                 {
                     "script_id": script_id,
                     "config_key": config_key,
                     "script_label": script_label,
-                    "default_label": config_labels.get(config_key, config_key),
+                    "default_label": default_label,
                     "client_label": record.client_label if record else None,
                     "client_visible": record.client_visible if record else True,
                     "order_index": order_idx,

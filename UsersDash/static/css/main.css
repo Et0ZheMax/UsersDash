@@ -506,6 +506,38 @@ h1 {
     border-radius: 999px;
 }
 
+.kpi-card .kpi-list,
+.kpi-card .status-list,
+.kpi-card .info-block-text {
+    max-height: 200px;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.kpi-list--payments {
+    max-height: 220px;
+}
+
+.kpi-card .kpi-list::-webkit-scrollbar,
+.kpi-card .status-list::-webkit-scrollbar,
+.kpi-card .info-block-text::-webkit-scrollbar {
+    width: 6px;
+}
+
+.kpi-card .kpi-list::-webkit-scrollbar-thumb,
+.kpi-card .status-list::-webkit-scrollbar-thumb,
+.kpi-card .info-block-text::-webkit-scrollbar-thumb {
+    background: rgba(76, 127, 255, 0.4);
+    border-radius: 999px;
+}
+
+.kpi-card .kpi-list::-webkit-scrollbar-track,
+.kpi-card .status-list::-webkit-scrollbar-track,
+.kpi-card .info-block-text::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 999px;
+}
+
 
 .btn-ghost {
     background: rgba(76, 127, 255, 0.1);
