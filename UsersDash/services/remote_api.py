@@ -443,6 +443,48 @@ def update_account_step_settings(account, step_idx: int, payload: Dict[str, Any]
         return False, str(exc)
 
 
+def update_account_active(account, is_active: bool) -> Tuple[bool, str]:
+    """Включает/выключает ферму через RssV7 (/api/manage/account/<id>)."""
+
+    server = getattr(account, "server", None)
+    if not server:
+        return False, "server is not set for account"
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return False, "api_base_url is empty"
+
+    server_resources = fetch_resources_for_server(server)
+    remote_id, _ = _resolve_remote_account(account, server_resources)
+    if not remote_id:
+        fallback_remote = getattr(account, "internal_id", None) or getattr(account, "name", None)
+        if fallback_remote:
+            remote_id = str(fallback_remote)
+
+    if not remote_id:
+        return False, "unable to resolve remote_id for account"
+
+    url = f"{base}/manage/account/{remote_id}"
+
+    payload = {"Active": is_active, "IsActive": is_active}
+
+    try:
+        resp = requests.put(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except Exception as exc:
+        print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
+        return False, str(exc)
+
+    if 200 <= resp.status_code < 300:
+        return True, "OK"
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = resp.text
+
+    return False, f"HTTP {resp.status_code}: {body}"
+
+
 def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
     """
     Применяет manage-шаблон к аккаунту через

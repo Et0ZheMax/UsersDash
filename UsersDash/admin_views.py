@@ -43,6 +43,7 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     fetch_resources_for_accounts,
     fetch_rssv7_accounts_meta,
+    update_account_active,
 )
 from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
 from UsersDash.services.tariffs import TARIFF_PRICE_MAP, get_tariff_name_by_price
@@ -280,7 +281,11 @@ def admin_dashboard():
 def mark_account_paid(account_id: int):
     admin_required()
 
-    account = Account.query.options(joinedload(Account.owner)).filter_by(id=account_id).first()
+    account = (
+        Account.query.options(joinedload(Account.owner), joinedload(Account.server))
+        .filter_by(id=account_id)
+        .first()
+    )
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
@@ -300,6 +305,15 @@ def mark_account_paid(account_id: int):
             "reason": "mark_paid",
         },
     ) as audit_ctx:
+        ok, msg = update_account_active(account, True)
+        if not ok:
+            audit_ctx["result"] = "failed"
+            db.session.rollback()
+            return (
+                jsonify({"ok": False, "error": f"Не удалось включить ферму: {msg}"}),
+                500,
+            )
+
         account.is_active = True
         account.blocked_for_payment = False
         db.session.commit()
@@ -320,7 +334,11 @@ def mark_account_paid(account_id: int):
 def mark_account_unpaid(account_id: int):
     admin_required()
 
-    account = Account.query.filter_by(id=account_id).first()
+    account = (
+        Account.query.options(joinedload(Account.owner), joinedload(Account.server))
+        .filter_by(id=account_id)
+        .first()
+    )
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
@@ -336,6 +354,15 @@ def mark_account_unpaid(account_id: int):
             "reason": "mark_unpaid",
         },
     ) as audit_ctx:
+        ok, msg = update_account_active(account, False)
+        if not ok:
+            audit_ctx["result"] = "failed"
+            db.session.rollback()
+            return (
+                jsonify({"ok": False, "error": f"Не удалось выключить ферму: {msg}"}),
+                500,
+            )
+
         account.is_active = False
         account.blocked_for_payment = True
         db.session.commit()
