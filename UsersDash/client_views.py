@@ -42,6 +42,22 @@ from UsersDash.services.tariffs import (
 client_bp = Blueprint("client", __name__, url_prefix="")
 
 
+@client_bp.before_app_request
+def ensure_farmdata_status_cached():
+    """Готовим статус заполненности данных ферм для всех клиентских страниц."""
+    if not current_user.is_authenticated:
+        return
+
+    if getattr(current_user, "role", None) == "admin":
+        return
+
+    if not hasattr(g, "farmdata_status_cache"):
+        try:
+            g.farmdata_status_cache = collect_farmdata_status(current_user.id)
+        except Exception as exc:  # pragma: no cover - защита от редких сбоев
+            print(f"[before_app_request] farmdata status failed: {exc}")
+
+
 def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
     """Returns steps list and menu data from manage payload with fallbacks.
 
@@ -471,8 +487,7 @@ def dashboard():
             })
 
     upcoming_all.sort(key=lambda x: x["date"])
-    upcoming_payments = upcoming_all[:3]
-    upcoming_more = max(0, len(upcoming_all) - len(upcoming_payments))
+    upcoming_payments = upcoming_all
 
     tariffs_summary, tariffs_total = summarize_tariffs(accounts)
 
@@ -484,7 +499,6 @@ def dashboard():
             accounts_data=[],
             total_accounts=0,
             upcoming_payments=[],
-            upcoming_more=0,
             tariffs_summary=[],
             tariffs_total=0,
             farmdata_status=farmdata_status,
@@ -522,7 +536,6 @@ def dashboard():
         accounts_data=accounts_data,
         total_accounts=total_accounts,
         upcoming_payments=upcoming_payments,
-        upcoming_more=upcoming_more,
         tariffs_summary=tariffs_summary,
         tariffs_total=tariffs_total,
         farmdata_status=farmdata_status,

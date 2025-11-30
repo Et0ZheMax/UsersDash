@@ -15,7 +15,7 @@
         <div class="kpi-label">Ближайшие оплаты</div>
 
         {% if upcoming_payments and upcoming_payments|length %}
-            <ul class="kpi-list">
+            <ul class="kpi-list kpi-list--payments">
                 {% for p in upcoming_payments %}
                     <li>
                         <strong>{{ p.account_name }}</strong>
@@ -26,9 +26,6 @@
                     </li>
                 {% endfor %}
             </ul>
-            {% if upcoming_more > 0 %}
-                <div class="kpi-note">и ещё {{ upcoming_more }}</div>
-            {% endif %}
         {% else %}
             <div class="kpi-empty">Нет запланированных оплат</div>
         {% endif %}
