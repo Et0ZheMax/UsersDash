@@ -101,7 +101,7 @@
         "*": { Off: "Выкл", Any: "Любой", Auto: "Авто", on: "Вкл", off: "Выкл" },
     };
 
-    const SCRIPT_LABELS = {
+    const SCRIPT_LABELS_DEFAULT = {
         "vikingbot.base.gathervip": "Сбор ресурсов",
         "vikingbot.base.dailies": "Ежедневные задания",
         "vikingbot.base.alliancedonation": "Техи и подарки племени",
@@ -120,6 +120,8 @@
         "vikingbot.base.heal": "Лечение",
         "vikingbot.base.eaglenest": "Орлиное гнездо",
     };
+
+    let SCRIPT_LABELS = Object.assign({}, SCRIPT_LABELS_DEFAULT);
 
     const ORDER_MAP = {
         "vikingbot.base.gathervip": [
@@ -161,6 +163,7 @@
         steps: [],
         rawSteps: [],
         visibilityMap: {},
+        scriptLabels: {},
         debugInfo: null,
         menu: {},
         isLoading: false,
@@ -172,6 +175,14 @@
         selectedStepIndex: null,
         scheduleDrafts: {},
     }, window.manageInitialState || {});
+
+    function applyScriptLabels(newLabels) {
+        const safeLabels = (newLabels && typeof newLabels === "object") ? newLabels : {};
+        state.scriptLabels = Object.assign({}, state.scriptLabels || {}, safeLabels);
+        SCRIPT_LABELS = Object.assign({}, SCRIPT_LABELS_DEFAULT, state.scriptLabels || {});
+    }
+
+    applyScriptLabels(state.scriptLabels);
 
     state.detailsUrlTemplate = state.detailsUrlTemplate || "/manage/account/__ACCOUNT__/details";
     state.toggleUrlTemplate = state.toggleUrlTemplate || "/account/__ACCOUNT__/settings/step/__STEP__/toggle";
@@ -1695,6 +1706,8 @@
             const normalized = extractStepsAndMenu(data.raw_steps || data.rawSteps || data.Data || data.data || data);
             const rawSteps = normalizeManageSteps(normalized.steps);
             const visibilityMap = normalizeVisibilityMap(data.visibility_map || data.visibilityMap || {});
+            const scriptLabels = data.script_labels || data.scriptLabels || {};
+            applyScriptLabels(scriptLabels);
             const viewSteps = buildViewStepsFromRaw(rawSteps, visibilityMap);
             const menu = data.menu || data.MenuData || data.menu_data || normalized.menu;
             const account = data.account || {};
@@ -1719,6 +1732,7 @@
             state.steps = viewSteps || [];
             state.rawSteps = rawSteps || [];
             state.visibilityMap = visibilityMap;
+            state.scriptLabels = Object.assign({}, state.scriptLabels || {}, scriptLabels);
             state.menu = menu;
             state.debugInfo = debug || {
                 http_status: resp.status,

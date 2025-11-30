@@ -154,7 +154,13 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
     return [], {}
 
 
-def _build_manage_view_steps(raw_settings, include_schedule: bool = True, *, steps_override=None):
+def _build_manage_view_steps(
+    raw_settings,
+    include_schedule: bool = True,
+    *,
+    steps_override=None,
+    script_labels_map: dict[str, str] | None = None,
+):
     steps, _ = _extract_steps_and_menu(raw_settings)
     if steps_override is not None:
         steps = steps_override
@@ -179,6 +185,9 @@ def _build_manage_view_steps(raw_settings, include_schedule: bool = True, *, ste
         "vikingbot.base.heal": "Лечение",
         "vikingbot.base.eaglenest": "Орлиное гнездо",
     }
+
+    if script_labels_map:
+        script_labels.update(script_labels_map)
 
     def _fmt_schedule_rule(rule):
         if not isinstance(rule, dict):
@@ -281,7 +290,11 @@ def _build_visibility_map(raw_steps: list[dict]) -> dict:
         if not script_id or script_id in visibility_map:
             continue
 
-        records = client_config_visibility.list_for_script(script_id, scope="global")
+        records = client_config_visibility.merge_records_with_defaults(
+            client_config_visibility.list_for_script(script_id, scope="global"),
+            scope="global",
+            script_id=script_id,
+        )
         if not records:
             continue
 
@@ -296,6 +309,21 @@ def _build_visibility_map(raw_steps: list[dict]) -> dict:
         ]
 
     return visibility_map
+
+
+def _extract_script_labels_from_visibility(visibility_map: dict) -> dict[str, str]:
+    labels: dict[str, str] = {}
+
+    for script_id, items in (visibility_map or {}).items():
+        for item in items or []:
+            if (
+                item
+                and item.get("config_key") == client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
+                and item.get("client_label")
+            ):
+                labels[script_id] = item["client_label"]
+
+    return labels
 
 
 def _get_step_snapshot(account: Account, step_idx: int) -> dict | None:
@@ -336,71 +364,10 @@ def _apply_visibility_to_steps(raw_steps: list[dict], visibility_map: dict, *, i
 
         rules_by_key = {rule.get("config_key"): rule for rule in visibility_rules}
 
-        filtered_cfg = {
-            key: value
-            for key, value in cfg.items()
-            if not (rules_by_key.get(key) and rules_by_key[key].get("client_visible") is False)
-        }
-
-        new_step = dict(step)
-        new_step["Config"] = filtered_cfg
-        filtered_steps.append(new_step)
-
-    return filtered_steps
-
-
-def _build_visibility_map(raw_steps: list[dict]) -> dict:
-    """Возвращает матрицу видимости для указанных шагов."""
-
-    visibility_map: dict[str, list[dict]] = {}
-
-    for step in raw_steps or []:
-        script_id = None
-        if isinstance(step, dict):
-            script_id = step.get("ScriptId") or step.get("script_id")
-
-        if not script_id or script_id in visibility_map:
-            continue
-
-        records = client_config_visibility.list_for_script(script_id, scope="global")
-        if not records:
-            continue
-
-        visibility_map[script_id] = [
-            {
-                "config_key": rec.config_key,
-                "client_visible": rec.client_visible,
-                "client_label": rec.client_label,
-                "order_index": rec.order_index,
-            }
-            for rec in records
-        ]
-
-    return visibility_map
-
-
-def _apply_visibility_to_steps(raw_steps: list[dict], visibility_map: dict, *, is_admin: bool) -> list[dict]:
-    """Удаляет скрытые поля конфигурации для клиентов."""
-
-    if is_admin:
-        return raw_steps
-
-    filtered_steps: list[dict] = []
-
-    for step in raw_steps or []:
-        if not isinstance(step, dict):
+        hidden_rule = rules_by_key.get(client_config_visibility.STEP_HIDDEN_KEY)
+        if hidden_rule and hidden_rule.get("client_visible") is False:
             filtered_steps.append(step)
             continue
-
-        cfg = step.get("Config") or {}
-        script_id = step.get("ScriptId") or step.get("script_id")
-        visibility_rules = visibility_map.get(script_id) or []
-
-        if not visibility_rules or not isinstance(cfg, dict):
-            filtered_steps.append(step)
-            continue
-
-        rules_by_key = {rule.get("config_key"): rule for rule in visibility_rules}
 
         filtered_cfg = {
             key: value
@@ -570,6 +537,7 @@ def manage_page():
     menu_data = None
     debug_info = None
     visibility_map = {}
+    script_labels_map: dict[str, str] = {}
     selected_tariff_price = selected_account.next_payment_amount if selected_account else None
     selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
     selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
@@ -577,12 +545,14 @@ def manage_page():
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
         visibility_map = _build_visibility_map(raw_steps)
+        script_labels_map = _extract_script_labels_from_visibility(visibility_map)
         raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=is_admin)
         if raw_steps:
             view_steps = _build_manage_view_steps(
                 raw_settings,
                 include_schedule=is_admin,
                 steps_override=raw_steps,
+                script_labels_map=script_labels_map,
             )
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
@@ -594,6 +564,7 @@ def manage_page():
         view_steps=view_steps,
         raw_steps=raw_steps,
         visibility_map=visibility_map,
+        script_labels_map=script_labels_map,
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
@@ -703,12 +674,14 @@ def manage_account_details(account_id: int):
 
     is_admin = getattr(current_user, "role", None) == "admin"
     visibility_map = _build_visibility_map(raw_steps)
+    script_labels_map = _extract_script_labels_from_visibility(visibility_map)
     raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=is_admin)
 
     steps = _build_manage_view_steps(
         raw_settings,
         include_schedule=is_admin,
         steps_override=raw_steps,
+        script_labels_map=script_labels_map,
     )
 
     return jsonify(
@@ -725,6 +698,7 @@ def manage_account_details(account_id: int):
             "steps": steps,
             "raw_steps": raw_steps,
             "visibility_map": visibility_map,
+            "script_labels": script_labels_map,
             "menu": menu_data,
             "debug": debug_info,
         }
