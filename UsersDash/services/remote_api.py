@@ -466,8 +466,10 @@ def update_account_active(account, is_active: bool) -> Tuple[bool, str]:
 
     url = f"{base}/manage/account/{remote_id}"
 
+    payload = {"Active": is_active, "IsActive": is_active}
+
     try:
-        resp = requests.put(url, json={"Active": is_active}, timeout=DEFAULT_TIMEOUT)
+        resp = requests.put(url, json=payload, timeout=DEFAULT_TIMEOUT)
     except Exception as exc:
         print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
         return False, str(exc)
