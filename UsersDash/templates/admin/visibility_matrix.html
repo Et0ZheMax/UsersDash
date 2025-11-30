@@ -39,7 +39,25 @@
                 <tbody>
                 {% for script_id, rows_list in grouped_rows.items() %}
                     <tr class="table-secondary">
-                        <th colspan="7">{{ rows_list[0].script_label or script_id }}</th>
+                        <th colspan="7">
+                            <div class="d-flex flex-column flex-md-row align-items-md-center">
+                                <div class="text-monospace mr-md-3">{{ script_id }}</div>
+                                <div class="flex-grow-1">
+                                    <label class="small text-muted mb-1" for="script-label-{{ script_id|replace('.', '-') }}">Название скрипта</label>
+                                    {% set script_placeholder = (not rows_list[0].script_label_from_db and rows_list[0].script_label_from_js and rows_list[0].script_label) or 'Название из manage.js' %}
+                                    <input
+                                        type="text"
+                                        class="form-control"
+                                        id="script-label-{{ script_id|replace('.', '-') }}"
+                                        name="script_label::{{ script_id }}"
+                                        value="{{ rows_list[0].script_label }}"
+                                        placeholder="{{ script_placeholder }}">
+                                    {% if script_errors.get(script_id) %}
+                                        <div class="text-danger small mt-1">{{ script_errors.get(script_id) }}</div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </th>
                         </tr>
                     {% for row in rows_list %}
                         <tr>
@@ -60,6 +78,11 @@
                                 {% if row.from_server %}{% set _ = parts.append('API') %}{% endif %}
                                 {% if row.from_studyfull %}{% set _ = parts.append('studyFULL') %}{% endif %}
                                 {% if row.has_db %}{% set _ = parts.append('DB') %}{% endif %}
+                                {% if row.script_label_from_db %}
+                                    {% set _ = parts.append('Метка: DB') %}
+                                {% elif row.script_label_from_js %}
+                                    {% set _ = parts.append('Метка: manage.js') %}
+                                {% endif %}
                                 {{ parts|join(', ') if parts else '—' }}
                             </td>
                         </tr>
