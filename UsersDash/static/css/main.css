@@ -433,10 +433,10 @@ h1 {
 
 .kpi-row {
     --kpi-card-min-height: 80px;
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
     gap: 12px;
-    align-items: flex-start;
+    align-items: stretch;
     margin-bottom: 20px;
 }
 
@@ -454,12 +454,16 @@ h1 {
     padding: 12px 16px;
     min-width: 150px;
     min-height: var(--kpi-card-min-height);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    height: 100%;
 }
 
 .kpi-info-card {
     flex: 1 1 260px;
     max-width: 420px;
-    align-self: flex-start;
+    align-self: stretch;
 }
 
 .kpi-list {
@@ -469,6 +473,34 @@ h1 {
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+
+.kpi-card .kpi-list,
+.kpi-card .status-list,
+.kpi-card .info-block-text {
+    max-height: 180px;
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
+.kpi-card .kpi-list::-webkit-scrollbar,
+.kpi-card .status-list::-webkit-scrollbar,
+.kpi-card .info-block-text::-webkit-scrollbar {
+    width: 6px;
+}
+
+.kpi-card .kpi-list::-webkit-scrollbar-thumb,
+.kpi-card .status-list::-webkit-scrollbar-thumb,
+.kpi-card .info-block-text::-webkit-scrollbar-thumb {
+    background: rgba(76, 127, 255, 0.4);
+    border-radius: 999px;
+}
+
+.kpi-card .kpi-list::-webkit-scrollbar-track,
+.kpi-card .status-list::-webkit-scrollbar-track,
+.kpi-card .info-block-text::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 999px;
 }
 
 
@@ -485,7 +517,7 @@ h1 {
 .kpi-status-card {
     flex: 0 1 340px;
     max-width: 400px;
-    align-self: flex-start;
+    align-self: stretch;
 }
 
 .kpi-label {
@@ -2068,7 +2100,7 @@ h1 {
   }
 
   .kpi-row {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .actions-cell {
