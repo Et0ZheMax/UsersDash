@@ -672,7 +672,7 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
         db_records_map[(rec.script_id, rec.config_key)] = rec
 
     combined_records = client_config_visibility.merge_records_with_defaults(
-        db_records, scope="global"
+        db_records, scope="global", script_ids=sources_map.keys()
     )
     records_map: dict[tuple[str, str], Any] = {}
     for rec in combined_records:
@@ -707,6 +707,9 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
                 and rec.config_key != client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
             ):
                 config_keys.add(rec.config_key)
+
+        if client_config_visibility.STEP_HIDDEN_KEY not in config_keys:
+            config_keys.add(client_config_visibility.STEP_HIDDEN_KEY)
 
         script_label_rec = script_label_records.get(script_id)
         script_label = script_labels.get(script_id, script_id)
