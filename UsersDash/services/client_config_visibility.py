@@ -1,7 +1,7 @@
 """Обёртка для работы с таблицей client_config_visibility."""
 
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from UsersDash.models import ClientConfigVisibility, db
 
@@ -122,6 +122,7 @@ def delete_record(
 # на клиентской стороне. Такие шаги остаются в исходном списке (для корректных
 # индексов), но не отображаются в интерфейсе клиента.
 STEP_HIDDEN_KEY = "__step__"
+STEP_HIDDEN_LABEL = "Скрыть шаг"
 
 DEFAULT_VISIBILITY_RULES = [
     {
@@ -180,6 +181,7 @@ def merge_records_with_defaults(
     *,
     scope: str = "global",
     script_id: Optional[str] = None,
+    script_ids: Iterable[str] | None = None,
 ) -> List[ClientConfigVisibility | SimpleNamespace]:
     """Дополняет записи правилами по умолчанию.
 
@@ -190,30 +192,72 @@ def merge_records_with_defaults(
 
     merged = list(records or [])
     defaults = _default_rules(scope, script_id)
+    current_scope = scope or "global"
     if not defaults:
-        return merged
+        defaults = []
 
     existing_keys = {
         (rec.script_id, rec.config_key)
         for rec in merged
-        if (getattr(rec, "scope", None) or "global") == (scope or "global")
+        if (getattr(rec, "scope", None) or "global") == current_scope
     }
+
+    max_order_by_script: dict[str, int] = {}
+    for rec in merged:
+        if (getattr(rec, "scope", None) or "global") != current_scope:
+            continue
+        order_value = rec.order_index or 0
+        max_order_by_script[rec.script_id] = max(
+            max_order_by_script.get(rec.script_id, order_value),
+            order_value,
+        )
 
     for rule in defaults:
         key = (rule.get("script_id"), rule.get("config_key"))
         if key in existing_keys:
             continue
+        order_index = rule.get("order_index") or 0
         merged.append(
             SimpleNamespace(
                 script_id=rule.get("script_id"),
                 config_key=rule.get("config_key"),
                 client_visible=rule.get("client_visible", True),
                 client_label=rule.get("client_label"),
-                order_index=rule.get("order_index", 0),
+                order_index=order_index,
                 scope=rule.get("scope", "global"),
                 id=None,
             )
         )
+        existing_keys.add(key)
+        if rule.get("script_id"):
+            max_order_by_script[rule["script_id"]] = max(
+                max_order_by_script.get(rule["script_id"], order_index),
+                order_index,
+            )
+
+    script_ids_set = set(script_ids or [])
+    if script_id:
+        script_ids_set.add(script_id)
+
+    for sid in script_ids_set:
+        key = (sid, STEP_HIDDEN_KEY)
+        if key in existing_keys:
+            continue
+
+        next_order_idx = max_order_by_script.get(sid, -1) + 1
+        merged.append(
+            SimpleNamespace(
+                script_id=sid,
+                config_key=STEP_HIDDEN_KEY,
+                client_visible=True,
+                client_label=STEP_HIDDEN_LABEL,
+                order_index=next_order_idx,
+                scope=current_scope,
+                id=None,
+            )
+        )
+        existing_keys.add(key)
+        max_order_by_script[sid] = next_order_idx
 
     return merged
 
@@ -221,13 +265,16 @@ def merge_records_with_defaults(
 def defaults_for_script(script_id: str, scope: str = "global") -> list[dict]:
     """Возвращает дефолтные правила для указанного скрипта в виде dict."""
 
+    records = merge_records_with_defaults(
+        [], scope=scope, script_id=script_id, script_ids=[script_id]
+    )
     return [
         {
-            "config_key": rule.get("config_key"),
-            "client_visible": rule.get("client_visible", True),
-            "client_label": rule.get("client_label"),
-            "order_index": rule.get("order_index", 0),
+            "config_key": rec.config_key,
+            "client_visible": rec.client_visible,
+            "client_label": rec.client_label,
+            "order_index": rec.order_index,
         }
-        for rule in _default_rules(scope, script_id)
+        for rec in records
     ]
 
