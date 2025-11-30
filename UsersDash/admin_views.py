@@ -526,6 +526,56 @@ def _load_manage_js_meta() -> dict:
     }
 
 
+def _load_studyfull_meta() -> dict:
+    """Читает studyFULL.json и извлекает пары ScriptId/Config."""
+
+    study_path = os.path.join(
+        os.path.dirname(__file__), "bot_farm_configs", "studyFULL.json"
+    )
+    try:
+        with open(study_path, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"scripts": {}, "items_count": 0, "steps_count": 0}
+
+    scripts: dict[str, dict[str, set[str]]] = {}
+    steps_count = 0
+
+    for entry in raw_data if isinstance(raw_data, list) else []:
+        data_raw = entry.get("Data")
+        if not isinstance(data_raw, str):
+            continue
+
+        try:
+            steps = json.loads(data_raw)
+        except json.JSONDecodeError:
+            continue
+
+        if not isinstance(steps, list):
+            continue
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+
+            script_id = step.get("ScriptId") or step.get("script_id")
+            if not script_id:
+                continue
+
+            config_obj = step.get("Config") or step.get("config") or {}
+            config_keys = set(config_obj.keys()) if isinstance(config_obj, dict) else set()
+            scripts.setdefault(script_id, {"config_keys": set()})["config_keys"].update(
+                config_keys
+            )
+            steps_count += 1
+
+    return {
+        "scripts": scripts,
+        "items_count": len(raw_data) if isinstance(raw_data, list) else 0,
+        "steps_count": steps_count,
+    }
+
+
 def _collect_server_step_meta():
     from UsersDash.client_views import _extract_steps_and_menu
 
@@ -562,11 +612,35 @@ def _collect_server_step_meta():
     return {"scripts": {}, "sample_account": None, "steps_count": 0}
 
 
-def _build_visibility_rows(manage_meta, server_meta, db_records):
+def _collect_config_sources(manage_meta, server_meta, study_meta):
+    sources: dict[str, dict[str, set[str]]] = {}
+
+    def add_source(script_id: str, config_key: str, origin: str):
+        scripts_map = sources.setdefault(script_id, {})
+        scripts_map.setdefault(config_key, set()).add(origin)
+
+    for script_id, cfg_keys in (manage_meta.get("order_map") or {}).items():
+        for cfg_key in cfg_keys:
+            add_source(script_id, cfg_key, "manage.js")
+
+    for script_id, meta in (server_meta.get("scripts") or {}).items():
+        for cfg_key in meta.get("config_keys", set()):
+            add_source(script_id, cfg_key, "API")
+
+    for script_id, meta in (study_meta.get("scripts") or {}).items():
+        for cfg_key in meta.get("config_keys", set()):
+            add_source(script_id, cfg_key, "studyFULL")
+
+    return sources
+
+
+def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
     order_map = manage_meta.get("order_map") or {}
     script_labels = manage_meta.get("script_labels") or {}
     config_labels = manage_meta.get("config_labels") or {}
     server_scripts: dict = server_meta.get("scripts") or {}
+    study_scripts: dict = study_meta.get("scripts") or {}
+    sources_map = _collect_config_sources(manage_meta, server_meta, study_meta)
 
     db_records_map: dict[tuple[str, str], ClientConfigVisibility] = {}
     for rec in db_records:
@@ -582,6 +656,7 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
             records_map[key] = rec
 
     scripts = set(order_map.keys()) | set(script_labels.keys()) | set(server_scripts.keys())
+    scripts.update(study_scripts.keys())
     scripts.update(rec.script_id for rec in db_records)
     scripts.update(rec.script_id for rec in combined_records)
 
@@ -589,7 +664,9 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
     for script_id in sorted(scripts):
         config_keys: set[str] = set(order_map.get(script_id, []))
         server_cfg = server_scripts.get(script_id) or {}
+        study_cfg = study_scripts.get(script_id) or {}
         config_keys.update(server_cfg.get("config_keys", set()))
+        config_keys.update(study_cfg.get("config_keys", set()))
         for rec in db_records:
             if rec.script_id == script_id:
                 config_keys.add(rec.config_key)
@@ -603,6 +680,9 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
             elif config_key in order_map.get(script_id, []):
                 order_idx = order_map[script_id].index(config_key)
 
+            source_labels = (sources_map.get(script_id) or {}).get(config_key, set())
+            from_manage_js = "manage.js" in source_labels or config_key in config_labels
+
             rows.append(
                 {
                     "script_id": script_id,
@@ -612,8 +692,9 @@ def _build_visibility_rows(manage_meta, server_meta, db_records):
                     "client_label": record.client_label if record else None,
                     "client_visible": record.client_visible if record else True,
                     "order_index": order_idx,
-                    "from_js": config_key in config_labels,
-                    "from_server": config_key in (server_cfg.get("config_keys") or set()),
+                    "from_js": from_manage_js,
+                    "from_server": "API" in source_labels,
+                    "from_studyfull": "studyFULL" in source_labels,
                     "has_db": db_rec is not None,
                 }
             )
@@ -631,15 +712,20 @@ def config_visibility_matrix():
 
     manage_meta = _load_manage_js_meta()
     server_meta = _collect_server_step_meta()
+    study_meta = _load_studyfull_meta()
     db_records = ClientConfigVisibility.query.order_by(
         ClientConfigVisibility.script_id.asc(),
         ClientConfigVisibility.order_index.asc(),
         ClientConfigVisibility.config_key.asc(),
     ).all()
 
-    rows = _build_visibility_rows(manage_meta, server_meta, db_records)
+    rows = _build_visibility_rows(manage_meta, server_meta, study_meta, db_records)
 
     if request.method == "POST":
+        if request.form.get("action") == "refresh":
+            flash("Источники перечитаны, матрица обновлена.", "success")
+            return redirect(url_for("admin.config_visibility_matrix"))
+
         for row in rows:
             prefix = row["form_key"]
             label = request.form.get(f"label::{prefix}", "").strip() or None
@@ -686,6 +772,7 @@ def config_visibility_matrix():
         grouped_rows=grouped_rows,
         manage_meta=manage_meta,
         server_meta=server_meta,
+        study_meta=study_meta,
     )
 
 

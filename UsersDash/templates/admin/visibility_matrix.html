@@ -7,19 +7,24 @@
     <div>
         <div class="page-kicker">Админ-панель</div>
         <h1 class="page-title">Матрица видимости конфигов</h1>
-        <div class="page-subtitle">Список шагов и ключей из manage.js и API с текущими настройками</div>
+        <div class="page-subtitle">Список шагов и ключей из manage.js, API и studyFULL с текущими настройками</div>
     </div>
     <div class="page-actions">
         <a href="{{ url_for('admin.manage') }}" class="btn btn-outline">← Назад к manage</a>
+        <form method="post" class="d-inline-block ml-2">
+            <input type="hidden" name="action" value="refresh">
+            <button type="submit" class="btn btn-outline">Обновить источники</button>
+        </form>
     </div>
 </div>
 
 <div class="card">
     <div class="card-body">
         <p class="text-muted">
-            Источник manage.js: {{ manage_meta.order_map|length }} шагов. Данные API: {{ server_meta.steps_count }} шагов{% if server_meta.sample_account %} (пример: {{ server_meta.sample_account.name }}).{% endif %}
+            Источник manage.js: {{ manage_meta.order_map|length }} шагов. Данные API: {{ server_meta.steps_count }} шагов{% if server_meta.sample_account %} (пример: {{ server_meta.sample_account.name }}).{% endif %}. Конфигурации studyFULL: {{ study_meta.steps_count }} шагов из {{ study_meta.items_count }} записей.
         </p>
         <form method="post">
+            <input type="hidden" name="action" value="save">
             <table class="table table-striped table-sm">
                 <thead>
                     <tr>
@@ -35,7 +40,7 @@
                 {% for script_id, rows_list in grouped_rows.items() %}
                     <tr class="table-secondary">
                         <th colspan="7">{{ rows_list[0].script_label or script_id }}</th>
-                    </tr>
+                        </tr>
                     {% for row in rows_list %}
                         <tr>
                             <td class="text-monospace">{{ row.script_id }}</td>
@@ -53,6 +58,7 @@
                                 {% set parts = [] %}
                                 {% if row.from_js %}{% set _ = parts.append('manage.js') %}{% endif %}
                                 {% if row.from_server %}{% set _ = parts.append('API') %}{% endif %}
+                                {% if row.from_studyfull %}{% set _ = parts.append('studyFULL') %}{% endif %}
                                 {% if row.has_db %}{% set _ = parts.append('DB') %}{% endif %}
                                 {{ parts|join(', ') if parts else '—' }}
                             </td>
