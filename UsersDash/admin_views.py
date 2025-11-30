@@ -22,6 +22,7 @@ from flask import (
     request,
     url_for,
     Response,
+    current_app,
 )
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
@@ -452,6 +453,7 @@ def manage():
     menu_data = None
     debug_info = None
     visibility_map = {}
+    script_labels_map: dict[str, str] = {}
     selected_tariff_price = selected_account.next_payment_amount if selected_account else None
     selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
     selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
@@ -461,10 +463,13 @@ def manage():
             raw_settings, return_debug=True
         )
         visibility_map = _build_visibility_map(raw_steps)
+        script_labels_map = _extract_script_labels_from_visibility(visibility_map)
         raw_steps = _apply_visibility_to_steps(raw_steps, visibility_map, is_admin=True)
         if raw_steps:
             view_steps = _build_manage_view_steps(
-                raw_settings, steps_override=raw_steps
+                raw_settings,
+                steps_override=raw_steps,
+                script_labels_map=script_labels_map,
             )
         else:
             steps_error = "Не удалось загрузить настройки этой фермы."
@@ -476,6 +481,7 @@ def manage():
         view_steps=view_steps,
         raw_steps=raw_steps,
         visibility_map=visibility_map,
+        script_labels_map=script_labels_map,
         menu_data=menu_data,
         steps_error=steps_error,
         debug_info=debug_info,
@@ -634,6 +640,21 @@ def _collect_config_sources(manage_meta, server_meta, study_meta):
     return sources
 
 
+def _extract_script_labels_from_visibility(visibility_map: dict) -> dict[str, str]:
+    labels: dict[str, str] = {}
+
+    for script_id, items in (visibility_map or {}).items():
+        for item in items or []:
+            if (
+                item
+                and item.get("config_key") == client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
+                and item.get("client_label")
+            ):
+                labels[script_id] = item["client_label"]
+
+    return labels
+
+
 def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
     order_map = manage_meta.get("order_map") or {}
     script_labels = manage_meta.get("script_labels") or {}
@@ -642,8 +663,12 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
     study_scripts: dict = study_meta.get("scripts") or {}
     sources_map = _collect_config_sources(manage_meta, server_meta, study_meta)
 
+    script_label_records: dict[str, ClientConfigVisibility] = {}
     db_records_map: dict[tuple[str, str], ClientConfigVisibility] = {}
     for rec in db_records:
+        if rec.config_key == client_config_visibility.SCRIPT_LABEL_CONFIG_KEY:
+            script_label_records[rec.script_id] = rec
+            continue
         db_records_map[(rec.script_id, rec.config_key)] = rec
 
     combined_records = client_config_visibility.merge_records_with_defaults(
@@ -651,6 +676,8 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
     )
     records_map: dict[tuple[str, str], Any] = {}
     for rec in combined_records:
+        if rec.config_key == client_config_visibility.SCRIPT_LABEL_CONFIG_KEY:
+            continue
         key = (rec.script_id, rec.config_key)
         if key not in records_map:
             records_map[key] = rec
@@ -668,8 +695,25 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
         config_keys.update(server_cfg.get("config_keys", set()))
         config_keys.update(study_cfg.get("config_keys", set()))
         for rec in db_records:
-            if rec.script_id == script_id:
+            if (
+                rec.script_id == script_id
+                and rec.config_key != client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
+            ):
                 config_keys.add(rec.config_key)
+
+        for rec in combined_records:
+            if (
+                rec.script_id == script_id
+                and rec.config_key != client_config_visibility.SCRIPT_LABEL_CONFIG_KEY
+            ):
+                config_keys.add(rec.config_key)
+
+        script_label_rec = script_label_records.get(script_id)
+        script_label = script_labels.get(script_id, script_id)
+        script_label_from_db = False
+        if script_label_rec and script_label_rec.client_label:
+            script_label = script_label_rec.client_label
+            script_label_from_db = True
 
         for config_key in sorted(config_keys):
             db_rec = db_records_map.get((script_id, config_key))
@@ -683,12 +727,16 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
             source_labels = (sources_map.get(script_id) or {}).get(config_key, set())
             from_manage_js = "manage.js" in source_labels or config_key in config_labels
 
+            default_label = config_labels.get(config_key, config_key)
+            if config_key == client_config_visibility.STEP_HIDDEN_KEY:
+                default_label = "Скрыть шаг"
+
             rows.append(
                 {
                     "script_id": script_id,
                     "config_key": config_key,
-                    "script_label": script_labels.get(script_id, script_id),
-                    "default_label": config_labels.get(config_key, config_key),
+                    "script_label": script_label,
+                    "default_label": default_label,
                     "client_label": record.client_label if record else None,
                     "client_visible": record.client_visible if record else True,
                     "order_index": order_idx,
@@ -696,6 +744,8 @@ def _build_visibility_rows(manage_meta, server_meta, study_meta, db_records):
                     "from_server": "API" in source_labels,
                     "from_studyfull": "studyFULL" in source_labels,
                     "has_db": db_rec is not None,
+                    "script_label_from_db": script_label_from_db,
+                    "script_label_from_js": script_id in script_labels,
                 }
             )
 
@@ -720,11 +770,29 @@ def config_visibility_matrix():
     ).all()
 
     rows = _build_visibility_rows(manage_meta, server_meta, study_meta, db_records)
+    script_errors: dict[str, str] = {}
+    script_ids = sorted({row["script_id"] for row in rows})
 
     if request.method == "POST":
         if request.form.get("action") == "refresh":
             flash("Источники перечитаны, матрица обновлена.", "success")
             return redirect(url_for("admin.config_visibility_matrix"))
+
+        for script_id in script_ids:
+            script_label_value = request.form.get(f"script_label::{script_id}", "")
+            script_label_value = (script_label_value or "").strip() or None
+            try:
+                client_config_visibility.upsert_script_label(
+                    script_id=script_id,
+                    script_label=script_label_value,
+                    scope="global",
+                )
+            except Exception:  # pragma: no cover - логирование ошибок
+                current_app.logger.exception(
+                    "Не удалось сохранить метку для скрипта %s", script_id
+                )
+                db.session.rollback()
+                script_errors[script_id] = "Ошибка сохранения метки скрипта."
 
         for row in rows:
             prefix = row["form_key"]
@@ -737,16 +805,6 @@ def config_visibility_matrix():
 
             visible = request.form.get(f"visible::{prefix}") == "on"
 
-            existing = next(
-                (
-                    rec
-                    for rec in db_records
-                    if rec.script_id == row["script_id"]
-                    and rec.config_key == row["config_key"]
-                ),
-                None,
-            )
-
             client_config_visibility.upsert_record(
                 script_id=row["script_id"],
                 config_key=row["config_key"],
@@ -756,8 +814,34 @@ def config_visibility_matrix():
                 scope="global",
             )
 
-        flash("Настройки видимости сохранены.", "success")
-        return redirect(url_for("admin.config_visibility_matrix"))
+        if script_errors:
+            flash("Не все метки скриптов сохранены. Проверьте ошибки ниже.", "danger")
+        else:
+            flash("Настройки видимости сохранены.", "success")
+            return redirect(url_for("admin.config_visibility_matrix"))
+
+        db_records = ClientConfigVisibility.query.order_by(
+            ClientConfigVisibility.script_id.asc(),
+            ClientConfigVisibility.order_index.asc(),
+            ClientConfigVisibility.config_key.asc(),
+        ).all()
+        rows = _build_visibility_rows(manage_meta, server_meta, study_meta, db_records)
+        grouped_rows: dict[str, list[dict]] = {}
+        for row in rows:
+            grouped_rows.setdefault(row["script_id"], []).append(row)
+
+        for script in grouped_rows:
+            grouped_rows[script].sort(key=lambda r: (r.get("order_index", 0), r["config_key"]))
+
+        return render_template(
+            "admin/visibility_matrix.html",
+            rows=rows,
+            grouped_rows=grouped_rows,
+            manage_meta=manage_meta,
+            server_meta=server_meta,
+            study_meta=study_meta,
+            script_errors=script_errors,
+        )
 
     grouped_rows: dict[str, list[dict]] = {}
     for row in rows:
@@ -773,6 +857,7 @@ def config_visibility_matrix():
         manage_meta=manage_meta,
         server_meta=server_meta,
         study_meta=study_meta,
+        script_errors=script_errors,
     )
 
 

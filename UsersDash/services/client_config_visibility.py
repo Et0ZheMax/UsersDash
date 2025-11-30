@@ -5,6 +5,8 @@ from typing import List, Optional
 
 from UsersDash.models import ClientConfigVisibility, db
 
+SCRIPT_LABEL_CONFIG_KEY = ""
+
 
 def list_for_script(script_id: str, scope: Optional[str] = None) -> List[ClientConfigVisibility]:
     """Возвращает записи для указанного скрипта, отсортированные по order_index."""
@@ -37,6 +39,16 @@ def get_record(
     )
 
 
+def get_script_label_record(
+    script_id: str,
+    *,
+    scope: str = "global",
+) -> Optional[ClientConfigVisibility]:
+    """Возвращает запись с пользовательской меткой скрипта."""
+
+    return get_record(script_id=script_id, config_key=SCRIPT_LABEL_CONFIG_KEY, scope=scope)
+
+
 def upsert_record(
     *,
     script_id: str,
@@ -65,6 +77,28 @@ def upsert_record(
     db.session.commit()
 
     return record
+
+
+def upsert_script_label(
+    *,
+    script_id: str,
+    script_label: Optional[str],
+    scope: str = "global",
+) -> Optional[ClientConfigVisibility]:
+    """Создаёт, обновляет или удаляет пользовательскую метку скрипта."""
+
+    if not script_label:
+        delete_record(script_id=script_id, config_key=SCRIPT_LABEL_CONFIG_KEY, scope=scope)
+        return None
+
+    return upsert_record(
+        script_id=script_id,
+        config_key=SCRIPT_LABEL_CONFIG_KEY,
+        scope=scope,
+        client_visible=True,
+        client_label=script_label,
+        order_index=0,
+    )
 
 
 def delete_record(
