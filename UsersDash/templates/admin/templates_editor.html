@@ -1,0 +1,612 @@
+{% extends "base.html" %}
+
+{% block title %}Редактор шаблонов{% endblock %}
+
+{% block content %}
+<div class="page-wrapper">
+  <div class="page-kicker">Админ-панель</div>
+  <h1 class="page-title">Редактор manage-шаблонов</h1>
+  <p class="page-subtitle">Создавайте и правьте шаблоны с серверов RssCounter без выхода из usersdash.</p>
+
+  <div class="card" style="padding:16px;">
+    <div class="toolbar" style="padding:0 0 12px 0; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+      <button class="btn btn-outline" onclick="goBack()">← В дашборд</button>
+      <select id="serverSelect" class="btn" style="background:#fff; color:#1D1D1F; border:1px solid #E5E5E9;"
+              onchange="changeServer(this.value)">
+        {% if servers %}
+          {% for srv in servers %}
+            <option value="{{ srv.id }}">{{ srv.name }}</option>
+          {% endfor %}
+        {% else %}
+          <option disabled selected>Серверы не настроены</option>
+        {% endif %}
+      </select>
+      <button class="btn btn-primary" id="createBtn" onclick="createTemplate()" {% if not servers %}disabled{% endif %}>Создать<div class="spinner"></div></button>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveStep()" disabled>Сохранить<div class="spinner"></div></button>
+      <button class="btn btn-danger" id="deleteBtn" onclick="deleteTemplate()" disabled>Удалить<div class="spinner"></div></button>
+    </div>
+
+    <div class="templates-layout">
+      <div class="panel panel-left">
+        <h3>Шаблоны</h3>
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th>Файл</th><th style="width:80px;">Шаги</th></tr>
+            </thead>
+            <tbody id="templatesBody"></tbody>
+          </table>
+        </div>
+        <div class="muted" style="margin-top:8px;">Отображаются встроенные и загруженные шаблоны сервера.</div>
+      </div>
+
+      <div class="panel panel-right">
+        <div class="name-editor">
+          <label for="templateNameInput">Имя файла</label>
+          <div class="name-row">
+            <input id="templateNameInput" placeholder="example.json" />
+            <button class="btn btn-primary" id="renameBtn" onclick="renameTemplate()" disabled>Переименовать<div class="spinner"></div></button>
+          </div>
+          <div class="alias-line" id="aliasLine">Алиасы: —</div>
+        </div>
+
+        <div class="step-actions">
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <label class="muted" for="scriptIdInput">ScriptId из схемы</label>
+            <input id="scriptIdInput" list="scriptList" placeholder="vikingbot.base.gathervip" />
+          </div>
+          <button class="btn btn-outline" onclick="addStepFromSchema()">Шаг по схеме</button>
+          <button class="btn btn-outline" onclick="addEmptyStep()">Пустой шаг</button>
+        </div>
+        <datalist id="scriptList"></datalist>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr><th style="width:80px;">#</th><th>Описание</th></tr>
+            </thead>
+            <tbody id="stepsBody"></tbody>
+          </table>
+        </div>
+
+        <div class="editor">
+          <label for="stepEditor">JSON шага</label>
+          <textarea id="stepEditor" placeholder="Выберите шаг слева или добавьте новый"></textarea>
+          <div class="status" id="editorStatus">Нет выбранного шаблона</div>
+        </div>
+
+        <div class="config-panel">
+          <div class="config-head">
+            <h4>Поля шага</h4>
+            <button class="btn btn-outline" id="addKeyBtn" onclick="addConfigKey()" disabled>+ Ключ</button>
+          </div>
+          <div class="config-fields" id="configFields"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .page-wrapper { padding: 12px 0 24px; }
+  .templates-layout { display:flex; gap:12px; flex-wrap:wrap; }
+  .panel { background:#fff; border:1px solid #E5E5E9; border-radius:12px; padding:12px; flex:1; min-width:320px; }
+  .panel-left { flex:0 0 320px; }
+  .panel-right { flex:1.5; min-width:420px; }
+  .table-wrapper { border:1px solid #E5E5E9; border-radius:10px; overflow:auto; max-height:340px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:8px 10px; border-bottom:1px solid #E5E5E9; text-align:left; }
+  tr.hoverable { cursor:pointer; }
+  tr.selected { background:#e5f4ff; }
+  .name-editor label { font-size:12px; color:#555; display:block; margin-bottom:6px; }
+  .name-row { display:flex; gap:8px; }
+  .name-row input { flex:1; padding:6px 8px; border:1px solid #E5E5E9; border-radius:6px; font-size:14px; }
+  .alias-line { font-size:12px; color:#666; margin-top:6px; }
+  .step-actions { display:flex; gap:10px; align-items:center; margin:10px 0; flex-wrap:wrap; }
+  .step-actions input { padding:6px 8px; border:1px solid #E5E5E9; border-radius:6px; font-size:14px; min-width:200px; }
+  .editor textarea { width:100%; min-height:200px; resize:vertical; padding:10px; font-family:SFMono-Regular,Consolas,Menlo,monospace; border:1px solid #E5E5E9; border-radius:8px; font-size:13px; }
+  .status { font-size:13px; color:#666; margin-top:6px; }
+  .config-panel { margin-top:12px; border:1px solid #E5E5E9; border-radius:8px; padding:10px; }
+  .config-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .config-fields { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
+  .config-row { display:flex; flex-direction:column; gap:4px; padding:8px; border:1px solid #f0f0f0; border-radius:8px; background:#fafbff; }
+  .config-row label { font-size:13px; color:#333; }
+  .config-row select, .config-row input[type=text], .config-row input[type=number] { padding:6px 8px; border:1px solid #E5E5E9; border-radius:6px; font-size:13px; }
+  .config-row input[type=checkbox] { width:16px; height:16px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:12px; background:#eef3ff; color:#2053b6; font-size:12px; margin-left:4px; }
+  .muted { color:#7a7a7a; font-size:12px; }
+  .toast { position:fixed; bottom:16px; right:16px; background:rgba(0,0,0,0.82); color:#fff; padding:10px 14px; border-radius:10px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; }
+  .toast.show { opacity:1; }
+  .toast.is-error { background:rgba(217,54,62,0.9); }
+</style>
+
+<script>
+  const state = {
+    serverId: {% if servers %}{{ servers[0].id }}{% else %}null{% endif %},
+    templates: [],
+    steps: [],
+    current: null,
+    selectedStep: -1,
+    aliases: {},
+    schema: {},
+    currentAliases: [],
+  };
+
+  function goBack(){ window.location.href = "{{ url_for('admin.admin_dashboard') }}"; }
+
+  function apiUrl(path){
+    if (!state.serverId) return null;
+    const glue = path.includes('?') ? '&' : '?';
+    return `/admin/api/templates${path}${glue}server_id=${state.serverId}`;
+  }
+
+  function showToast(msg, isError=false){
+    const el = document.getElementById('globalToast');
+    if (!el) return alert(msg);
+    el.textContent = msg;
+    el.classList.toggle('is-error', Boolean(isError));
+    el.classList.add('show');
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => el.classList.remove('show'), 2200);
+  }
+
+  function setLoading(btnId, loading){
+    const btn = document.getElementById(btnId);
+    if (!btn) return;
+    btn.classList.toggle('loading', loading);
+    btn.disabled = loading;
+  }
+
+  function canonicalName(name){
+    if (!name) return '';
+    return name.toLowerCase().endsWith('.json') ? name : `${name}.json`;
+  }
+
+  function aliasesFor(name){
+    const aliases = state.aliases || {};
+    const canon = canonicalName(name);
+    const list = [];
+    Object.entries(aliases).forEach(([k, v]) => {
+      if (canonicalName(v) === canon) list.push(k);
+    });
+    return list;
+  }
+
+  function updateAliasLine(extra){
+    const el = document.getElementById('aliasLine');
+    if (!el) return;
+    if (extra) state.aliases = extra;
+    const list = state.current ? aliasesFor(state.current) : [];
+    state.currentAliases = list;
+    el.textContent = list.length ? `Алиасы: ${list.join(', ')}` : 'Алиасы: —';
+  }
+
+  function updateButtons(){
+    const hasTemplate = Boolean(state.current);
+    document.getElementById('saveBtn').disabled = !hasTemplate;
+    document.getElementById('deleteBtn').disabled = !hasTemplate;
+    document.getElementById('renameBtn').disabled = !hasTemplate;
+    document.getElementById('addKeyBtn').disabled = state.selectedStep < 0;
+  }
+
+  function renderTemplates(){
+    const body = document.getElementById('templatesBody');
+    body.innerHTML = '';
+    if (!state.templates.length){
+      body.innerHTML = '<tr><td colspan="2" class="muted">Нет шаблонов</td></tr>';
+      return;
+    }
+    state.templates.forEach(tpl => {
+      const tr = document.createElement('tr');
+      tr.className = 'hoverable' + (tpl.name === state.current ? ' selected' : '');
+      const aliasBadges = (tpl.aliases || []).map(a => `<span class="badge">${a}</span>`).join('');
+      const title = tpl.label && tpl.label !== tpl.name ? `${tpl.label} <span class="muted">(${tpl.name})</span>` : tpl.name;
+      tr.innerHTML = `<td>${title} ${aliasBadges}</td><td>${tpl.steps_count ?? ''}</td>`;
+      tr.onclick = () => openTemplate(tpl.name);
+      body.appendChild(tr);
+    });
+  }
+
+  function syncEditorWithStep(){
+    const area = document.getElementById('stepEditor');
+    if (state.selectedStep >= 0 && state.selectedStep < state.steps.length){
+      const step = state.steps[state.selectedStep];
+      area.value = JSON.stringify(step, null, 2);
+      document.getElementById('editorStatus').textContent = `Редактирование шага ${state.selectedStep + 1}`;
+    } else {
+      area.value = '';
+      document.getElementById('editorStatus').textContent = 'Выберите шаг для редактирования';
+    }
+  }
+
+  function renderConfigFields(){
+    const box = document.getElementById('configFields');
+    if (!box) return;
+    box.innerHTML = '';
+    if (state.selectedStep < 0 || state.selectedStep >= state.steps.length){
+      box.innerHTML = '<div class="muted">Выберите шаг, чтобы увидеть ключи</div>';
+      return;
+    }
+
+    const step = state.steps[state.selectedStep] || {};
+    const cfg = (step.Config && typeof step.Config === 'object') ? { ...step.Config } : {};
+    const scripts = state.schema || {};
+    const script = scripts[step.ScriptId] || {};
+    const shape = script.Shape || script.fields || {};
+    const defaults = script.Defaults || script.defaults || {};
+    const keys = Array.from(new Set([...Object.keys(shape), ...Object.keys(cfg)]));
+
+    if (!keys.length){
+      box.innerHTML = '<div class="muted">Добавьте ключи в конфиг</div>';
+      return;
+    }
+
+    keys.forEach(key => {
+      const row = document.createElement('div');
+      row.className = 'config-row';
+      const form = shape[key] || {};
+      const current = cfg[key];
+      const label = document.createElement('label');
+      label.textContent = key;
+      row.appendChild(label);
+
+      const type = form.type || (typeof current === 'boolean' ? 'bool' : 'text');
+      let control;
+
+      if (type === 'select'){
+        control = document.createElement('select');
+        const options = form.options || (current && current.options) || defaults[key]?.options || [];
+        options.forEach(opt => {
+          const o = document.createElement('option');
+          o.value = opt;
+          o.textContent = opt;
+          control.appendChild(o);
+        });
+        const value = (current && typeof current === 'object' && 'value' in current)
+          ? current.value
+          : (defaults[key]?.value ?? '');
+        control.value = value ?? '';
+        control.onchange = (ev) => updateConfigValue(key, { value: ev.target.value, options });
+      } else if (type === 'bool'){
+        control = document.createElement('input');
+        control.type = 'checkbox';
+        control.checked = Boolean(current);
+        control.onchange = (ev) => updateConfigValue(key, ev.target.checked);
+      } else if (type === 'number'){
+        control = document.createElement('input');
+        control.type = 'number';
+        control.value = current ?? defaults[key] ?? 0;
+        control.oninput = (ev) => updateConfigValue(key, Number(ev.target.value));
+      } else {
+        control = document.createElement('input');
+        control.type = 'text';
+        const value = (current && typeof current === 'object' && 'value' in current)
+          ? current.value
+          : (current ?? defaults[key] ?? '');
+        control.value = value;
+        control.oninput = (ev) => updateConfigValue(key, ev.target.value);
+      }
+
+      row.appendChild(control);
+      box.appendChild(row);
+    });
+  }
+
+  function renderSteps(){
+    const body = document.getElementById('stepsBody');
+    body.innerHTML = '';
+    if (!state.steps.length){
+      body.innerHTML = '<tr><td colspan="2" class="muted">Нет шагов</td></tr>';
+      syncEditorWithStep();
+      renderConfigFields();
+      updateButtons();
+      return;
+    }
+
+    state.steps.forEach((step, idx) => {
+      const title = step?.ScriptId || step?.Name || step?.Script || step?.Action || 'Шаг';
+      const desc = step?.Uid ? `${title} — ${step.Uid}` : title;
+      const tr = document.createElement('tr');
+      const selected = idx === state.selectedStep;
+      tr.className = 'hoverable' + (selected ? ' selected' : '');
+      tr.innerHTML = `<td>${idx + 1}</td><td>${desc}</td>`;
+      tr.onclick = () => selectStep(idx);
+      body.appendChild(tr);
+    });
+
+    syncEditorWithStep();
+    renderConfigFields();
+    updateButtons();
+  }
+
+  async function loadTemplates(){
+    if (!state.serverId) return;
+    const url = apiUrl('/list');
+    const res = await fetch(url);
+    if (!res.ok){
+      showToast('Не удалось загрузить список шаблонов', true);
+      return;
+    }
+    const data = await res.json();
+    state.aliases = data.aliases || {};
+    state.templates = (data.templates || []).map(item => ({
+      name: item.name,
+      label: item.label || item.name,
+      steps_count: item.steps_count ?? null,
+      aliases: item.aliases && item.aliases.length ? item.aliases : aliasesFor(item.name),
+    }));
+    renderTemplates();
+  }
+
+  async function loadSchema(){
+    if (!state.serverId) return;
+    const res = await fetch(apiUrl('/schema'));
+    if (!res.ok) return;
+    try {
+      const data = await res.json();
+      const scripts = data?.schema?.Scripts || data.Scripts || data;
+      if (scripts && typeof scripts === 'object'){
+        state.schema = scripts;
+        renderScriptOptions();
+      }
+    } catch (e){ console.error(e); }
+  }
+
+  function renderScriptOptions(){
+    const list = document.getElementById('scriptList');
+    if (!list) return;
+    list.innerHTML = '';
+    Object.keys(state.schema || {}).sort().forEach(sid => {
+      const opt = document.createElement('option');
+      opt.value = sid;
+      list.appendChild(opt);
+    });
+  }
+
+  async function openTemplate(name){
+    if (!state.serverId) return;
+    setLoading('saveBtn', true);
+    try {
+      const res = await fetch(apiUrl(`/${encodeURIComponent(name)}`));
+      if (!res.ok){
+        showToast('Не удалось загрузить шаблон', true);
+        return;
+      }
+      const data = await res.json();
+      state.current = data.name;
+      state.steps = Array.isArray(data.steps) ? data.steps : [];
+      state.selectedStep = state.steps.length ? 0 : -1;
+      state.currentAliases = data.aliases || aliasesFor(data.name);
+      state.templates = state.templates.map(tpl =>
+        tpl.name === data.name ? { ...tpl, steps_count: data.steps_count, aliases: tpl.aliases?.length ? tpl.aliases : data.aliases } : tpl
+      );
+      document.getElementById('templateNameInput').value = data.name;
+      updateAliasLine();
+      renderTemplates();
+      renderSteps();
+      updateButtons();
+    } catch (e){
+      console.error(e);
+      showToast('Ошибка загрузки шаблона', true);
+    } finally {
+      setLoading('saveBtn', false);
+    }
+  }
+
+  async function createTemplate(){
+    if (!state.serverId){ showToast('Выберите сервер', true); return; }
+    const name = (prompt('Введите имя файла (без .json):') || '').trim();
+    if (!name) return;
+    setLoading('createBtn', true);
+    try {
+      const res = await fetch(apiUrl(`/${encodeURIComponent(name)}`), {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps: [] })
+      });
+      if (!res.ok){
+        showToast('Не удалось создать шаблон', true);
+        return;
+      }
+      await loadTemplates();
+      const safeName = name.endsWith('.json') ? name : `${name}.json`;
+      await openTemplate(safeName);
+      showToast('Шаблон создан');
+    } catch (e){
+      console.error(e);
+      showToast('Ошибка создания', true);
+    } finally {
+      setLoading('createBtn', false);
+    }
+  }
+
+  async function renameTemplate(){
+    if (!state.current){ showToast('Сначала выберите шаблон', true); return; }
+    const input = document.getElementById('templateNameInput');
+    const newName = (input.value || '').trim();
+    if (!newName || newName === state.current){
+      showToast('Укажите новое имя файла', true);
+      return;
+    }
+    setLoading('renameBtn', true);
+    try {
+      const res = await fetch(apiUrl(`/${encodeURIComponent(state.current)}/rename`), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_name: newName })
+      });
+      if (!res.ok){
+        showToast('Не удалось переименовать', true);
+        return;
+      }
+      const data = await res.json();
+      state.aliases = data.aliases || state.aliases;
+      await loadTemplates();
+      state.current = data.name;
+      input.value = data.name;
+      updateAliasLine(data.aliases);
+      await openTemplate(data.name);
+      showToast('Имя обновлено');
+    } catch (e){
+      console.error(e);
+      showToast('Ошибка при переименовании', true);
+    } finally {
+      setLoading('renameBtn', false);
+    }
+  }
+
+  async function saveTemplate(name, steps){
+    const res = await fetch(apiUrl(`/${encodeURIComponent(name)}`), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ steps })
+    });
+    if (!res.ok) throw new Error('save failed');
+    const data = await res.json();
+    state.templates = state.templates.map(tpl => tpl.name === data.name ? { ...tpl, steps_count: data.steps_count } : tpl);
+  }
+
+  async function saveStep(){
+    if (!state.current){
+      showToast('Сначала выберите шаблон', true);
+      return;
+    }
+    const raw = document.getElementById('stepEditor').value.trim();
+    if (!raw){
+      showToast('Вставьте JSON шага', true);
+      return;
+    }
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (e){ showToast('Некорректный JSON', true); return; }
+    if (typeof parsed !== 'object' || parsed === null){ showToast('Нужен объект или массив', true); return; }
+
+    const steps = [...state.steps];
+    const idx = state.selectedStep;
+    if (idx >= 0 && idx < steps.length){ steps[idx] = parsed; } else { steps.push(parsed); state.selectedStep = steps.length - 1; }
+
+    setLoading('saveBtn', true);
+    try {
+      await saveTemplate(state.current, steps);
+      state.steps = steps;
+      renderTemplates();
+      renderSteps();
+      showToast('Сохранено');
+    } catch (e){
+      console.error(e);
+      showToast('Не удалось сохранить', true);
+    } finally { setLoading('saveBtn', false); }
+  }
+
+  function buildStepFromSchema(scriptId){
+    const scripts = state.schema || {};
+    const spec = scripts[scriptId] || {};
+    const shape = spec.Shape || spec.fields || {};
+    const defaults = spec.Defaults || spec.defaults || {};
+    const config = {};
+    Object.keys(shape).forEach(key => {
+      const form = shape[key] || {};
+      const def = defaults[key];
+      if (form.type === 'select'){
+        const opts = form.options || (def && def.options) || [];
+        const val = def && typeof def === 'object' && 'value' in def ? def.value : (opts[0] ?? '');
+        config[key] = { value: val, options: opts };
+      } else if (form.type === 'bool'){
+        config[key] = Boolean(def);
+      } else if (form.type === 'number'){
+        config[key] = typeof def === 'number' ? def : 0;
+      } else {
+        config[key] = def ?? '';
+      }
+    });
+    Object.entries(defaults).forEach(([k, v]) => { if (!(k in config)) config[k] = v; });
+    const baseId = state.steps.length;
+    return { ScriptId: scriptId, Uid: `${scriptId}_${Date.now()}`, OrderId: baseId, Config: config, Id: baseId, IsActive: true, IsCopy: true, ScheduleData: { Active: false, Last: '0001-01-01T00:00:00', Daily: false, Hourly: false, Weekly: false }, ScheduleRules: [] };
+  }
+
+  function addStepFromSchema(){
+    if (!state.current){ showToast('Выберите шаблон', true); return; }
+    const sid = (document.getElementById('scriptIdInput').value || '').trim();
+    if (!sid){ showToast('Укажите ScriptId', true); return; }
+    const step = buildStepFromSchema(sid);
+    state.steps = [...state.steps, step];
+    state.selectedStep = state.steps.length - 1;
+    renderSteps();
+    showToast('Шаг добавлен по схеме');
+  }
+
+  function addEmptyStep(){
+    if (!state.current){ showToast('Выберите шаблон', true); return; }
+    const baseId = state.steps.length;
+    const fresh = { ScriptId: '', Uid: `custom_${Date.now()}`, OrderId: baseId, Config: {}, Id: baseId, IsActive: true, IsCopy: true, ScheduleData: { Active: false, Last: '0001-01-01T00:00:00', Daily: false, Hourly: false, Weekly: false }, ScheduleRules: [] };
+    state.steps = [...state.steps, fresh];
+    state.selectedStep = state.steps.length - 1;
+    renderSteps();
+    showToast('Добавлен пустой шаг');
+  }
+
+  function selectStep(idx){ state.selectedStep = idx; renderSteps(); }
+
+  function updateConfigValue(key, value){
+    if (state.selectedStep < 0 || state.selectedStep >= state.steps.length) return;
+    const step = state.steps[state.selectedStep];
+    if (!step.Config || typeof step.Config !== 'object') step.Config = {};
+    step.Config[key] = value;
+    syncEditorWithStep();
+  }
+
+  function addConfigKey(){
+    if (state.selectedStep < 0 || state.selectedStep >= state.steps.length){ showToast('Выберите шаг', true); return; }
+    const key = (prompt('Имя нового ключа:') || '').trim();
+    if (!key) return;
+    const step = state.steps[state.selectedStep];
+    if (!step.Config || typeof step.Config !== 'object') step.Config = {};
+    if (key in step.Config){ showToast('Такой ключ уже есть', true); return; }
+    step.Config[key] = '';
+    renderConfigFields();
+    syncEditorWithStep();
+  }
+
+  async function deleteTemplate(){
+    if (!state.current) return;
+    if (!confirm(`Удалить шаблон ${state.current}?`)) return;
+    setLoading('deleteBtn', true);
+    try {
+      const res = await fetch(apiUrl(`/${encodeURIComponent(state.current)}`), { method:'DELETE' });
+      if (!res.ok){ showToast('Не удалось удалить', true); return; }
+      state.current = null; state.steps = []; state.selectedStep = -1;
+      document.getElementById('templateNameInput').value = '';
+      document.getElementById('stepEditor').value = '';
+      document.getElementById('editorStatus').textContent = 'Нет выбранного шаблона';
+      await loadTemplates();
+      renderSteps();
+      updateAliasLine();
+      updateButtons();
+      showToast('Шаблон удалён');
+    } catch (e){
+      console.error(e);
+      showToast('Ошибка удаления', true);
+    } finally { setLoading('deleteBtn', false); }
+  }
+
+  function changeServer(serverId){
+    state.serverId = serverId ? Number(serverId) : null;
+    state.templates = [];
+    state.steps = [];
+    state.current = null;
+    state.selectedStep = -1;
+    document.getElementById('templateNameInput').value = '';
+    renderTemplates();
+    renderSteps();
+    updateAliasLine();
+    loadTemplates();
+    loadSchema();
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    if (state.serverId){
+      document.getElementById('serverSelect').value = state.serverId;
+      loadTemplates();
+      loadSchema();
+    }
+  });
+</script>
+
+<div id="globalToast" class="toast"></div>
+{% endblock %}
