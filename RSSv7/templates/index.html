@@ -1928,9 +1928,10 @@
     // ─── loadWatchAlerts (v2) ───────────────────────────────────────
     async function loadWatchAlerts() {
       try {
-        const [st, inactive] = await Promise.all([
+        const [st, inactive, tplAudit] = await Promise.all([
           fetch('/api/logstatus').then(r => r.ok ? r.json() : {}),
-          fetch('/api/inactive15').then(r => r.ok ? r.json() : [])
+          fetch('/api/inactive15').then(r => r.ok ? r.json() : []),
+          fetch('/api/templates/check').then(r => r.ok ? r.json() : {}),
         ]);
 
         const list = document.getElementById('watchList');
@@ -1965,6 +1966,16 @@
         inactive.forEach(obj => {
           const h = obj.hours.toFixed(1).replace('.0','');  // 17.4 → 17.4, 17.0 → 17
           pushRow({nick: obj.nickname, cls: 'yellow', extra: ` ❗ ${h}ч`});
+        });
+
+        const tplGaps = Array.isArray(tplAudit.gaps) ? tplAudit.gaps : [];
+        tplGaps.forEach(item => {
+          const firstGap = Array.isArray(item.gaps) ? item.gaps[0] : null;
+          const keyPreview = firstGap?.keys?.length ? firstGap.keys.slice(0, 2).join(', ') : '';
+          const suffix = keyPreview
+            ? ` ${firstGap.script_id || ''}: ${keyPreview}`
+            : ' есть пропуски по схеме';
+          pushRow({nick: `Шаблон ${item.label || item.template}`, cls: 'yellow', extra: suffix});
         });
 
         // max-height

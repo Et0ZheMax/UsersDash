@@ -48,6 +48,7 @@
     .alias-line { font-size:12px; color:#666; margin-top:6px; }
     .muted { color:#7a7a7a; font-size:12px; }
     .badge { display:inline-block; padding:2px 8px; border-radius:12px; background:#eef3ff; color:#2053b6; font-size:12px; margin-left:4px; }
+    .badge.warn { background:#ffe9e6; color:#d9363e; }
     .step-actions { display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap; }
     .step-actions input { padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:14px; min-width:200px; }
     .config-panel { margin-top:12px; border:1px solid var(--line); border-radius:8px; padding:10px; }
@@ -58,6 +59,10 @@
     .config-row label { font-size:13px; color:#333; }
     .config-row select, .config-row input[type=text], .config-row input[type=number] { padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
     .config-row input[type=checkbox] { width:16px; height:16px; }
+    .config-row.missing { border:1px dashed #d9363e; background:#fff5f5; }
+    .config-row .missing-label { color:#d9363e; font-weight:600; }
+    .config-row .missing-hint { color:#d9363e; font-size:12px; }
+    tr.missing td { background:#fff5f5; }
     .empty { color:#888; font-size:14px; padding:6px 0; }
     #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
       background:rgba(0,0,0,0.8); color:#fff; padding:10px 14px; border-radius:10px;
@@ -73,6 +78,7 @@
   <div class="toolbar">
     <button class="btn" onclick="goBack()">Назад</button>
     <button class="btn" id="createBtn" onclick="createTemplate()">Создать<div class="spinner"></div></button>
+    <button class="btn" id="checkBtn" onclick="checkTemplatesAgainstSchema()">Проверить по схеме<div class="spinner"></div></button>
     <button class="btn" id="saveBtn" onclick="saveStep()" disabled>Сохранить<div class="spinner"></div></button>
     <button class="btn danger" id="deleteBtn" onclick="deleteTemplate()" disabled>Удалить<div class="spinner"></div></button>
   </div>
@@ -143,6 +149,8 @@
       aliases: {},
       schema: {},
       currentAliases: [],
+      highlight: [],
+      schemaIssues: {},
     };
 
     function goBack(){ location.href = '/manage'; }
@@ -204,10 +212,13 @@
       }
       state.templates.forEach(tpl => {
         const tr = document.createElement('tr');
-        tr.className = 'hoverable' + (tpl.name === state.current ? ' selected' : '');
+        const selected = tpl.name === state.current;
+        const hasIssues = Boolean(state.schemaIssues?.[tpl.name]);
+        tr.className = 'hoverable' + (selected ? ' selected' : '') + (hasIssues ? ' missing' : '');
         const aliasBadges = (tpl.aliases || []).map(a => `<span class="badge">${a}</span>`).join('');
+        const warnBadge = hasIssues ? '<span class="badge warn">schema</span>' : '';
         const title = tpl.label && tpl.label !== tpl.name ? `${tpl.label} <span class="muted">(${tpl.name})</span>` : tpl.name;
-        tr.innerHTML = `<td>${title} ${aliasBadges}</td><td>${tpl.steps_count ?? ''}</td>`;
+        tr.innerHTML = `<td>${title} ${warnBadge} ${aliasBadges}</td><td>${tpl.steps_count ?? ''}</td>`;
         tr.onclick = () => openTemplate(tpl.name);
         body.appendChild(tr);
       });
@@ -241,7 +252,9 @@
         const desc = step?.Uid ? `${title} — ${step.Uid}` : title;
         const tr = document.createElement('tr');
         const selected = idx === state.selectedStep;
-        tr.className = 'hoverable' + (selected ? ' selected' : '');
+        const highlightRow = (state.highlight || []).find(h => (h.script_id || h.scriptId) === step.ScriptId);
+        const hasMissing = highlightRow && Array.isArray(highlightRow.keys) && highlightRow.keys.length;
+        tr.className = 'hoverable' + (selected ? ' selected' : '') + (hasMissing ? ' missing' : '');
         tr.innerHTML = `<td>${idx + 1}</td><td>${desc}</td>`;
         tr.onclick = () => selectStep(idx);
         body.appendChild(tr);
@@ -267,7 +280,12 @@
       const script = scripts[step.ScriptId] || {};
       const shape = script.Shape || script.fields || {};
       const defaults = script.Defaults || script.defaults || {};
-      const keys = Array.from(new Set([...Object.keys(shape), ...Object.keys(cfg)]));
+      const highlightEntries = (state.highlight || []).filter(
+        (h) => (!h.scriptId && !h.script_id) || (h.script_id || h.scriptId) === step.ScriptId
+      );
+      const missingKeys = Array.from(new Set(highlightEntries.flatMap(h => h.keys || (h.key ? [h.key] : []))));
+      const missingSet = new Set(missingKeys);
+      const keys = Array.from(new Set([...Object.keys(shape), ...Object.keys(cfg), ...missingKeys]));
 
       if (!keys.length){
         box.innerHTML = '<div class="empty">Добавьте ключи в конфиг</div>';
@@ -276,7 +294,7 @@
 
       keys.forEach(key => {
         const row = document.createElement('div');
-        row.className = 'config-row';
+        row.className = 'config-row' + (missingSet.has(key) ? ' missing' : '');
         const form = shape[key] || {};
         const current = cfg[key];
         const label = document.createElement('label');
@@ -323,6 +341,43 @@
         row.appendChild(control);
         box.appendChild(row);
       });
+
+      missingKeys.filter(k => !(k in cfg)).forEach(missingKey => {
+        const row = document.createElement('div');
+        row.className = 'config-row missing';
+
+        const label = document.createElement('label');
+        label.className = 'missing-label';
+        label.textContent = missingKey;
+        row.appendChild(label);
+
+        const hint = document.createElement('div');
+        hint.className = 'missing-hint';
+        hint.textContent = 'Ключ отсутствует в шаблоне, добавьте его по схеме';
+        row.appendChild(hint);
+
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.textContent = 'Добавить ключ';
+        btn.onclick = () => {
+          step.Config = step.Config || {};
+          step.Config[missingKey] = '';
+          state.highlight = (state.highlight || []).map(entry => {
+            const sid = entry.script_id || entry.scriptId;
+            if (sid && step.ScriptId && sid === step.ScriptId){
+              return { ...entry, keys: (entry.keys || []).filter(k => k !== missingKey) };
+            }
+            return entry;
+          }).filter(entry => !entry.keys || entry.keys.length);
+          renderConfigFields();
+          renderSteps();
+          syncEditorWithStep();
+        };
+        row.appendChild(btn);
+
+        box.appendChild(row);
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
     }
 
     function updateConfigValue(key, value){
@@ -338,19 +393,66 @@
       renderSteps();
     }
 
-    async function loadTemplates(){
-      const res = await fetch('/api/templates/list');
-      const data = await res.json();
-      state.aliases = data.aliases || {};
-      const templates = (data.templates || []).map(item => ({
+      async function loadTemplates(){
+        const res = await fetch('/api/templates/list');
+        const data = await res.json();
+        state.aliases = data.aliases || {};
+        const templates = (data.templates || []).map(item => ({
         name: item.name,
         label: item.label || item.name,
         steps_count: item.steps_count ?? null,
         aliases: item.aliases && item.aliases.length ? item.aliases : aliasesFor(item.name),
       }));
-      state.templates = templates;
-      renderTemplates();
-    }
+        state.templates = templates;
+        renderTemplates();
+      }
+
+      function updateSchemaIssues(gaps){
+        const map = {};
+        (gaps || []).forEach(item => {
+          if (!item || !item.template) return;
+          map[item.template] = item;
+        });
+        state.schemaIssues = map;
+        renderTemplates();
+      }
+
+      async function loadTemplateAudit(){
+        try {
+          const res = await fetch('/api/templates/check');
+          const data = await res.json();
+          updateSchemaIssues(data.gaps || []);
+        } catch (e){
+          console.warn('audit load failed', e);
+        }
+      }
+
+      async function checkTemplatesAgainstSchema(){
+        setLoading('checkBtn', true);
+        try {
+          const res = await fetch('/api/templates/check?refresh=1');
+          const data = await res.json();
+          updateSchemaIssues(data.gaps || []);
+          if (Array.isArray(data.gaps) && data.gaps.length){
+            showToast(`Найдены пропуски в ${data.gaps.length} шаблон(ах)`, true);
+            const first = data.gaps[0];
+            if (first?.template && confirm('Открыть первый проблемный шаблон?')){
+              const url = new URL('/templates-editor', location.origin);
+              url.searchParams.set('template', first.template);
+              url.searchParams.set('missing', JSON.stringify(first.gaps || []));
+              location.href = url.toString();
+              return;
+            }
+          } else {
+            showToast('Несоответствий со схемой не найдено');
+          }
+        } catch (e){
+          console.error(e);
+          showToast('Не удалось выполнить проверку', true);
+        } finally {
+          setLoading('checkBtn', false);
+        }
+      }
 
     async function loadSchema(){
       try {
@@ -385,14 +487,15 @@
           showToast('Не удалось загрузить шаблон', true);
           return;
         }
-        const data = await res.json();
-        state.current = data.name;
-        state.steps = Array.isArray(data.steps) ? data.steps : [];
-        state.selectedStep = state.steps.length ? 0 : -1;
-        state.currentAliases = data.aliases || aliasesFor(data.name);
-        state.templates = state.templates.map(tpl =>
-          tpl.name === data.name ? { ...tpl, steps_count: data.steps_count, aliases: tpl.aliases?.length ? tpl.aliases : data.aliases } : tpl
-        );
+          const data = await res.json();
+          state.current = data.name;
+          state.steps = Array.isArray(data.steps) ? data.steps : [];
+          state.selectedStep = state.steps.length ? 0 : -1;
+          state.currentAliases = data.aliases || aliasesFor(data.name);
+          state.highlight = [];
+          state.templates = state.templates.map(tpl =>
+            tpl.name === data.name ? { ...tpl, steps_count: data.steps_count, aliases: tpl.aliases?.length ? tpl.aliases : data.aliases } : tpl
+          );
         document.getElementById('templateNameInput').value = data.name;
         updateAliasLine();
         renderTemplates();
@@ -653,8 +756,56 @@
       }
     }
 
-    loadTemplates();
-    loadSchema();
+    async function handleDeepLink(){
+      const params = new URLSearchParams(location.search);
+      const tpl = params.get('template');
+      if (!tpl) return;
+
+      let scriptId = params.get('scriptId') || '';
+      const missingKey = params.get('missingKey') || '';
+      const missingRaw = params.get('missing');
+      let missingList = [];
+      if (missingRaw){
+        try {
+          const parsed = JSON.parse(missingRaw);
+          if (Array.isArray(parsed)) missingList = parsed;
+        } catch(e){ console.warn('bad missing param', e); }
+      } else if (missingKey){
+        missingList = [{ scriptId, keys:[missingKey] }];
+      }
+
+      const canonical = canonicalName(tpl);
+
+      await openTemplate(canonical);
+
+      if (!scriptId && missingList.length){
+        const first = missingList[0];
+        scriptId = first.script_id || first.scriptId || '';
+      }
+
+      if (scriptId){
+        const idx = state.steps.findIndex(s => s.ScriptId === scriptId);
+        if (idx >= 0) selectStep(idx);
+      }
+
+      if (missingList.length){
+        state.highlight = missingList.map(item => ({
+          script_id: item.script_id || item.scriptId,
+          keys: Array.isArray(item.keys) ? item.keys : (item.key ? [item.key] : []),
+        }));
+        renderSteps();
+        renderConfigFields();
+        const firstKey = (state.highlight[0]?.keys || [])[0];
+        if (firstKey) showToast(`Добавьте ключ ${firstKey} в шаблон`, true);
+      }
+    }
+
+    async function initPage(){
+      await Promise.all([loadSchema(), loadTemplates(), loadTemplateAudit()]);
+      await handleDeepLink();
+    }
+
+    initPage();
   </script>
 </body>
 </html>

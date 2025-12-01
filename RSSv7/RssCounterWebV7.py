@@ -87,12 +87,15 @@ PROFILES_DIR = os.path.join(SETTINGS_DIR, "profiles")     # профили ак�
 TEMPLATES_DIR = os.path.join(SETTINGS_DIR, "templates")   # шаблоны TRAIN.json, 650.json и т.д.
 TEMPLATE_ALIASES_PATH = os.path.join(SETTINGS_DIR, "template_aliases.json")
 SCHEMA_CACHE_PATH = os.path.join(SETTINGS_DIR, "schema_cache.json")  # авто-накапливаемая «схема»
+TEMPLATE_GAPS_CACHE_PATH = os.path.join(SETTINGS_DIR, "template_schema_gaps.json")
 
 os.makedirs(SETTINGS_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 if not os.path.isfile(SCHEMA_CACHE_PATH):
     safe_write_json(SCHEMA_CACHE_PATH, {})
+if not os.path.isfile(TEMPLATE_GAPS_CACHE_PATH):
+    safe_write_json(TEMPLATE_GAPS_CACHE_PATH, {"checked_at": None, "gaps": []})
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
@@ -281,6 +284,84 @@ def template_inflate_with_schema(template_steps: list, schema: dict):
                     if "options" not in cfg[key]:
                         cfg[key]["options"] = list(spec.get("options") or [])
     return steps
+
+
+def find_template_schema_gaps(template_steps: list, schema: dict):
+    """
+    Возвращает [{"script_id":..., "keys":[...]}] для шагов, где по схеме не хватает ключей.
+    """
+    if not schema:
+        return []
+
+    gaps = []
+    for step in template_steps or []:
+        sid = step.get("ScriptId")
+        cfg = step.get("Config") or {}
+        if not sid or sid not in schema:
+            continue
+
+        missing = [k for k in (schema[sid].get("fields") or {}) if k not in cfg]
+        if missing:
+            gaps.append({"script_id": sid, "keys": missing})
+
+    return gaps
+
+
+def load_template_gap_cache() -> dict:
+    data = _json_read_or(TEMPLATE_GAPS_CACHE_PATH, {}) or {}
+    if not isinstance(data, dict):
+        return {"checked_at": None, "gaps": []}
+    return {"checked_at": data.get("checked_at"), "gaps": data.get("gaps", [])}
+
+
+def save_template_gap_cache(payload: dict) -> None:
+    safe_write_json(TEMPLATE_GAPS_CACHE_PATH, payload)
+
+
+def collect_templates_schema_gaps(schema: dict | None = None) -> list[dict]:
+    """Проверяет все шаблоны на наличие обязательных ключей по схеме."""
+
+    schema = schema or schema_load()
+    if not schema:
+        return []
+
+    aliases = _load_template_aliases()
+    alias_targets: dict[str, list[str]] = {}
+    for alias, target in aliases.items():
+        alias_targets.setdefault(target, []).append(alias)
+
+    results: list[dict] = []
+    for name in sorted(os.listdir(TEMPLATES_DIR)):
+        if not name.lower().endswith(".json"):
+            continue
+
+        full = os.path.join(TEMPLATES_DIR, name)
+        steps = _json_read_or(full, [])
+        if not isinstance(steps, list):
+            continue
+
+        gaps = find_template_schema_gaps(steps, schema)
+        if not gaps:
+            continue
+
+        results.append(
+            {
+                "template": name,
+                "label": os.path.splitext(name)[0],
+                "aliases": alias_targets.get(name, []),
+                "gaps": gaps,
+            }
+        )
+
+    return results
+
+
+def run_templates_schema_audit(schema: dict | None = None) -> dict:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    gaps = collect_templates_schema_gaps(schema)
+    payload = {"checked_at": now_iso, "gaps": gaps, "ok": not gaps}
+    save_template_gap_cache(payload)
+    return payload
 
 def merge_template_into_account(account_steps: list, template_steps: list):
     """Мёрдж шаблона в аккаунт БЕЗ удаления неизвестных полей/скриптов."""
@@ -1724,6 +1805,7 @@ def _schedule_daily_backups() -> None:
                 backup_configs()
                 backup_accounts_csv()
                 backup_profiles_json()
+                run_templates_schema_audit()
             except Exception as e:
                 print("[BACKUP] error:", e, flush=True)
     threading.Thread(target=_worker, daemon=True).start()
@@ -2496,6 +2578,19 @@ def api_apply_template(acc_id):
             return jsonify({"error": "template invalid", "details": err}), 400
 
         schema = schema_load()
+        gaps = find_template_schema_gaps(template_steps, schema)
+        if gaps:
+            return (
+                jsonify(
+                    {
+                        "error": "template_missing_keys",
+                        "template": safe_template,
+                        "missing_keys": gaps,
+                    }
+                ),
+                409,
+            )
+
         template_filled = template_inflate_with_schema(template_steps, schema)
         merged_steps = merge_template_into_account(current_steps, template_filled)
 
@@ -3549,6 +3644,21 @@ def api_schema_rebuild():
             changed = True
     return jsonify({"ok": True, "changed": changed, "size": len(schema)})
 
+
+@app.route("/api/templates/check", methods=["GET"])
+def api_templates_check():
+    """Сверяет все шаблоны со схемой. ?refresh=1 — принудительный пересчёт."""
+
+    refresh = request.args.get("refresh") == "1"
+
+    payload = load_template_gap_cache()
+    if refresh or not payload.get("checked_at"):
+        payload = run_templates_schema_audit()
+    else:
+        payload["ok"] = not payload.get("gaps")
+
+    return jsonify(payload)
+
 @app.route("/api/templates/list", methods=["GET"])
 def api_templates_list():
     aliases = _load_template_aliases()
@@ -4408,6 +4518,7 @@ if __name__=="__main__":
     parse_logs()
 
     ensure_today_backups()      # ➟ создаст бэкапы, если их ещё нет за сегодня
+    run_templates_schema_audit()
     _schedule_daily_backups()   # ➟ запустит фоновый планировщик на полуночь
     _schedule_pay_notifications()  # 09:00 & 18:00 Telegram-оповещения
     _schedule_inactive_checker()   # ← запуск «монитора 15 ч»

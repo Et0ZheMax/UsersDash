@@ -706,7 +706,35 @@
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ template: name })
         });
-        if(!r.ok) throw new Error(await r.text());
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          if (r.status === 409 && data.missing_keys?.length) {
+            const tpl = data.template || name;
+            const missing = Array.isArray(data.missing_keys) ? data.missing_keys : [];
+            const summary = missing
+              .map((item) => {
+                const keys = Array.isArray(item.keys) ? item.keys.join(', ') : '';
+                return item.script_id && keys ? `${item.script_id}: ${keys}` : '';
+              })
+              .filter(Boolean);
+            const msg = summary.length
+              ? `В шаблоне ${tpl} отсутствуют ключи по схеме (шаги: ${summary.join('; ')})`
+              : `В шаблоне ${tpl} отсутствуют обязательные ключи по схеме`;
+
+            if (typeof showToast === 'function') showToast(msg, true);
+
+            const goEdit = confirm('Открыть редактор шаблонов для исправления?');
+            if (goEdit) {
+              const url = new URL('/templates-editor', location.origin);
+              url.searchParams.set('template', tpl);
+              url.searchParams.set('missing', JSON.stringify(missing));
+              location.href = url.toString();
+            }
+            return;
+          }
+
+          throw new Error(data.error || await r.text());
+        }
         if (typeof showToast === 'function') showToast(`Шаблон ${name} применён`);
         await selectAccount(selectedAcc);
       } catch(e){
