@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Редактор шаблонов {{ server_name }}</title>
+  <style>
+    :root { --blue:#0070C9; --line:#E5E5E9; --bg:#F5F5F7; --text:#1D1D1F; }
+    * { box-sizing: border-box; }
+    body { margin:0; padding:0; background:var(--bg); color:var(--text);
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial; }
+    .header { padding:16px; background:#fff; border-bottom:1px solid var(--line);
+      text-align:center; font-size:20px; font-weight:600; }
+    .toolbar { padding:8px 16px; background:#fff; border-bottom:1px solid var(--line);
+      display:flex; gap:8px; flex-wrap:wrap; }
+    .btn { position:relative; background:var(--blue); color:#fff; border:none;
+      border-radius:6px; padding:6px 12px; cursor:pointer; font-size:14px; }
+    .btn.danger { background:#d9363e; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .btn .spinner { position:absolute; right:8px; top:50%; transform:translateY(-50%);
+      width:14px; height:14px; border:2px solid rgba(255,255,255,0.3);
+      border-top-color:#fff; border-radius:50%; animation:spin 1s linear infinite;
+      display:none; }
+    .btn.loading .spinner { display:block; }
+    @keyframes spin { 0%{transform:rotate(0)} 100%{transform:rotate(360deg)} }
+    .container { display:flex; gap:12px; padding:12px; height:calc(100vh - 112px);
+      overflow:hidden; }
+    .panel { background:#fff; border:1px solid var(--line); border-radius:10px;
+      padding:12px; flex:1; display:flex; flex-direction:column; min-height:0; }
+    .panel h3 { margin:0 0 10px; font-size:16px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { padding:8px 10px; text-align:left; border-bottom:1px solid var(--line);
+      font-size:14px; }
+    tr.hoverable { cursor:pointer; }
+    tr.selected { background:#e5f4ff; }
+    .steps { border:1px solid var(--line); border-radius:8px; overflow:auto; flex:1; }
+    .steps table tr.selected td { background:#e5f4ff; }
+    .editor { margin-top:12px; display:flex; flex-direction:column; }
+    .editor label { font-size:13px; margin-bottom:6px; color:#444; }
+    .editor textarea { width:100%; min-height:220px; resize:vertical;
+      padding:10px; font-family:SFMono-Regular,Consolas,Menlo,monospace;
+      border:1px solid var(--line); border-radius:8px; font-size:13px; }
+    .status { font-size:13px; color:#666; margin-top:6px; }
+    .empty { color:#888; font-size:14px; padding:6px 0; }
+    #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,0.8); color:#fff; padding:10px 14px; border-radius:10px;
+      font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; }
+    #toast.show { opacity:1; }
+    @media (max-width: 900px) {
+      .container { flex-direction:column; height:auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">Редактор шаблонов {{ server_name }}</div>
+  <div class="toolbar">
+    <button class="btn" onclick="goBack()">Назад</button>
+    <button class="btn" id="createBtn" onclick="createTemplate()">Создать<div class="spinner"></div></button>
+    <button class="btn" id="saveBtn" onclick="saveStep()" disabled>Сохранить<div class="spinner"></div></button>
+    <button class="btn danger" id="deleteBtn" onclick="deleteTemplate()" disabled>Удалить<div class="spinner"></div></button>
+  </div>
+  <div class="container">
+    <div class="panel" style="flex:0 0 320px;">
+      <h3>Шаблоны</h3>
+      <div class="steps" style="flex:1;">
+        <table>
+          <thead>
+            <tr><th>Файл</th><th style="width:80px;">Шаги</th></tr>
+          </thead>
+          <tbody id="templatesBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel" style="flex:1.5;">
+      <h3 id="panelTitle">Шаги шаблона</h3>
+      <div class="steps">
+        <table>
+          <thead>
+            <tr><th style="width:80px;">#</th><th>Описание</th></tr>
+          </thead>
+          <tbody id="stepsBody"></tbody>
+        </table>
+      </div>
+      <div class="editor">
+        <label for="stepEditor">JSON шага</label>
+        <textarea id="stepEditor" placeholder="Выберите шаг слева или добавьте новый, вставив JSON"></textarea>
+        <div class="status" id="editorStatus">Нет выбранного шаблона</div>
+      </div>
+    </div>
+  </div>
+  <div id="toast"></div>
+  <script>
+    const state = { templates: [], current: null, steps: [], selectedStep: -1 };
+
+    function goBack(){ location.href = '/manage'; }
+
+    function showToast(msg, isError=false){
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.style.background = isError ? 'rgba(217,54,62,0.9)' : 'rgba(0,0,0,0.8)';
+      el.classList.add('show');
+      clearTimeout(showToast._timer);
+      showToast._timer = setTimeout(()=> el.classList.remove('show'), 2400);
+    }
+
+    function setLoading(btnId, loading){
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.classList.toggle('loading', loading);
+      btn.disabled = loading;
+    }
+
+    function updateButtons(){
+      const hasTemplate = Boolean(state.current);
+      document.getElementById('saveBtn').disabled = !hasTemplate;
+      document.getElementById('deleteBtn').disabled = !hasTemplate;
+    }
+
+    function renderTemplates(){
+      const body = document.getElementById('templatesBody');
+      body.innerHTML = '';
+      if (!state.templates.length){
+        body.innerHTML = '<tr><td colspan="2" class="empty">Нет шаблонов</td></tr>';
+        return;
+      }
+      state.templates.forEach(tpl => {
+        const tr = document.createElement('tr');
+        tr.className = 'hoverable' + (tpl.name === state.current ? ' selected' : '');
+        tr.innerHTML = `<td>${tpl.name}</td><td>${tpl.steps_count ?? ''}</td>`;
+        tr.onclick = () => openTemplate(tpl.name);
+        body.appendChild(tr);
+      });
+    }
+
+    function renderSteps(){
+      const body = document.getElementById('stepsBody');
+      body.innerHTML = '';
+      if (!state.steps.length){
+        body.innerHTML = '<tr><td colspan="2" class="empty">Нет шагов</td></tr>';
+        document.getElementById('stepEditor').value = '';
+        document.getElementById('editorStatus').textContent = state.current
+          ? 'Добавьте шаг и сохраните'
+          : 'Нет выбранного шаблона';
+        return;
+      }
+
+      state.steps.forEach((step, idx) => {
+        const title = step?.Name || step?.Script || step?.Action || 'Шаг';
+        const tr = document.createElement('tr');
+        const selected = idx === state.selectedStep;
+        tr.className = 'hoverable' + (selected ? ' selected' : '');
+        tr.innerHTML = `<td>${idx + 1}</td><td>${title}</td>`;
+        tr.onclick = () => selectStep(idx);
+        body.appendChild(tr);
+      });
+
+      if (state.selectedStep >= 0 && state.selectedStep < state.steps.length){
+        const step = state.steps[state.selectedStep];
+        document.getElementById('stepEditor').value = JSON.stringify(step, null, 2);
+        document.getElementById('editorStatus').textContent = `Редактирование шага ${state.selectedStep + 1}`;
+      } else {
+        document.getElementById('stepEditor').value = '';
+        document.getElementById('editorStatus').textContent = 'Выберите шаг для редактирования';
+      }
+    }
+
+    function selectStep(idx){
+      state.selectedStep = idx;
+      renderSteps();
+    }
+
+    async function loadTemplates(){
+      const res = await fetch('/api/templates/list');
+      const data = await res.json();
+      const templates = (data.templates || []).map(name => ({ name, steps_count: null }));
+      state.templates = templates;
+      renderTemplates();
+    }
+
+    async function openTemplate(name){
+      setLoading('saveBtn', true);
+      try {
+        const res = await fetch(`/api/templates/${encodeURIComponent(name)}`);
+        if (!res.ok){
+          showToast('Не удалось загрузить шаблон', true);
+          return;
+        }
+        const data = await res.json();
+        state.current = data.name;
+        state.steps = Array.isArray(data.steps) ? data.steps : [];
+        state.selectedStep = state.steps.length ? 0 : -1;
+        state.templates = state.templates.map(tpl =>
+          tpl.name === data.name ? { ...tpl, steps_count: data.steps_count } : tpl
+        );
+        document.getElementById('panelTitle').textContent = `Шаги шаблона ${data.name}`;
+        renderTemplates();
+        renderSteps();
+        updateButtons();
+      } catch (e){
+        console.error(e);
+        showToast('Ошибка загрузки шаблона', true);
+      } finally {
+        setLoading('saveBtn', false);
+      }
+    }
+
+    async function createTemplate(){
+      const name = (prompt('Введите имя файла (без .json):') || '').trim();
+      if (!name) return;
+      setLoading('createBtn', true);
+      try {
+        const res = await fetch(`/api/templates/${encodeURIComponent(name)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ steps: [] })
+        });
+        if (!res.ok){
+          showToast('Не удалось создать шаблон', true);
+          return;
+        }
+        await loadTemplates();
+        await openTemplate(name.endsWith('.json') ? name : `${name}.json`);
+        showToast('Шаблон создан');
+      } catch (e){
+        console.error(e);
+        showToast('Ошибка создания', true);
+      } finally {
+        setLoading('createBtn', false);
+      }
+    }
+
+    async function saveTemplate(name, steps){
+      const res = await fetch(`/api/templates/${encodeURIComponent(name)}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ steps })
+      });
+      if (!res.ok) throw new Error('save failed');
+      const data = await res.json();
+      state.templates = state.templates.map(tpl =>
+        tpl.name === data.name ? { ...tpl, steps_count: data.steps_count } : tpl
+      );
+    }
+
+    async function saveStep(){
+      if (!state.current){
+        showToast('Сначала выберите шаблон', true);
+        return;
+      }
+      const raw = document.getElementById('stepEditor').value.trim();
+      if (!raw){
+        showToast('Вставьте JSON шага', true);
+        return;
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (e){
+        showToast('Некорректный JSON', true);
+        return;
+      }
+      if (typeof parsed !== 'object' || parsed === null){
+        showToast('JSON шага должен быть объектом или массивом', true);
+        return;
+      }
+      const steps = [...state.steps];
+      const idx = state.selectedStep;
+      if (idx >= 0 && idx < steps.length){
+        steps[idx] = parsed;
+      } else {
+        steps.push(parsed);
+        state.selectedStep = steps.length - 1;
+      }
+      setLoading('saveBtn', true);
+      try {
+        await saveTemplate(state.current, steps);
+        state.steps = steps;
+        renderTemplates();
+        renderSteps();
+        showToast('Сохранено');
+      } catch (e){
+        console.error(e);
+        showToast('Не удалось сохранить', true);
+      } finally {
+        setLoading('saveBtn', false);
+      }
+    }
+
+    async function deleteTemplate(){
+      if (!state.current) return;
+      if (!confirm(`Удалить шаблон ${state.current}?`)) return;
+      setLoading('deleteBtn', true);
+      try {
+        const res = await fetch(`/api/templates/${encodeURIComponent(state.current)}`, { method:'DELETE' });
+        if (!res.ok){
+          showToast('Не удалось удалить', true);
+          return;
+        }
+        state.current = null;
+        state.steps = [];
+        state.selectedStep = -1;
+        document.getElementById('panelTitle').textContent = 'Шаги шаблона';
+        document.getElementById('stepEditor').value = '';
+        document.getElementById('editorStatus').textContent = 'Нет выбранного шаблона';
+        await loadTemplates();
+        renderSteps();
+        updateButtons();
+        showToast('Шаблон удалён');
+      } catch (e){
+        console.error(e);
+        showToast('Ошибка удаления', true);
+      } finally {
+        setLoading('deleteBtn', false);
+      }
+    }
+
+    loadTemplates();
+  </script>
+</body>
+</html>
