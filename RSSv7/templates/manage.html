@@ -173,12 +173,6 @@
       align-items: center;
       margin-bottom: 8px;
     }
-    .template-controls select {
-      min-width: 180px;
-      padding: 6px;
-      border-radius: 6px;
-      border: 1px solid #CCC;
-    }
     .templateAction {
       background: #0070C9;
       color: #fff;
@@ -189,14 +183,14 @@
       font-size: 13px;
     }
     .templateAction.primary { background: #4CD964; color: #0f5132; }
-    .template-editor {
-      width: 100%;
-      min-height: 140px;
-      padding: 10px;
-      border: 1px solid #CCC;
-      border-radius: 8px;
-      font-family: SFMono-Regular, Consolas, Menlo, monospace;
-      resize: vertical;
+    .template-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .template-empty {
+      font-size: 13px;
+      color: #666;
     }
     .template-meta {
       font-size: 12px;
@@ -662,17 +656,7 @@
 
 
     // ---------- Управление шаблонами ----------
-    const templateState = {
-      list: [],
-      selected: '',
-      jsonText: '',
-      stepsCount: 0,
-    };
-
-    function _tplNameWithExt(name){
-      if (!name) return '';
-      return name.toLowerCase().endsWith('.json') ? name : `${name}.json`;
-    }
+    const templateState = { list: [] };
 
     function setTemplateBtnLoading(btn, loading){
       if (!btn) return;
@@ -694,107 +678,30 @@
           ? data.names
           : (data.templates || []).map(n => String(n).replace(/\.json$/i, ''));
         templateState.list = names;
-        if (!templateState.list.length){
-          templateState.selected = '';
-          templateState.jsonText = '';
-          templateState.stepsCount = 0;
-        }
-        const inList = templateState.selected && templateState.list.includes(templateState.selected);
-        if (templateState.list.length && !inList){
-          templateState.selected = templateState.list[0];
-          await openTemplateForApply(templateState.selected, false);
-          if (render) renderTabs();
-        } else if (render) {
-          renderTabs();
-        }
+        if (render) renderTabs();
       } catch (e) {
         console.error(e);
         if (typeof showToast === 'function') showToast('Не удалось загрузить шаблоны', true);
       }
     }
-
-    async function openTemplateForApply(name, doRender = true){
-      if (!name){
-        templateState.selected = '';
-        templateState.jsonText = '';
-        templateState.stepsCount = 0;
-        if (doRender) renderTabs();
-        return;
-      }
-      const normalized = _tplNameWithExt(name);
-      try {
-        const res = await fetch(`/api/templates/${encodeURIComponent(normalized)}`);
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        const steps = Array.isArray(data.steps) ? data.steps : [];
-        templateState.selected = (data.name || normalized).replace(/\.json$/i, '');
-        templateState.jsonText = JSON.stringify(steps, null, 2);
-        templateState.stepsCount = data.steps_count ?? steps.length;
-        if (doRender) renderTabs();
-      } catch (e){
-        console.error(e);
-        if (typeof showToast === 'function') showToast('Не удалось загрузить шаблон', true);
-      }
-    }
-
-    async function saveTemplateFromEditor(btn, opts = {}){
-      if (!templateState.selected){
-        if (!opts.silent && typeof showToast === 'function') showToast('Выберите шаблон', true);
-        return false;
-      }
-      let parsed;
-      try {
-        parsed = templateState.jsonText ? JSON.parse(templateState.jsonText) : [];
-      } catch (e){
-        if (!opts.silent && typeof showToast === 'function') showToast('Некорректный JSON', true);
-        return false;
-      }
-      if (!Array.isArray(parsed)){
-        if (!opts.silent && typeof showToast === 'function') showToast('Шаблон должен быть массивом шагов', true);
-        return false;
-      }
-
-      setTemplateBtnLoading(btn, true);
-      try {
-        const res = await fetch(`/api/templates/${encodeURIComponent(templateState.selected)}`, {
-          method: 'PUT', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ steps: parsed })
-        });
-        if (!res.ok) throw new Error(await res.text());
-        templateState.stepsCount = parsed.length;
-        await loadTemplateList(false);
-        if (!opts.silent && typeof showToast === 'function') showToast('Шаблон сохранён');
-        return true;
-      } catch (e){
-        console.error(e);
-        if (!opts.silent && typeof showToast === 'function') showToast('Не удалось сохранить', true);
-        return false;
-      } finally {
-        setTemplateBtnLoading(btn, false);
-      }
-    }
-
-    async function applyTemplateFromEditor(btn){
+    async function applyTemplate(name, btn){
       if (!selectedAcc){
         if (typeof showToast === 'function') showToast('Выберите аккаунт', true);
         return;
       }
-      if (!templateState.selected){
-        if (typeof showToast === 'function') showToast('Выберите шаблон', true);
+      if (!name){
+        if (typeof showToast === 'function') showToast('Шаблон не найден', true);
         return;
       }
-
-      const saved = await saveTemplateFromEditor(null, { silent: true });
-      if (!saved) return;
 
       setTemplateBtnLoading(btn, true);
       try {
         const r = await fetch(`/api/manage/account/${selectedAcc.Id}/apply_template`,{
           method:'POST', headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ template: templateState.selected })
+          body: JSON.stringify({ template: name })
         });
         if(!r.ok) throw new Error(await r.text());
-        if (typeof showToast === 'function') showToast(`Шаблон ${templateState.selected} применён`);
+        if (typeof showToast === 'function') showToast(`Шаблон ${name} применён`);
         await selectAccount(selectedAcc);
       } catch(e){
         console.error(e);
@@ -810,7 +717,7 @@
       if (sbw) sidebar.style.flex = `0 0 ${sbw}px`;
       const tbw = localStorage.getItem('manage_tabs_width');
       if (tbw) tabs.style.flex = `0 0 ${tbw}px`;
-      loadTemplateList(false);
+      loadTemplateList();
       // Загружаем аккаунты
       fetch('/api/manage/accounts')
         .then(r => r.json())
@@ -1006,25 +913,8 @@
       tplHeader.className = 'template-controls';
 
       const tplLabel = document.createElement('div');
-      tplLabel.textContent = 'Файловый шаблон:';
+      tplLabel.textContent = 'Шаблоны:';
       tplHeader.appendChild(tplLabel);
-
-      const tplSelect = document.createElement('select');
-      const placeholder = document.createElement('option');
-      placeholder.value = '';
-      placeholder.textContent = '— выберите —';
-      tplSelect.appendChild(placeholder);
-
-      (templateState.list || []).forEach((name) => {
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        tplSelect.appendChild(opt);
-      });
-
-      tplSelect.value = templateState.selected || '';
-      tplSelect.onchange = (e) => openTemplateForApply(e.target.value);
-      tplHeader.appendChild(tplSelect);
 
       const refreshBtn = document.createElement('button');
       refreshBtn.className = 'templateAction';
@@ -1032,33 +922,28 @@
       refreshBtn.onclick = () => loadTemplateList();
       tplHeader.appendChild(refreshBtn);
 
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'templateAction';
-      saveBtn.textContent = 'Сохранить';
-      saveBtn.onclick = () => saveTemplateFromEditor(saveBtn);
-      tplHeader.appendChild(saveBtn);
-
-      const applyBtn = document.createElement('button');
-      applyBtn.className = 'templateAction primary';
-      applyBtn.textContent = 'Применить';
-      applyBtn.onclick = () => applyTemplateFromEditor(applyBtn);
-      tplHeader.appendChild(applyBtn);
-
       tplBox.appendChild(tplHeader);
 
-      const tplArea = document.createElement('textarea');
-      tplArea.className = 'template-editor';
-      tplArea.placeholder = 'JSON массива шагов';
-      tplArea.value = templateState.jsonText || '';
-      tplArea.oninput = (e) => { templateState.jsonText = e.target.value; };
-      tplBox.appendChild(tplArea);
+      const tplButtons = document.createElement('div');
+      tplButtons.className = 'template-buttons';
 
-      const tplMeta = document.createElement('div');
-      tplMeta.className = 'template-meta';
-      tplMeta.textContent = templateState.selected
-        ? `Файл: ${_tplNameWithExt(templateState.selected)} · Шагов: ${templateState.stepsCount || 0}`
-        : 'Выберите шаблон для просмотра и применения';
-      tplBox.appendChild(tplMeta);
+      if ((templateState.list || []).length) {
+        templateState.list.forEach((name) => {
+          const btn = document.createElement('button');
+          btn.className = 'templateBtn';
+          btn.textContent = name;
+          btn.title = `Применить шаблон ${name}`;
+          btn.onclick = () => applyTemplate(name, btn);
+          tplButtons.appendChild(btn);
+        });
+      } else {
+        const empty = document.createElement('div');
+        empty.className = 'template-empty';
+        empty.textContent = 'Шаблоны не найдены';
+        tplButtons.appendChild(empty);
+      }
+
+      tplBox.appendChild(tplButtons);
 
       tabs.appendChild(tplBox);
     }
