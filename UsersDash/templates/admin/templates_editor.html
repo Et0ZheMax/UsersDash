@@ -3,122 +3,126 @@
 {% block title %}Редактор шаблонов{% endblock %}
 
 {% block content %}
-<div class="page-wrapper">
-  <div class="page-kicker">Админ-панель</div>
-  <h1 class="page-title">Редактор manage-шаблонов</h1>
-  <p class="page-subtitle">Создавайте и правьте шаблоны с серверов RssCounter без выхода из usersdash.</p>
-
-  <div class="card" style="padding:16px;">
-    <div class="toolbar" style="padding:0 0 12px 0; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
-      <button class="btn btn-outline" onclick="goBack()">← В дашборд</button>
-      <select id="serverSelect" class="btn" style="background:#fff; color:#1D1D1F; border:1px solid #E5E5E9;"
-              onchange="changeServer(this.value)">
-        {% if servers %}
-          {% for srv in servers %}
-            <option value="{{ srv.id }}">{{ srv.name }}</option>
-          {% endfor %}
-        {% else %}
-          <option disabled selected>Серверы не настроены</option>
-        {% endif %}
-      </select>
-      <button class="btn btn-primary" id="createBtn" onclick="createTemplate()" {% if not servers %}disabled{% endif %}>Создать<div class="spinner"></div></button>
-      <button class="btn btn-primary" id="saveBtn" onclick="saveStep()" disabled>Сохранить<div class="spinner"></div></button>
-      <button class="btn btn-danger" id="deleteBtn" onclick="deleteTemplate()" disabled>Удалить<div class="spinner"></div></button>
+<div class="page-wrapper templates-page">
+  <div class="templates-head">
+    <div>
+      <div class="page-kicker">Админ-панель</div>
+      <h1 class="page-title">Редактор manage-шаблонов</h1>
+      <p class="page-subtitle">Создавайте и правьте шаблоны с серверов RssCounter без выхода из usersdash.</p>
     </div>
+    <div class="templates-actions">
+      <button class="btn btn-outline" onclick="goBack()">← В дашборд</button>
+      <div class="templates-server">
+        <label for="serverSelect" class="templates-label">Сервер</label>
+        <select id="serverSelect" class="form-input templates-select" onchange="changeServer(this.value)">
+          {% if servers %}
+            {% for srv in servers %}
+              <option value="{{ srv.id }}">{{ srv.name }}</option>
+            {% endfor %}
+          {% else %}
+            <option disabled selected>Серверы не настроены</option>
+          {% endif %}
+        </select>
+      </div>
+      <div class="templates-action-group">
+        <button class="btn btn-primary" id="createBtn" onclick="createTemplate()" {% if not servers %}disabled{% endif %}>
+          Создать
+          <div class="btn-spinner" aria-hidden="true" hidden></div>
+        </button>
+        <button class="btn btn-primary" id="saveBtn" onclick="saveStep()" disabled>
+          Сохранить
+          <div class="btn-spinner" aria-hidden="true" hidden></div>
+        </button>
+        <button class="btn btn-danger" id="deleteBtn" onclick="deleteTemplate()" disabled>
+          Удалить
+          <div class="btn-spinner" aria-hidden="true" hidden></div>
+        </button>
+      </div>
+    </div>
+  </div>
 
+  <div class="card templates-card">
     <div class="templates-layout">
-      <div class="panel panel-left">
-        <h3>Шаблоны</h3>
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr><th>Файл</th><th style="width:80px;">Шаги</th></tr>
-            </thead>
-            <tbody id="templatesBody"></tbody>
-          </table>
+      <div class="templates-panel templates-panel--narrow">
+        <div class="templates-panel__head">
+          <div>
+            <div class="templates-panel__kicker">Список</div>
+            <h3 class="templates-panel__title">Шаблоны</h3>
+            <div class="templates-panel__hint">Встроенные и загруженные шаблоны выбранного сервера.</div>
+          </div>
         </div>
-        <div class="muted" style="margin-top:8px;">Отображаются встроенные и загруженные шаблоны сервера.</div>
+        <div class="templates-table">
+          <div class="templates-table__wrapper">
+            <table>
+              <thead>
+              <tr><th>Файл</th><th class="templates-table__count">Шаги</th></tr>
+              </thead>
+              <tbody id="templatesBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
 
-      <div class="panel panel-right">
-        <div class="name-editor">
-          <label for="templateNameInput">Имя файла</label>
-          <div class="name-row">
-            <input id="templateNameInput" placeholder="example.json" />
-            <button class="btn btn-primary" id="renameBtn" onclick="renameTemplate()" disabled>Переименовать<div class="spinner"></div></button>
+      <div class="templates-panel">
+        <div class="templates-field">
+          <label for="templateNameInput" class="templates-label">Имя файла</label>
+          <div class="templates-field__row">
+            <input id="templateNameInput" class="form-input" placeholder="example.json" />
+            <button class="btn btn-primary" id="renameBtn" onclick="renameTemplate()" disabled>
+              Переименовать
+              <div class="btn-spinner" aria-hidden="true" hidden></div>
+            </button>
           </div>
-          <div class="alias-line" id="aliasLine">Алиасы: —</div>
+          <div class="templates-alias" id="aliasLine">Алиасы: —</div>
         </div>
 
-        <div class="step-actions">
-          <div style="display:flex; flex-direction:column; gap:4px;">
-            <label class="muted" for="scriptIdInput">ScriptId из схемы</label>
-            <input id="scriptIdInput" list="scriptList" placeholder="vikingbot.base.gathervip" />
+        <div class="templates-steps">
+          <div class="templates-steps__controls">
+            <div class="templates-field templates-field--compact">
+              <label class="templates-label" for="scriptIdInput">ScriptId из схемы</label>
+              <input id="scriptIdInput" list="scriptList" class="form-input" placeholder="vikingbot.base.gathervip" />
+            </div>
+            <div class="templates-step-buttons">
+              <button class="btn btn-outline" onclick="addStepFromSchema()">Шаг по схеме</button>
+              <button class="btn btn-outline" onclick="addEmptyStep()">Пустой шаг</button>
+            </div>
           </div>
-          <button class="btn btn-outline" onclick="addStepFromSchema()">Шаг по схеме</button>
-          <button class="btn btn-outline" onclick="addEmptyStep()">Пустой шаг</button>
-        </div>
-        <datalist id="scriptList"></datalist>
+          <datalist id="scriptList"></datalist>
 
-        <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr><th style="width:80px;">#</th><th>Описание</th></tr>
-            </thead>
-            <tbody id="stepsBody"></tbody>
-          </table>
-        </div>
-
-        <div class="editor">
-          <label for="stepEditor">JSON шага</label>
-          <textarea id="stepEditor" placeholder="Выберите шаг слева или добавьте новый"></textarea>
-          <div class="status" id="editorStatus">Нет выбранного шаблона</div>
+          <div class="templates-table">
+            <div class="templates-table__wrapper">
+              <table>
+                <thead>
+                <tr><th class="templates-table__count">#</th><th>Описание</th></tr>
+                </thead>
+                <tbody id="stepsBody"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
 
-        <div class="config-panel">
-          <div class="config-head">
-            <h4>Поля шага</h4>
+        <div class="templates-editor">
+          <div class="templates-editor__header">
+            <label for="stepEditor" class="templates-label">JSON шага</label>
+            <div class="templates-editor__status" id="editorStatus">Нет выбранного шаблона</div>
+          </div>
+          <textarea id="stepEditor" class="templates-editor__input" placeholder="Выберите шаг слева или добавьте новый"></textarea>
+        </div>
+
+        <div class="templates-config">
+          <div class="templates-config__head">
+            <div>
+              <div class="templates-panel__kicker">Настройки</div>
+              <h4 class="templates-config__title">Поля шага</h4>
+            </div>
             <button class="btn btn-outline" id="addKeyBtn" onclick="addConfigKey()" disabled>+ Ключ</button>
           </div>
-          <div class="config-fields" id="configFields"></div>
+          <div class="templates-config__fields" id="configFields"></div>
         </div>
       </div>
     </div>
   </div>
 </div>
-
-<style>
-  .page-wrapper { padding: 12px 0 24px; }
-  .templates-layout { display:flex; gap:12px; flex-wrap:wrap; }
-  .panel { background:#fff; border:1px solid #E5E5E9; border-radius:12px; padding:12px; flex:1; min-width:320px; }
-  .panel-left { flex:0 0 320px; }
-  .panel-right { flex:1.5; min-width:420px; }
-  .table-wrapper { border:1px solid #E5E5E9; border-radius:10px; overflow:auto; max-height:340px; }
-  table { width:100%; border-collapse:collapse; }
-  th, td { padding:8px 10px; border-bottom:1px solid #E5E5E9; text-align:left; }
-  tr.hoverable { cursor:pointer; }
-  tr.selected { background:#e5f4ff; }
-  .name-editor label { font-size:12px; color:#555; display:block; margin-bottom:6px; }
-  .name-row { display:flex; gap:8px; }
-  .name-row input { flex:1; padding:6px 8px; border:1px solid #E5E5E9; border-radius:6px; font-size:14px; }
-  .alias-line { font-size:12px; color:#666; margin-top:6px; }
-  .step-actions { display:flex; gap:10px; align-items:center; margin:10px 0; flex-wrap:wrap; }
-  .step-actions input { padding:6px 8px; border:1px solid #E5E5E9; border-radius:6px; font-size:14px; min-width:200px; }
-  .editor textarea { width:100%; min-height:200px; resize:vertical; padding:10px; font-family:SFMono-Regular,Consolas,Menlo,monospace; border:1px solid #E5E5E9; border-radius:8px; font-size:13px; }
-  .status { font-size:13px; color:#666; margin-top:6px; }
-  .config-panel { margin-top:12px; border:1px solid #E5E5E9; border-radius:8px; padding:10px; }
-  .config-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
-  .config-fields { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:10px; }
-  .config-row { display:flex; flex-direction:column; gap:4px; padding:8px; border:1px solid #f0f0f0; border-radius:8px; background:#fafbff; }
-  .config-row label { font-size:13px; color:#333; }
-  .config-row select, .config-row input[type=text], .config-row input[type=number] { padding:6px 8px; border:1px solid #E5E5E9; border-radius:6px; font-size:13px; }
-  .config-row input[type=checkbox] { width:16px; height:16px; }
-  .badge { display:inline-block; padding:2px 8px; border-radius:12px; background:#eef3ff; color:#2053b6; font-size:12px; margin-left:4px; }
-  .muted { color:#7a7a7a; font-size:12px; }
-  .toast { position:fixed; bottom:16px; right:16px; background:rgba(0,0,0,0.82); color:#fff; padding:10px 14px; border-radius:10px; font-size:14px; opacity:0; pointer-events:none; transition:opacity .2s; }
-  .toast.show { opacity:1; }
-  .toast.is-error { background:rgba(217,54,62,0.9); }
-</style>
 
 <script>
   const state = {
@@ -155,6 +159,8 @@
     if (!btn) return;
     btn.classList.toggle('loading', loading);
     btn.disabled = loading;
+    const spinner = btn.querySelector('.btn-spinner');
+    if (spinner) spinner.hidden = !loading;
   }
 
   function canonicalName(name){
