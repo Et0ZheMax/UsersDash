@@ -44,7 +44,13 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     fetch_resources_for_accounts,
     fetch_rssv7_accounts_meta,
+    fetch_template_payload,
+    fetch_template_schema,
+    fetch_templates_list,
+    rename_template_payload,
+    save_template_payload,
     update_account_active,
+    delete_template_payload,
 )
 from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
 from UsersDash.services.tariffs import TARIFF_PRICE_MAP, get_tariff_name_by_price
@@ -275,6 +281,140 @@ def admin_dashboard():
         accounts_data=accounts_data,
         payment_cards=payment_cards,
     )
+
+
+@admin_bp.route("/templates")
+@login_required
+def templates_editor():
+    """Страница визуального редактора manage-шаблонов на выбранном сервере."""
+
+    admin_required()
+    servers = Server.query.order_by(Server.name.asc()).all()
+    return render_template("admin/templates_editor.html", servers=servers)
+
+
+def _get_server_from_request():
+    server_id = request.args.get("server_id", type=int)
+    if not server_id:
+        return None, (jsonify({"error": "server_id обязателен"}), 400)
+
+    server = Server.query.get(server_id)
+    if not server:
+        return None, (jsonify({"error": "server не найден"}), 404)
+
+    return server, None
+
+
+@admin_bp.route("/api/templates", methods=["GET"])
+@login_required
+def api_admin_templates_list():
+    """Отдаёт список manage-шаблонов с учётом алиасов для выбранного сервера."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    data, message = fetch_templates_list(server)
+    if data is None:
+        return jsonify({"error": message or "не удалось получить шаблоны"}), 502
+
+    return jsonify(data)
+
+
+@admin_bp.route("/api/templates/schema", methods=["GET"])
+@login_required
+def api_admin_template_schema():
+    """Возвращает schema_cache выбранного сервера для автодополнения ключей."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    data, message = fetch_template_schema(server)
+    if data is None:
+        return jsonify({"error": message or "не удалось загрузить схему"}), 502
+
+    return jsonify(data)
+
+
+@admin_bp.route("/api/templates/<path:template_name>", methods=["GET"])
+@login_required
+def api_admin_template_get(template_name: str):
+    """Получить содержимое шаблона на конкретном сервере."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    data, message = fetch_template_payload(server, template_name)
+    if data is None:
+        return jsonify({"error": message or "не удалось загрузить шаблон"}), 502
+
+    return jsonify(data)
+
+
+@admin_bp.route("/api/templates/<path:template_name>", methods=["PUT"])
+@login_required
+def api_admin_template_put(template_name: str):
+    """Сохранить/создать manage-шаблон на сервере."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return jsonify({"error": "steps должен быть массивом"}), 400
+
+    data, message = save_template_payload(server, template_name, steps)
+    if data is None:
+        return jsonify({"error": message or "не удалось сохранить шаблон"}), 502
+
+    return jsonify(data)
+
+
+@admin_bp.route("/api/templates/<path:template_name>", methods=["DELETE"])
+@login_required
+def api_admin_template_delete(template_name: str):
+    """Удалить manage-шаблон на сервере."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    data, message = delete_template_payload(server, template_name)
+    if data is None:
+        return jsonify({"error": message or "не удалось удалить шаблон"}), 502
+
+    return jsonify(data)
+
+
+@admin_bp.route("/api/templates/<path:template_name>/rename", methods=["PATCH"])
+@login_required
+def api_admin_template_rename(template_name: str):
+    """Переименовать manage-шаблон на сервере и обновить алиасы."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    payload = request.get_json(silent=True) or {}
+    new_name = (payload.get("new_name") or "").strip()
+    if not new_name:
+        return jsonify({"error": "new_name обязателен"}), 400
+
+    data, message = rename_template_payload(server, template_name, new_name)
+    if data is None:
+        return jsonify({"error": message or "не удалось переименовать"}), 502
+
+    return jsonify(data)
 
 
 @admin_bp.route("/payments/<int:account_id>/mark-paid", methods=["POST"])

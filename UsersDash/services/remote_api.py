@@ -8,6 +8,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import quote
 
 import requests
 from requests import RequestException
@@ -532,6 +533,63 @@ def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
     except Exception:
         err_body = resp.text
     return False, f"HTTP {resp.status_code}: {err_body}"
+
+
+def _request_template_api(
+    server: Server, method: str, path: str, payload: Optional[dict] = None
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    base = _get_effective_api_base(server)
+    if not base:
+        return None, "api_base_url is empty"
+
+    url = f"{base}{path}"
+    try:
+        resp = requests.request(method, url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except Exception as exc:
+        return None, str(exc)
+
+    if 200 <= resp.status_code < 300:
+        try:
+            return resp.json(), None
+        except Exception:
+            return {}, None
+
+    try:
+        body = resp.json()
+    except Exception:
+        body = resp.text
+    return None, f"HTTP {resp.status_code}: {body}"
+
+
+def fetch_templates_list(server: Server) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return _request_template_api(server, "GET", "/templates/list")
+
+
+def fetch_template_schema(server: Server) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return _request_template_api(server, "GET", "/schema/get")
+
+
+def fetch_template_payload(server: Server, name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return _request_template_api(server, "GET", f"/templates/{quote(name)}")
+
+
+def save_template_payload(server: Server, name: str, steps: list) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return _request_template_api(server, "PUT", f"/templates/{quote(name)}", {"steps": steps})
+
+
+def delete_template_payload(server: Server, name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return _request_template_api(server, "DELETE", f"/templates/{quote(name)}")
+
+
+def rename_template_payload(
+    server: Server, name: str, new_name: str
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    return _request_template_api(
+        server,
+        "PATCH",
+        f"/templates/{quote(name)}/rename",
+        {"new_name": new_name},
+    )
 
 def _build_server_base_url(server: Server) -> str:
     """

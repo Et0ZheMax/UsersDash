@@ -85,6 +85,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_DIR = os.path.join(BASE_DIR, "settings")
 PROFILES_DIR = os.path.join(SETTINGS_DIR, "profiles")     # профили аккаунтов *.json
 TEMPLATES_DIR = os.path.join(SETTINGS_DIR, "templates")   # шаблоны TRAIN.json, 650.json и т.д.
+TEMPLATE_ALIASES_PATH = os.path.join(SETTINGS_DIR, "template_aliases.json")
 SCHEMA_CACHE_PATH = os.path.join(SETTINGS_DIR, "schema_cache.json")  # авто-накапливаемая «схема»
 
 os.makedirs(SETTINGS_DIR, exist_ok=True)
@@ -580,6 +581,106 @@ TEMPLATES["Extended"] = TEMPLATES["1100"]
 TEMPLATES["1400"] = TEMPLATES["PREM"]
 TEMPLATES["Premium"] = TEMPLATES["PREM"]
 # ──────────────────────────────────────────────────────────────────────
+
+
+BUILTIN_TEMPLATE_NAMES = ["650", "PREM", "1100", "TRAIN", "TRAIN2"]
+
+DEFAULT_TEMPLATE_ALIASES = {
+    "500": "650.json",
+    "OnlyFarm": "650.json",
+    "1000": "1100.json",
+    "Extended": "1100.json",
+    "1400": "PREM.json",
+    "Premium": "PREM.json",
+}
+
+
+def _canonical_template_name(raw_name: str) -> str:
+    name = os.path.basename((raw_name or "").strip())
+    if not name:
+        raise ValueError("empty template name")
+    if not name.lower().endswith(".json"):
+        name = f"{name}.json"
+    return name
+
+
+def _load_template_aliases() -> dict[str, str]:
+    data = _json_read_or(TEMPLATE_ALIASES_PATH, {})
+    if not isinstance(data, dict):
+        return {}
+
+    aliases: dict[str, str] = {}
+    for k, v in data.items():
+        if not k or not v:
+            continue
+        try:
+            aliases[str(k).strip()] = _canonical_template_name(str(v))
+        except Exception:
+            continue
+    return aliases
+
+
+def _save_template_aliases(mapping: dict[str, str]):
+    safe_write_json(TEMPLATE_ALIASES_PATH, mapping)
+
+
+def _resolve_template_name(raw_name: str, aliases: dict[str, str] | None = None) -> str:
+    aliases = aliases or _load_template_aliases()
+    key = (raw_name or "").strip()
+    candidates = [key]
+    if key.lower().endswith(".json"):
+        candidates.append(key[:-5])
+    else:
+        candidates.append(f"{key}.json")
+
+    for cand in candidates:
+        if cand in aliases:
+            try:
+                return _canonical_template_name(aliases[cand])
+            except Exception:
+                continue
+
+    return _canonical_template_name(key)
+
+
+def _ensure_builtin_templates():
+    """Записываем встроенные шаблоны и алиасы в файлы, если их ещё нет."""
+
+    for name in BUILTIN_TEMPLATE_NAMES:
+        raw = TEMPLATES.get(name)
+        if not raw:
+            continue
+        try:
+            full_path, safe_name = _normalized_template_path(name)
+        except Exception:
+            continue
+
+        if os.path.exists(full_path):
+            continue
+
+        try:
+            steps = json.loads(raw)
+        except Exception:
+            continue
+
+        try:
+            safe_write_json(full_path, steps)
+            print(f"[templates] seeded {safe_name}")
+        except Exception:
+            print(f"[templates] failed to seed {safe_name}")
+
+    aliases = _load_template_aliases()
+    changed = False
+    for k, v in DEFAULT_TEMPLATE_ALIASES.items():
+        try:
+            canon = _canonical_template_name(v)
+        except Exception:
+            continue
+        if aliases.get(k) != canon:
+            aliases[k] = canon
+            changed = True
+    if changed:
+        _save_template_aliases(aliases)
 
 
 app = Flask(__name__, template_folder="templates")
@@ -2205,6 +2306,12 @@ def logs_page():
 def fix_page():
     return render_template("fix.html")
 
+
+@app.route("/templates-editor")
+def templates_editor_page():
+    """Отдаём страницу редактора шаблонов."""
+    return render_template("templates.html")
+
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
     parse_logs()
@@ -2334,7 +2441,11 @@ def api_apply_template(acc_id):
         payload = request.get_json(silent=True) or {}
         tmpl_name = (payload.get("template") or "").strip()
 
-        if tmpl_name not in TEMPLATES:
+        aliases = _load_template_aliases()
+        try:
+            target_name = _resolve_template_name(tmpl_name, aliases)
+            full_path, safe_template = _normalized_template_path(target_name)
+        except ValueError:
             return jsonify({"error": "template not found"}), 404
 
         if not os.path.exists(PROFILE_PATH):
@@ -2347,9 +2458,19 @@ def api_apply_template(acc_id):
             return jsonify({"error": "acc not found"}), 404
 
         current_steps = _parse_json_field(acc.get("Data", "[]"), [])
-        try:
-            template_steps = json.loads(TEMPLATES[tmpl_name])
-        except Exception:
+
+        if os.path.isfile(full_path):
+            template_steps = _json_read_or(full_path, [])
+        else:
+            raw_embedded = TEMPLATES.get(tmpl_name) or TEMPLATES.get(
+                os.path.splitext(target_name)[0]
+            )
+            try:
+                template_steps = json.loads(raw_embedded or "[]")
+            except Exception:
+                return jsonify({"error": "template invalid"}), 400
+
+        if not isinstance(template_steps, list):
             return jsonify({"error": "template invalid"}), 400
 
         schema = schema_load()
@@ -2367,7 +2488,14 @@ def api_apply_template(acc_id):
         except Exception:
             app.logger.exception("sync_account_meta failed (non-critical)")
 
-        return jsonify({"status": "ok", "acc_id": acc_id, "template": tmpl_name})
+        return jsonify(
+            {
+                "status": "ok",
+                "acc_id": acc_id,
+                "template": safe_template,
+                "aliases": aliases,
+            }
+        )
 
     except Exception as e:
         # Лог + понятный ответ фронту (т.е. тост станет красным)
@@ -3401,11 +3529,161 @@ def api_schema_rebuild():
 
 @app.route("/api/templates/list", methods=["GET"])
 def api_templates_list():
+    aliases = _load_template_aliases()
+    alias_targets: dict[str, list[str]] = {}
+    for alias, target in aliases.items():
+        alias_targets.setdefault(target, []).append(alias)
+
     arr = []
     for name in sorted(os.listdir(TEMPLATES_DIR)):
-        if name.lower().endswith(".json"):
-            arr.append(name)
-    return jsonify({"templates": arr})
+        if not name.lower().endswith(".json"):
+            continue
+        full = os.path.join(TEMPLATES_DIR, name)
+        steps = _json_read_or(full, [])
+        steps_count = len(steps) if isinstance(steps, list) else None
+        arr.append(
+            {
+                "name": name,
+                "label": os.path.splitext(name)[0],
+                "steps_count": steps_count,
+                "aliases": alias_targets.get(name, []),
+            }
+        )
+
+    return jsonify({"templates": arr, "aliases": aliases})
+
+
+def _normalized_template_path(raw_name: str) -> t.Tuple[str, str]:
+    """
+    Проверяем имя шаблона и возвращаем (полный путь, безопасное имя).
+
+    Исключаем попытки выхода из каталога с шаблонами и приводим имя к *.json.
+    """
+    if not raw_name:
+        raise ValueError("empty template name")
+
+    name = os.path.basename(raw_name.strip())
+    if not name or name.startswith("."):
+        raise ValueError("invalid template name")
+    if not name.lower().endswith(".json"):
+        name = f"{name}.json"
+
+    full = os.path.abspath(os.path.join(TEMPLATES_DIR, name))
+    base_dir = os.path.abspath(TEMPLATES_DIR)
+    if not full.startswith(base_dir + os.sep):
+        raise ValueError("invalid template name")
+
+    return full, name
+
+
+_ensure_builtin_templates()
+
+
+@app.route("/api/templates/<path:template_name>", methods=["GET"])
+def api_templates_get(template_name: str):
+    """Возвращает содержимое выбранного шаблона."""
+    try:
+        aliases = _load_template_aliases()
+        canon_name = _resolve_template_name(template_name, aliases)
+        full_path, safe_name = _normalized_template_path(canon_name)
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "template not found"}), 404
+
+    steps = _json_read_or(full_path, [])
+    if not isinstance(steps, list):
+        return jsonify({"error": "invalid template format"}), 400
+
+    aliases = _load_template_aliases()
+    alias_names = [k for k, v in aliases.items() if _canonical_template_name(v) == safe_name]
+
+    return jsonify(
+        {
+            "name": safe_name,
+            "steps": steps,
+            "steps_count": len(steps),
+            "aliases": alias_names,
+        }
+    )
+
+
+@app.route("/api/templates/<path:template_name>", methods=["PUT"])
+def api_templates_put(template_name: str):
+    """Создаёт или обновляет шаблон шагов."""
+    try:
+        full_path, safe_name = _normalized_template_path(
+            _resolve_template_name(template_name)
+        )
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return jsonify({"error": "steps must be an array"}), 400
+
+    safe_write_json(full_path, steps)
+    return jsonify({"ok": True, "name": safe_name, "steps_count": len(steps)})
+
+
+@app.route("/api/templates/<path:template_name>", methods=["DELETE"])
+def api_templates_delete(template_name: str):
+    """Удаляет указанный шаблон."""
+    try:
+        aliases = _load_template_aliases()
+        canon_name = _resolve_template_name(template_name, aliases)
+        full_path, safe_name = _normalized_template_path(canon_name)
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "template not found"}), 404
+
+    os.remove(full_path)
+    aliases = {k: v for k, v in aliases.items() if _canonical_template_name(v) != safe_name}
+    _save_template_aliases(aliases)
+    return jsonify({"ok": True, "name": safe_name, "aliases": aliases})
+
+
+@app.route("/api/templates/<path:template_name>/rename", methods=["PATCH"])
+def api_templates_rename(template_name: str):
+    payload = request.get_json(silent=True) or {}
+    new_name = (payload.get("new_name") or "").strip()
+    if not new_name:
+        return jsonify({"error": "new_name is required"}), 400
+
+    aliases = _load_template_aliases()
+    try:
+        src_path, safe_src = _normalized_template_path(
+            _resolve_template_name(template_name, aliases)
+        )
+        dst_path, safe_dst = _normalized_template_path(new_name)
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    if not os.path.isfile(src_path):
+        return jsonify({"error": "template not found"}), 404
+
+    if os.path.exists(dst_path):
+        return jsonify({"error": "target exists"}), 409
+
+    os.rename(src_path, dst_path)
+
+    updated_aliases = {}
+    for alias, target in aliases.items():
+        target_canon = _canonical_template_name(target)
+        if target_canon == safe_src:
+            updated_aliases[alias] = safe_dst
+        else:
+            updated_aliases[alias] = target_canon
+
+    # сохраняем совместимость: старое имя становится алиасом
+    updated_aliases[safe_src] = safe_dst
+    _save_template_aliases(updated_aliases)
+
+    return jsonify({"ok": True, "name": safe_dst, "aliases": updated_aliases})
 
 @app.route("/api/templates/rehydrate", methods=["POST"])
 def api_templates_rehydrate():
