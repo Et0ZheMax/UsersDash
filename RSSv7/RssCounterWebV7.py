@@ -559,6 +559,22 @@ def _normalize_template_with_schema(template_steps:list, schema:dict) -> list:
 
     return out
 
+
+def _validate_template_steps(steps: t.Any) -> t.Tuple[bool, str]:
+    """Простая валидация структуры шаблона."""
+    if not isinstance(steps, list):
+        return False, "steps must be a list"
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            return False, f"step[{idx}] must be an object"
+        sid = step.get("ScriptId")
+        if not isinstance(sid, str) or not sid.strip():
+            return False, f"step[{idx}] must contain ScriptId"
+        cfg = step.get("Config")
+        if cfg is not None and not isinstance(cfg, dict):
+            return False, f"step[{idx}].Config must be an object"
+    return True, ""
+
 # ──────────────────────────────────────────────────────────────────────
 # ──────────── Ш А Б Л О Н Ы ────────────
 TEMPLATES = {
@@ -2440,6 +2456,11 @@ def api_apply_template(acc_id):
     try:
         payload = request.get_json(silent=True) or {}
         tmpl_name = (payload.get("template") or "").strip()
+        if not tmpl_name:
+            return jsonify({"error": "template is required"}), 400
+
+        template_steps = None
+        template_label = tmpl_name
 
         aliases = _load_template_aliases()
         try:
@@ -2447,6 +2468,10 @@ def api_apply_template(acc_id):
             full_path, safe_template = _normalized_template_path(target_name)
         except ValueError:
             return jsonify({"error": "template not found"}), 404
+
+        ok, err = _validate_template_steps(template_steps)
+        if not ok:
+            return jsonify({"error": "template invalid", "details": err}), 400
 
         if not os.path.exists(PROFILE_PATH):
             return jsonify({"error": "profile not found"}), 404
@@ -3535,6 +3560,7 @@ def api_templates_list():
         alias_targets.setdefault(target, []).append(alias)
 
     arr = []
+    base = []
     for name in sorted(os.listdir(TEMPLATES_DIR)):
         if not name.lower().endswith(".json"):
             continue
@@ -3694,8 +3720,9 @@ def api_templates_rehydrate():
         if not name.lower().endswith(".json"):
             continue
         p = os.path.join(TEMPLATES_DIR, name)
-        tpl = _json_read_or(p, [])
-        if not isinstance(tpl, list):
+        tpl = _json_read_or(p, None)
+        ok, _ = _validate_template_steps(tpl)
+        if not ok:
             continue
         new_tpl = template_inflate_with_schema(tpl, schema)
         if new_tpl != tpl:
