@@ -2469,10 +2469,6 @@ def api_apply_template(acc_id):
         except ValueError:
             return jsonify({"error": "template not found"}), 404
 
-        ok, err = _validate_template_steps(template_steps)
-        if not ok:
-            return jsonify({"error": "template invalid", "details": err}), 400
-
         if not os.path.exists(PROFILE_PATH):
             return jsonify({"error": "profile not found"}), 404
         with open(PROFILE_PATH, "r", encoding="utf-8") as f:
@@ -2495,8 +2491,9 @@ def api_apply_template(acc_id):
             except Exception:
                 return jsonify({"error": "template invalid"}), 400
 
-        if not isinstance(template_steps, list):
-            return jsonify({"error": "template invalid"}), 400
+        ok, err = _validate_template_steps(template_steps)
+        if not ok:
+            return jsonify({"error": "template invalid", "details": err}), 400
 
         schema = schema_load()
         template_filled = template_inflate_with_schema(template_steps, schema)
