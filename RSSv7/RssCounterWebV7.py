@@ -2205,6 +2205,12 @@ def logs_page():
 def fix_page():
     return render_template("fix.html")
 
+
+@app.route("/templates-editor")
+def templates_editor_page():
+    """Отдаём страницу редактора шаблонов."""
+    return render_template("templates.html")
+
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
     parse_logs()
@@ -3406,6 +3412,79 @@ def api_templates_list():
         if name.lower().endswith(".json"):
             arr.append(name)
     return jsonify({"templates": arr})
+
+
+def _normalized_template_path(raw_name: str) -> t.Tuple[str, str]:
+    """
+    Проверяем имя шаблона и возвращаем (полный путь, безопасное имя).
+
+    Исключаем попытки выхода из каталога с шаблонами и приводим имя к *.json.
+    """
+    if not raw_name:
+        raise ValueError("empty template name")
+
+    name = os.path.basename(raw_name.strip())
+    if not name or name.startswith("."):
+        raise ValueError("invalid template name")
+    if not name.lower().endswith(".json"):
+        name = f"{name}.json"
+
+    full = os.path.abspath(os.path.join(TEMPLATES_DIR, name))
+    base_dir = os.path.abspath(TEMPLATES_DIR)
+    if not full.startswith(base_dir + os.sep):
+        raise ValueError("invalid template name")
+
+    return full, name
+
+
+@app.route("/api/templates/<path:template_name>", methods=["GET"])
+def api_templates_get(template_name: str):
+    """Возвращает содержимое выбранного шаблона."""
+    try:
+        full_path, safe_name = _normalized_template_path(template_name)
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "template not found"}), 404
+
+    steps = _json_read_or(full_path, [])
+    if not isinstance(steps, list):
+        return jsonify({"error": "invalid template format"}), 400
+
+    return jsonify({"name": safe_name, "steps": steps, "steps_count": len(steps)})
+
+
+@app.route("/api/templates/<path:template_name>", methods=["PUT"])
+def api_templates_put(template_name: str):
+    """Создаёт или обновляет шаблон шагов."""
+    try:
+        full_path, safe_name = _normalized_template_path(template_name)
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        return jsonify({"error": "steps must be an array"}), 400
+
+    safe_write_json(full_path, steps)
+    return jsonify({"ok": True, "name": safe_name, "steps_count": len(steps)})
+
+
+@app.route("/api/templates/<path:template_name>", methods=["DELETE"])
+def api_templates_delete(template_name: str):
+    """Удаляет указанный шаблон."""
+    try:
+        full_path, safe_name = _normalized_template_path(template_name)
+    except ValueError:
+        return jsonify({"error": "invalid template name"}), 400
+
+    if not os.path.isfile(full_path):
+        return jsonify({"error": "template not found"}), 404
+
+    os.remove(full_path)
+    return jsonify({"ok": True, "name": safe_name})
 
 @app.route("/api/templates/rehydrate", methods=["POST"])
 def api_templates_rehydrate():
