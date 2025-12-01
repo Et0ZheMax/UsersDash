@@ -675,9 +675,15 @@
         const res = await fetch('/api/templates/list', { headers:{'x-skip-loader':'1'} });
         const data = await res.json();
         const names = Array.isArray(data.names) && data.names.length
-          ? data.names
-          : (data.templates || []).map(n => String(n).replace(/\.json$/i, ''));
-        templateState.list = names;
+          ? data.names.map((n) => ({
+            label: String(n).replace(/\.json$/i, ''),
+            value: String(n).replace(/\.json$/i, ''),
+          }))
+          : (data.templates || []).map((item) => ({
+            label: (item && item.label) ? String(item.label) : String(item.name || ''),
+            value: (item && item.name) ? String(item.name).replace(/\.json$/i, '') : String(item.label || ''),
+          }));
+        templateState.list = names.filter(t => t.label && t.value);
         if (render) renderTabs();
       } catch (e) {
         console.error(e);
@@ -928,12 +934,12 @@
       tplButtons.className = 'template-buttons';
 
       if ((templateState.list || []).length) {
-        templateState.list.forEach((name) => {
+        templateState.list.forEach((tpl) => {
           const btn = document.createElement('button');
           btn.className = 'templateBtn';
-          btn.textContent = name;
-          btn.title = `Применить шаблон ${name}`;
-          btn.onclick = () => applyTemplate(name, btn);
+          btn.textContent = tpl.label;
+          btn.title = `Применить шаблон ${tpl.label}`;
+          btn.onclick = () => applyTemplate(tpl.value, btn);
           tplButtons.appendChild(btn);
         });
       } else {
