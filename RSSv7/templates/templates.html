@@ -58,6 +58,9 @@
     .config-row label { font-size:13px; color:#333; }
     .config-row select, .config-row input[type=text], .config-row input[type=number] { padding:6px 8px; border:1px solid var(--line); border-radius:6px; font-size:13px; }
     .config-row input[type=checkbox] { width:16px; height:16px; }
+    .config-row.missing { border:1px dashed #d9363e; background:#fff5f5; }
+    .config-row .missing-label { color:#d9363e; font-weight:600; }
+    .config-row .missing-hint { color:#d9363e; font-size:12px; }
     .empty { color:#888; font-size:14px; padding:6px 0; }
     #toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
       background:rgba(0,0,0,0.8); color:#fff; padding:10px 14px; border-radius:10px;
@@ -143,6 +146,7 @@
       aliases: {},
       schema: {},
       currentAliases: [],
+      highlight: null,
     };
 
     function goBack(){ location.href = '/manage'; }
@@ -268,6 +272,9 @@
       const shape = script.Shape || script.fields || {};
       const defaults = script.Defaults || script.defaults || {};
       const keys = Array.from(new Set([...Object.keys(shape), ...Object.keys(cfg)]));
+      const highlight = state.highlight;
+      const highlightActive = highlight && (!highlight.scriptId || highlight.scriptId === step.ScriptId);
+      const missingKey = highlightActive ? highlight.key : null;
 
       if (!keys.length){
         box.innerHTML = '<div class="empty">Добавьте ключи в конфиг</div>';
@@ -276,7 +283,7 @@
 
       keys.forEach(key => {
         const row = document.createElement('div');
-        row.className = 'config-row';
+        row.className = 'config-row' + (missingKey === key ? ' missing' : '');
         const form = shape[key] || {};
         const current = cfg[key];
         const label = document.createElement('label');
@@ -323,6 +330,35 @@
         row.appendChild(control);
         box.appendChild(row);
       });
+
+      if (missingKey && !(missingKey in cfg)) {
+        const row = document.createElement('div');
+        row.className = 'config-row missing';
+
+        const label = document.createElement('label');
+        label.className = 'missing-label';
+        label.textContent = missingKey;
+        row.appendChild(label);
+
+        const hint = document.createElement('div');
+        hint.className = 'missing-hint';
+        hint.textContent = 'Ключ отсутствует в шаблоне, добавьте его по схеме';
+        row.appendChild(hint);
+
+        const btn = document.createElement('button');
+        btn.className = 'btn';
+        btn.textContent = 'Добавить ключ';
+        btn.onclick = () => {
+          step.Config = step.Config || {};
+          step.Config[missingKey] = '';
+          renderConfigFields();
+          syncEditorWithStep();
+        };
+        row.appendChild(btn);
+
+        box.appendChild(row);
+        row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
     }
 
     function updateConfigValue(key, value){
@@ -390,6 +426,7 @@
         state.steps = Array.isArray(data.steps) ? data.steps : [];
         state.selectedStep = state.steps.length ? 0 : -1;
         state.currentAliases = data.aliases || aliasesFor(data.name);
+        state.highlight = null;
         state.templates = state.templates.map(tpl =>
           tpl.name === data.name ? { ...tpl, steps_count: data.steps_count, aliases: tpl.aliases?.length ? tpl.aliases : data.aliases } : tpl
         );
@@ -653,8 +690,35 @@
       }
     }
 
-    loadTemplates();
-    loadSchema();
+    async function handleDeepLink(){
+      const params = new URLSearchParams(location.search);
+      const tpl = params.get('template');
+      if (!tpl) return;
+
+      const scriptId = params.get('scriptId') || '';
+      const missingKey = params.get('missingKey') || '';
+      const canonical = canonicalName(tpl);
+
+      await openTemplate(canonical);
+
+      if (scriptId){
+        const idx = state.steps.findIndex(s => s.ScriptId === scriptId);
+        if (idx >= 0) selectStep(idx);
+      }
+
+      if (missingKey){
+        state.highlight = { scriptId, key: missingKey };
+        renderConfigFields();
+        showToast(`Добавьте ключ ${missingKey} в шаблон`, true);
+      }
+    }
+
+    async function initPage(){
+      await Promise.all([loadSchema(), loadTemplates()]);
+      await handleDeepLink();
+    }
+
+    initPage();
   </script>
 </body>
 </html>

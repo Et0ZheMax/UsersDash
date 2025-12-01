@@ -282,6 +282,27 @@ def template_inflate_with_schema(template_steps: list, schema: dict):
                         cfg[key]["options"] = list(spec.get("options") or [])
     return steps
 
+
+def find_template_schema_gaps(template_steps: list, schema: dict):
+    """
+    Возвращает [{"script_id":..., "keys":[...]}] для шагов, где по схеме не хватает ключей.
+    """
+    if not schema:
+        return []
+
+    gaps = []
+    for step in template_steps or []:
+        sid = step.get("ScriptId")
+        cfg = step.get("Config") or {}
+        if not sid or sid not in schema:
+            continue
+
+        missing = [k for k in (schema[sid].get("fields") or {}) if k not in cfg]
+        if missing:
+            gaps.append({"script_id": sid, "keys": missing})
+
+    return gaps
+
 def merge_template_into_account(account_steps: list, template_steps: list):
     """Мёрдж шаблона в аккаунт БЕЗ удаления неизвестных полей/скриптов."""
     from collections import defaultdict, deque
@@ -2496,6 +2517,19 @@ def api_apply_template(acc_id):
             return jsonify({"error": "template invalid", "details": err}), 400
 
         schema = schema_load()
+        gaps = find_template_schema_gaps(template_steps, schema)
+        if gaps:
+            return (
+                jsonify(
+                    {
+                        "error": "template_missing_keys",
+                        "template": safe_template,
+                        "missing_keys": gaps,
+                    }
+                ),
+                409,
+            )
+
         template_filled = template_inflate_with_schema(template_steps, schema)
         merged_steps = merge_template_into_account(current_steps, template_filled)
 
