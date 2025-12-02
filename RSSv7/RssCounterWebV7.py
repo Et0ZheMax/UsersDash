@@ -364,37 +364,14 @@ def run_templates_schema_audit(schema: dict | None = None) -> dict:
     return payload
 
 def merge_template_into_account(account_steps: list, template_steps: list):
-    """Мёрдж шаблона в аккаунт БЕЗ удаления неизвестных полей/скриптов."""
-    from collections import defaultdict, deque
+    """Полностью заменяет конфиг аккаунта переданным шаблоном."""
 
-    acc = deepcopy(account_steps or [])
-    tpl = deepcopy(template_steps or [])
-
-    acc_map = defaultdict(deque)
-    for s in acc:
-        acc_map[s.get("ScriptId")].append(s)
-
-    result = []
-    used_ids = set()
-
-    for t in tpl:
-        sid = t.get("ScriptId")
-        if sid in acc_map and acc_map[sid]:
-            a = acc_map[sid].popleft()
-            used_ids.add(id(a))
-            a_cfg = a.setdefault("Config", {})
-            t_cfg = t.get("Config", {}) or {}
-            for k, v in t_cfg.items():
-                a_cfg[k] = v
-            result.append(a)
-        else:
-            result.append(t)
-
-    for s in acc:
-        if id(s) not in used_ids and s not in result:
-            result.append(s)
-
-    return result
+    # Ранее мы пытались подмердживать настройки поверх существующих, из-за чего
+    # старые ключи оставались в профиле. Это приводило к тому, что после
+    # применения шаблона в manage конфиг становился смесью старых и новых
+    # значений. Теперь возвращаем чистую копию шаблона, чтобы настройки
+    # действительно перезаписывались.
+    return deepcopy(template_steps or [])
 
 
 def _build_schema():
