@@ -86,6 +86,11 @@
               <button class="btn btn-outline" onclick="addStepFromSchema()">Шаг по схеме</button>
               <button class="btn btn-outline" onclick="addEmptyStep()">Пустой шаг</button>
             </div>
+            <div class="templates-step-buttons templates-step-buttons--secondary">
+              <button class="btn btn-outline" id="stepUpBtn" onclick="moveStep(-1)" disabled>↑ Выше</button>
+              <button class="btn btn-outline" id="stepDownBtn" onclick="moveStep(1)" disabled>↓ Ниже</button>
+              <button class="btn btn-danger" id="removeStepBtn" onclick="deleteStep()" disabled>Удалить шаг</button>
+            </div>
           </div>
           <datalist id="scriptList"></datalist>
 
@@ -193,6 +198,10 @@
     document.getElementById('deleteBtn').disabled = !hasTemplate;
     document.getElementById('renameBtn').disabled = !hasTemplate;
     document.getElementById('addKeyBtn').disabled = state.selectedStep < 0;
+    const hasStep = state.selectedStep >= 0 && state.selectedStep < state.steps.length;
+    document.getElementById('stepUpBtn').disabled = !hasStep || state.selectedStep === 0;
+    document.getElementById('stepDownBtn').disabled = !hasStep || state.selectedStep === state.steps.length - 1;
+    document.getElementById('removeStepBtn').disabled = !hasStep;
   }
 
   function renderTemplates(){
@@ -548,6 +557,38 @@
   }
 
   function selectStep(idx){ state.selectedStep = idx; renderSteps(); }
+
+  function normalizeStepOrder(){
+    state.steps = state.steps.map((step, idx) => ({ ...step, OrderId: idx }));
+  }
+
+  function deleteStep(){
+    if (state.selectedStep < 0 || state.selectedStep >= state.steps.length){
+      showToast('Выберите шаг', true);
+      return;
+    }
+    state.steps.splice(state.selectedStep, 1);
+    state.selectedStep = Math.min(state.selectedStep, state.steps.length - 1);
+    normalizeStepOrder();
+    renderSteps();
+    showToast('Шаг удалён');
+  }
+
+  function moveStep(offset){
+    if (state.selectedStep < 0 || state.selectedStep >= state.steps.length){
+      showToast('Выберите шаг', true);
+      return;
+    }
+    const target = state.selectedStep + offset;
+    if (target < 0 || target >= state.steps.length) return;
+    const steps = [...state.steps];
+    [steps[state.selectedStep], steps[target]] = [steps[target], steps[state.selectedStep]];
+    state.steps = steps;
+    state.selectedStep = target;
+    normalizeStepOrder();
+    renderSteps();
+    showToast('Порядок обновлён');
+  }
 
   function updateConfigValue(key, value){
     if (state.selectedStep < 0 || state.selectedStep >= state.steps.length) return;
