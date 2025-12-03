@@ -2543,6 +2543,94 @@ h1 {
   opacity: 0.5;
 }
 
+/* Admin watch panel */
+.admin-watch-panel {
+  margin: 28px 0;
+  padding: 16px;
+  border: 1px solid #1f2a4a;
+  border-radius: 12px;
+  background: #0f1426;
+}
+
+.admin-watch-panel__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.admin-watch-panel__title {
+  margin: 0;
+  font-size: 18px;
+}
+
+.admin-watch-panel__subtitle {
+  color: #cbd2f0;
+  font-size: 13px;
+}
+
+.admin-watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.admin-watch-card {
+  border: 1px solid #1f2a4a;
+  background: #11182f;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-watch-card.is-error {
+  border-color: #d06b6b;
+}
+
+.admin-watch-card__title {
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.admin-watch-card__meta {
+  color: #cbd2f0;
+  font-size: 13px;
+}
+
+.admin-watch-card__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.admin-watch-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.admin-watch-card__name {
+  font-weight: 600;
+  color: #f0f4ff;
+}
+
+.admin-watch-card__summary {
+  color: #e3b96f;
+  font-size: 13px;
+  text-align: right;
+}
+
+.admin-watch-card__empty {
+  color: #9ca3af;
+  font-size: 13px;
+}
+
 /* Templates editor */
 
 .templates-page {

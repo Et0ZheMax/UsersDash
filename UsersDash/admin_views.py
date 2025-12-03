@@ -47,6 +47,7 @@ from UsersDash.services.remote_api import (
     fetch_template_payload,
     fetch_template_schema,
     fetch_templates_list,
+    fetch_watch_summary,
     rename_template_payload,
     save_template_payload,
     update_account_active,
@@ -271,6 +272,22 @@ def admin_dashboard():
 
     payment_cards.sort(key=lambda x: (x["pay_date"], 0 if x["status"] == "due" else 1))
 
+    watch_cards = []
+    servers = Server.query.order_by(Server.name.asc()).all()
+    for srv in servers:
+        if not srv.is_active:
+            continue
+
+        summary, err = fetch_watch_summary(srv)
+        watch_cards.append(
+            {
+                "server": summary.get("server") if summary else srv.name,
+                "updated": summary.get("generated_at_fmt") if summary else None,
+                "accounts": summary.get("accounts") if summary else [],
+                "error": err,
+            }
+        )
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -280,6 +297,7 @@ def admin_dashboard():
         total_servers=total_servers,
         accounts_data=accounts_data,
         payment_cards=payment_cards,
+        watch_cards=watch_cards,
     )
 
 

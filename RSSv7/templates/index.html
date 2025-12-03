@@ -1928,10 +1928,11 @@
     // ─── loadWatchAlerts (v2) ───────────────────────────────────────
     async function loadWatchAlerts() {
       try {
-        const [st, inactive, tplAudit] = await Promise.all([
+        const [st, inactive, tplAudit, ldSummary] = await Promise.all([
           fetch('/api/logstatus').then(r => r.ok ? r.json() : {}),
           fetch('/api/inactive15').then(r => r.ok ? r.json() : []),
           fetch('/api/templates/check').then(r => r.ok ? r.json() : {}),
+          fetch('/api/problems/summary').then(r => r.ok ? r.json() : null).catch(() => null),
         ]);
 
         const list = document.getElementById('watchList');
@@ -1941,9 +1942,10 @@
         const added = new Set();
 
         // helper
-        const pushRow = ({nick, cls, extra = ''}) => {
-          if (added.has(nick)) return;
-          added.add(nick);
+        const pushRow = ({nick, cls, extra = '', key = null}) => {
+          const uniq = key || nick;
+          if (added.has(uniq)) return;
+          added.add(uniq);
           const row = document.createElement('div');
           row.className = `watchRow ${cls}`;        // red / yellow / blue
           row.textContent = `${nick}${extra}`;
@@ -1976,6 +1978,27 @@
             ? ` ${firstGap.script_id || ''}: ${keyPreview}`
             : ' есть пропуски по схеме';
           pushRow({nick: `Шаблон ${item.label || item.template}`, cls: 'yellow', extra: suffix});
+        });
+
+        // 4) Сводка LD_problems
+        const ldAccounts = Array.isArray(ldSummary?.accounts) ? ldSummary.accounts : [];
+        const buildSummary = (problems) => {
+          if (!Array.isArray(problems)) return '';
+          const parts = problems.map(p => {
+            const label = p?.label || '';
+            const cnt = Number(p?.count || 0);
+            if (!label) return '';
+            return cnt > 1 ? `${label}(${cnt})` : label;
+          }).filter(Boolean);
+          return parts.join(' + ');
+        };
+
+        ldAccounts.forEach(item => {
+          const nick = item.nickname || item.account || '';
+          if (!nick) return;
+          const summaryText = item.summary || buildSummary(item.problems);
+          const extraText = summaryText ? `: ${summaryText}` : '';
+          pushRow({nick, cls: 'red', extra: extraText, key: `ld-${nick}`});
         });
 
         // max-height

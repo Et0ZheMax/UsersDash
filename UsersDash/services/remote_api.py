@@ -237,6 +237,23 @@ def _fmt_last_updated(dt_str: Optional[str]) -> Optional[str]:
         return dt_str
 
 
+def _fmt_generated_at(dt_str: Optional[str]) -> Optional[str]:
+    """Форматирует отметку времени сводки наблюдения."""
+
+    if not dt_str:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(dt_str)
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        except Exception:
+            return dt_str
+
+    return dt.strftime("%d.%m %H:%M")
+
+
 def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any]]:
     """
     Подтягивает ресурсы сразу для списка аккаунтов (Account-моделей).
@@ -688,3 +705,66 @@ def fetch_rssv7_accounts_meta(server: Server) -> Tuple[List[Dict], str]:
         return [], err
 
     return items, ""
+
+
+def _format_problem_summary(item: Dict[str, Any]) -> str:
+    """Собирает компактную строку проблем из LD_problems."""
+
+    problems = item.get("problems") or []
+    parts: list[str] = []
+
+    if isinstance(problems, list):
+        for prob in problems:
+            label = prob.get("label") if isinstance(prob, dict) else None
+            if not label:
+                continue
+            count_raw = prob.get("count") if isinstance(prob, dict) else None
+            try:
+                count_int = int(count_raw) if count_raw is not None else 0
+            except (TypeError, ValueError):
+                count_int = 0
+            suffix = f"({count_int})" if count_int and count_int > 1 else ""
+            parts.append(f"{label}{suffix}")
+
+    return " + ".join(parts)
+
+
+def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Подтягивает сводку проблем с конкретного сервера (LD_problems → /api/problems/summary).
+    Возвращает нормализованные данные для отображения в UsersDash.
+    """
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return None, "api_base_url не задан"
+
+    url = f"{base}/problems/summary"
+    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    if data is None:
+        return None, f"Нет ответа от {url}"
+
+    accounts = []
+    for item in data.get("accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        nick = item.get("nickname") or item.get("account")
+        if not nick:
+            continue
+        summary = item.get("summary") or _format_problem_summary(item)
+        accounts.append(
+            {
+                "nickname": nick,
+                "summary": summary,
+                "total": item.get("total", 0),
+            }
+        )
+
+    payload = {
+        "server": data.get("server") or getattr(server, "name", ""),
+        "generated_at": data.get("generated_at"),
+        "generated_at_fmt": _fmt_generated_at(data.get("generated_at")),
+        "accounts": accounts,
+    }
+
+    return payload, ""

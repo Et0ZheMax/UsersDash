@@ -90,6 +90,49 @@
     </div>
 </div>
 
+{% if watch_cards %}
+    <div class="admin-watch-panel">
+        <div class="admin-watch-panel__header">
+            <div>
+                <h2 class="admin-watch-panel__title">Наблюдение</h2>
+                <div class="admin-watch-panel__subtitle">Короткая сводка проблем со всех серверов RSSv7.</div>
+            </div>
+        </div>
+
+        <div class="admin-watch-grid">
+            {% for card in watch_cards %}
+                <div class="admin-watch-card{% if card.error %} is-error{% endif %}">
+                    <div class="admin-watch-card__title">{{ card.server }}</div>
+                    <div class="admin-watch-card__meta">
+                        {% if card.error %}
+                            Ошибка: {{ card.error }}
+                        {% elif card.updated %}
+                            Обновлено {{ card.updated }}
+                        {% else %}
+                            Нет свежих данных
+                        {% endif %}
+                    </div>
+
+                    {% if card.accounts %}
+                        <ul class="admin-watch-card__list">
+                            {% for item in card.accounts %}
+                                <li class="admin-watch-card__row">
+                                    <span class="admin-watch-card__name">{{ item.nickname }}</span>
+                                    {% if item.summary %}
+                                        <span class="admin-watch-card__summary">{{ item.summary }}</span>
+                                    {% endif %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <div class="admin-watch-card__empty">Проблем не обнаружено</div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
 <p>Используйте верхнее меню для управления пользователями, серверами и фермами.</p>
 
 {% if payment_cards %}
