@@ -30,10 +30,10 @@ if sys.platform == "win32":
     ctypes.windll.kernel32.SetConsoleTitleW(title)
 
 # ─────────────────────── ⚙️  Настройки ────────────────────────────
-LOG_FOLDER      = r"C:\Program Files (x86)\GnBots\logs"
+LOG_FOLDER      = r"C:\Program Files\GnBots\logs"
 PROBLEMS_FILE   = r"C:\LDPlayer\ldChecker\problems.json"
 SUMMARY_FILE    = os.getenv("LDP_SUMMARY_FILE", r"C:\LDPlayer\ldChecker\problems_summary.json")
-PROFILE_FILE    = r'C:/Program Files (x86)/GnBots/profiles/FRESH_NOX.json'
+PROFILE_FILE    = r'C:/Program Files/GnBots/profiles/FRESH_NOX.json'
 SERVER_NAME     = os.getenv("SERVER_NAME") or socket.gethostname()
 
 PROBLEM_LABELS = {
@@ -387,3 +387,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Прерывание пользователем.")
+
