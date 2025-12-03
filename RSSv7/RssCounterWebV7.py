@@ -104,11 +104,11 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 
 def _write_default_config(path):
     default = {
-        "LOGS_DIR": r"C:\\Program Files (x86)\\GnBots\\logs",
-        "PROFILE_PATH": r"C:\\Program Files (x86)\\GnBots\\config\\profiles.json",
+        "LOGS_DIR": r"C:\\Program Files\\GnBots\\logs",
+        "PROFILE_PATH": r"C:\\Program Files\\GnBots\\config\\profiles.json",
         "SRC_VMS": r"D:\\Backups\\VMs",
         "DST_VMS": r"D:\\Prod\\VMs",
-        "GNBOTS_SHORTCUT": r"C:\\Program Files (x86)\\GnBots\\GnBots.lnk",
+        "GNBOTS_SHORTCUT": r"C:\\Program Files\\GnBots\\GnBots.lnk",
         "SERVER_NAME": socket.gethostname(),
         "TELEGRAM_TOKEN": "",
         "TELEGRAM_CHAT_ID": ""
@@ -125,7 +125,7 @@ with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
 
 # 2) Единый источник путей из конфига (убираем дубли: LOG_DIR != LOGS_DIR)
-LOGS_DIR        = CONFIG.get("LOGS_DIR", r"C:\Program Files (x86)\GnBots\logs")
+LOGS_DIR        = CONFIG.get("LOGS_DIR", r"C:\Program Files\GnBots\logs")
 PROFILE_PATH    = CONFIG.get("PROFILE_PATH", "")
 SRC_VMS         = CONFIG.get("SRC_VMS", "")
 DST_VMS         = CONFIG.get("DST_VMS", "")
