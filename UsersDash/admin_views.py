@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import difflib
+from calendar import monthrange
 from datetime import datetime, timedelta
 import traceback
 from typing import Any
@@ -276,9 +277,23 @@ def admin_dashboard():
     watch_cards = []
     server_states = []
     servers = Server.query.order_by(Server.name.asc()).all()
+
+    today_date = datetime.utcnow().date()
+    days_in_month = monthrange(today_date.year, today_date.month)[1]
+    days_left = days_in_month - today_date.day + 1
+
+    server_profit_map: dict[int, dict[str, Any]] = {}
+
     for srv in servers:
         if not srv.is_active:
             continue
+
+        server_profit_map[srv.id] = {
+            "server_id": srv.id,
+            "server_name": srv.name,
+            "monthly_total": 0,
+            "remaining_total": 0,
+        }
 
         summary, err = fetch_watch_summary(srv)
         watch_cards.append(
@@ -311,6 +326,34 @@ def admin_dashboard():
             }
         )
 
+    for acc in accounts:
+        if not acc.is_active or not acc.server_id:
+            continue
+
+        srv_profit = server_profit_map.get(acc.server_id)
+        if not srv_profit:
+            continue
+
+        monthly_amount = acc.next_payment_amount or 0
+        if monthly_amount < 0:
+            monthly_amount = 0
+
+        srv_profit["monthly_total"] += monthly_amount
+
+    for srv_profit in server_profit_map.values():
+        srv_profit["remaining_total"] = (
+            srv_profit["monthly_total"] * days_left // days_in_month
+        )
+
+    server_profits = sorted(
+        server_profit_map.values(), key=lambda item: item.get("server_name", "")
+    )
+
+    overall_monthly_profit = sum(item["monthly_total"] for item in server_profits)
+    overall_remaining_profit = sum(
+        item["remaining_total"] for item in server_profits
+    )
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -322,6 +365,13 @@ def admin_dashboard():
         payment_cards=payment_cards,
         watch_cards=watch_cards,
         server_states=server_states,
+        server_profits=server_profits,
+        cash_totals={
+            "monthly_total": overall_monthly_profit,
+            "remaining_total": overall_remaining_profit,
+            "days_left": days_left,
+            "days_in_month": days_in_month,
+        },
     )
 
 
