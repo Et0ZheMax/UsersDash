@@ -47,6 +47,7 @@ from UsersDash.services.remote_api import (
     fetch_template_payload,
     fetch_template_schema,
     fetch_templates_list,
+    fetch_server_self_status,
     fetch_watch_summary,
     rename_template_payload,
     save_template_payload,
@@ -273,6 +274,7 @@ def admin_dashboard():
     payment_cards.sort(key=lambda x: (x["pay_date"], 0 if x["status"] == "due" else 1))
 
     watch_cards = []
+    server_states = []
     servers = Server.query.order_by(Server.name.asc()).all()
     for srv in servers:
         if not srv.is_active:
@@ -288,6 +290,27 @@ def admin_dashboard():
             }
         )
 
+        status, status_err = fetch_server_self_status(srv)
+        checked_fmt = None
+        if isinstance(status, dict) and status.get("checked_at"):
+            try:
+                dt = datetime.fromisoformat(status["checked_at"].replace("Z", "+00:00"))
+                checked_fmt = dt.strftime("%d.%m %H:%M")
+            except ValueError:
+                checked_fmt = status.get("checked_at")
+
+        server_states.append(
+            {
+                "name": srv.name,
+                "updated": checked_fmt,
+                "error": status_err,
+                "ping": bool(status.get("pingOk")) if isinstance(status, dict) else False,
+                "gn": bool(status.get("gnOk")) if isinstance(status, dict) else False,
+                "dn": bool(status.get("dnOk")) if isinstance(status, dict) else False,
+                "dn_count": status.get("dnCount") if isinstance(status, dict) else None,
+            }
+        )
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -298,6 +321,7 @@ def admin_dashboard():
         accounts_data=accounts_data,
         payment_cards=payment_cards,
         watch_cards=watch_cards,
+        server_states=server_states,
     )
 
 

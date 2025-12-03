@@ -90,6 +90,47 @@
     </div>
 </div>
 
+{% if server_states %}
+    <div class="admin-watch-panel">
+        <div class="admin-watch-panel__header">
+            <div>
+                <h2 class="admin-watch-panel__title">Состояние серверов</h2>
+                <div class="admin-watch-panel__subtitle">Self‑status без SSH, обновляется примерно раз в минуту.</div>
+            </div>
+        </div>
+
+        <div class="admin-watch-grid">
+            {% for srv in server_states %}
+                <div class="admin-watch-card{% if srv.error %} is-error{% endif %}">
+                    <div class="admin-watch-card__title">{{ srv.name }}</div>
+                    <div class="admin-watch-card__meta">
+                        {% if srv.error %}
+                            Ошибка: {{ srv.error }}
+                        {% else %}
+                            Обновлено {{ srv.updated or '—' }}
+                        {% endif %}
+                    </div>
+
+                    <div class="admin-watch-card__list">
+                        <div class="admin-watch-card__row">
+                            <span class="admin-watch-card__name">Ping</span>
+                            <span class="admin-watch-card__summary">{{ 'OK' if srv.ping else '—' }}</span>
+                        </div>
+                        <div class="admin-watch-card__row">
+                            <span class="admin-watch-card__name">GnBots</span>
+                            <span class="admin-watch-card__summary">{{ 'OK' if srv.gn else '—' }}</span>
+                        </div>
+                        <div class="admin-watch-card__row">
+                            <span class="admin-watch-card__name">LD</span>
+                            <span class="admin-watch-card__summary">{{ srv.dn_count if srv.dn_count is not none else '—' }}</span>
+                        </div>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+    </div>
+{% endif %}
+
 {% if watch_cards %}
     <div class="admin-watch-panel">
         <div class="admin-watch-panel__header">
