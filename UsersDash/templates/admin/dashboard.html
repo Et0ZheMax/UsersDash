@@ -66,6 +66,14 @@
 
     <div class="admin-top-grid__right">
         <div class="kpi-row kpi-row--stacked">
+            <button class="kpi-card kpi-card--clickable cash-card" type="button" data-role="cash-card"
+                    data-cash-monthly="{{ cash_totals.monthly_total }}"
+                    data-cash-remaining="{{ cash_totals.remaining_total }}">
+                <div class="kpi-label">Ca$h</div>
+                <div class="cash-card__value" data-role="cash-card-total">{{ cash_totals.monthly_total }} ₽</div>
+                <div class="cash-card__meta" data-role="cash-card-remaining">До конца месяца: {{ cash_totals.remaining_total }} ₽</div>
+                <div class="cash-card__list" data-role="cash-card-servers"></div>
+            </button>
             <div class="kpi-card">
                 <div class="kpi-label">Пользователей всего</div>
                 <div class="kpi-value">{{ total_users }}</div>
@@ -173,6 +181,219 @@
         </div>
     </div>
 {% endif %}
+
+<div class="cash-modal" data-role="cash-modal" hidden>
+    <div class="cash-modal__dialog">
+        <div class="cash-modal__header">
+            <div>
+                <div class="cash-modal__title">Ca$h</div>
+                <div class="cash-modal__subtitle">Выберите сервера и укажите расходы, которые нужно учесть в прибыли.</div>
+            </div>
+            <button class="cash-modal__close" type="button" data-role="cash-modal-close" aria-label="Закрыть">×</button>
+        </div>
+
+        <div class="cash-modal__content" data-role="cash-modal-content"></div>
+
+        <div class="cash-modal__footer">
+            <div class="cash-modal__summary" data-role="cash-modal-summary"></div>
+            <button class="btn" type="button" data-role="cash-modal-close">Готово</button>
+        </div>
+    </div>
+</div>
+
+<script id="cash-data" type="application/json">{{ {
+    "servers": server_profits,
+    "monthly_total": cash_totals.monthly_total,
+    "remaining_total": cash_totals.remaining_total,
+    "days_in_month": cash_totals.days_in_month,
+    "days_left": cash_totals.days_left,
+} | tojson }}</script>
+
+<script>
+    (function () {
+        const cashCard = document.querySelector('[data-role="cash-card"]');
+        const modal = document.querySelector('[data-role="cash-modal"]');
+        const modalContent = document.querySelector('[data-role="cash-modal-content"]');
+        const modalSummary = document.querySelector('[data-role="cash-modal-summary"]');
+        const cashDataEl = document.getElementById('cash-data');
+        const serversList = document.querySelector('[data-role="cash-card-servers"]');
+        const totalLabel = document.querySelector('[data-role="cash-card-total"]');
+        const remainingLabel = document.querySelector('[data-role="cash-card-remaining"]');
+        const LOCAL_STORAGE_KEY = 'usersdash-cash-settings';
+
+        if (!cashCard || !cashDataEl) {
+            return;
+        }
+
+        const cashData = JSON.parse(cashDataEl.textContent || '{}');
+        const servers = Array.isArray(cashData.servers) ? cashData.servers : [];
+        const daysInMonth = cashData.days_in_month || 30;
+        const daysLeft = cashData.days_left || daysInMonth;
+
+        function formatMoney(amount) {
+            return new Intl.NumberFormat('ru-RU').format(Math.max(0, Math.round(amount))) + ' ₽';
+        }
+
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+                if (!saved) return null;
+                return JSON.parse(saved);
+            } catch (err) {
+                return null;
+            }
+        }
+
+        function saveSettings(settings) {
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(settings));
+        }
+
+        function getInitialSettings() {
+            const saved = loadSettings();
+            if (saved && typeof saved === 'object') {
+                return saved;
+            }
+            return {
+                selected: servers.map((srv) => srv.server_id),
+                expenses: {},
+            };
+        }
+
+        let settings = getInitialSettings();
+
+        function calcTotals(currentSettings) {
+            let monthlyTotal = 0;
+            let remainingTotal = 0;
+            const selectedServers = new Set(currentSettings.selected || []);
+            const expenses = currentSettings.expenses || {};
+
+            servers.forEach((srv) => {
+                if (!selectedServers.has(srv.server_id)) return;
+                const expense = Number(expenses[srv.server_id] || 0);
+                const monthly = Math.max(0, (srv.monthly_total || 0) - Math.max(0, expense));
+                const remaining = monthly * daysLeft / daysInMonth;
+                monthlyTotal += monthly;
+                remainingTotal += remaining;
+            });
+
+            return {
+                monthlyTotal,
+                remainingTotal,
+                selectedCount: selectedServers.size,
+            };
+        }
+
+        function renderModalContent() {
+            const selectedServers = new Set(settings.selected || []);
+            const expenses = settings.expenses || {};
+            modalContent.innerHTML = servers.map((srv) => {
+                const expense = expenses[srv.server_id] || '';
+                const srvRemaining = Math.floor((srv.monthly_total || 0) * daysLeft / daysInMonth);
+                return `
+                    <label class="cash-modal__row">
+                        <div class="cash-modal__row-main">
+                            <input type="checkbox" class="cash-modal__checkbox" data-server-id="${srv.server_id}" ${selectedServers.has(srv.server_id) ? 'checked' : ''}>
+                            <div>
+                                <div class="cash-modal__server">${srv.server_name}</div>
+                                <div class="cash-modal__server-meta">${formatMoney(srv.monthly_total || 0)} · до конца месяца ${formatMoney(srvRemaining)}</div>
+                            </div>
+                        </div>
+                        <div class="cash-modal__expenses">
+                            <div class="cash-modal__expenses-label">Расход</div>
+                            <div class="cash-modal__expenses-input">
+                                <input type="number" min="0" step="100" value="${expense}" data-expense-input data-server-id="${srv.server_id}" aria-label="Расход для ${srv.server_name}">
+                                <span>₽</span>
+                            </div>
+                        </div>
+                    </label>
+                `;
+            }).join('');
+        }
+
+        function renderCardServers() {
+            if (!serversList) return;
+
+            const selectedServers = new Set(settings.selected || []);
+            const expenses = settings.expenses || {};
+
+            const rows = servers
+                .filter((srv) => selectedServers.has(srv.server_id))
+                .map((srv) => {
+                    const expense = Number(expenses[srv.server_id] || 0);
+                    const monthly = Math.max(0, (srv.monthly_total || 0) - Math.max(0, expense));
+                    const remaining = Math.max(0, Math.round(monthly * daysLeft / daysInMonth));
+                    return `
+                        <div class="cash-card__server-row">
+                            <span class="cash-card__server-name">${srv.server_name}</span>
+                            <span class="cash-card__server-amount">${formatMoney(monthly)} · ${formatMoney(remaining)}</span>
+                        </div>
+                    `;
+                });
+
+            serversList.innerHTML = rows.join('') || '<div class="cash-card__server-empty">Серверы не выбраны</div>';
+        }
+
+        function updateCard() {
+            const totals = calcTotals(settings);
+            totalLabel.textContent = formatMoney(totals.monthlyTotal);
+            remainingLabel.textContent = `До конца месяца: ${formatMoney(totals.remainingTotal)}`;
+            renderCardServers();
+            if (modalSummary) {
+                modalSummary.textContent = `${formatMoney(totals.monthlyTotal)} · до конца месяца ${formatMoney(totals.remainingTotal)}`;
+            }
+        }
+
+        function attachModalHandlers() {
+            modalContent.addEventListener('change', (event) => {
+                const checkbox = event.target.closest('.cash-modal__checkbox');
+                if (checkbox) {
+                    const srvId = Number(checkbox.dataset.serverId);
+                    const nextSelected = new Set(settings.selected || []);
+                    if (checkbox.checked) {
+                        nextSelected.add(srvId);
+                    } else {
+                        nextSelected.delete(srvId);
+                    }
+                    settings.selected = Array.from(nextSelected);
+                    saveSettings(settings);
+                    updateCard();
+                    return;
+                }
+
+                const expenseInput = event.target.closest('[data-expense-input]');
+                if (expenseInput) {
+                    const srvId = Number(expenseInput.dataset.serverId);
+                    const value = Number(expenseInput.value || 0);
+                    settings.expenses = {
+                        ...settings.expenses,
+                        [srvId]: Math.max(0, value),
+                    };
+                    saveSettings(settings);
+                    updateCard();
+                }
+            });
+        }
+
+        function openModal() {
+            modal.hidden = false;
+            modal.classList.add('is-open');
+        }
+
+        function closeModal() {
+            modal.classList.remove('is-open');
+            modal.hidden = true;
+        }
+
+        cashCard.addEventListener('click', openModal);
+        document.querySelectorAll('[data-role="cash-modal-close"]').forEach((btn) => {
+            btn.addEventListener('click', closeModal);
+        });
+
+        renderModalContent();
+        attachModalHandlers();
+        updateCard();
+    })();
+</script>
 
 <p>Используйте верхнее меню для управления пользователями, серверами и фермами.</p>
 
