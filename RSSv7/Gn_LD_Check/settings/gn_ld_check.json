@@ -4,7 +4,7 @@
   "thread_id": null,
   "threshold_windows": 5,
   "gnbots_shortcut": "C:\\Users\\administrator\\Desktop\\GnBots.lnk",
-  "log_dir": "C:\\Program Files (x86)\\GnBots\\logs",
+  "log_dir": "C:\\Program Files\\GnBots\\logs",
   "days_back_scan": 1,
   "inactivity_minutes": 20,
   "db_path": "data/gn_ld_check.sqlite3",
@@ -21,4 +21,5 @@
     "\\bHandleErrorsAsync: Scanning for error windows\\b",
     "\\bCurrent Error Counters:\\b"
   ]
+
 }
