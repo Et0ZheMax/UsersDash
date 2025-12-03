@@ -77,7 +77,7 @@ DEFAULTS = {
     "gnbots_shortcut": r"C:\Users\administrator\Desktop\GnBots.lnk",
 
     # Логи
-    "log_dir": r"C:\Program Files (x86)\GnBots\logs",
+    "log_dir": r"C:\Program Files\GnBots\logs",
     "days_back_scan": 1,          # сегодня + вчера
     "inactivity_minutes": 20,     # по ЖИВЫМ событиям
 
@@ -785,3 +785,4 @@ if __name__ == "__main__":
         print("Прерывание пользователем.")
     except Exception as e:
         print(f"[FATAL] Необработанная ошибка: {e}")
+
