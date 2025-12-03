@@ -14,6 +14,7 @@ import socket
 import typing as t
 import paramiko
 import requests
+from cryptography.fernet import Fernet
 from io import BytesIO
 from PIL import ImageGrab
 import base64
@@ -88,6 +89,8 @@ TEMPLATES_DIR = os.path.join(SETTINGS_DIR, "templates")   # шаблоны TRAIN
 TEMPLATE_ALIASES_PATH = os.path.join(SETTINGS_DIR, "template_aliases.json")
 SCHEMA_CACHE_PATH = os.path.join(SETTINGS_DIR, "schema_cache.json")  # авто-накапливаемая «схема»
 TEMPLATE_GAPS_CACHE_PATH = os.path.join(SETTINGS_DIR, "template_schema_gaps.json")
+SERVER_LINKS_PATH = os.path.join(SETTINGS_DIR, "server_links.enc")
+SERVER_LINKS_KEY_PATH = os.path.join(SETTINGS_DIR, "server_links.key")
 
 os.makedirs(SETTINGS_DIR, exist_ok=True)
 os.makedirs(PROFILES_DIR, exist_ok=True)
@@ -780,40 +783,95 @@ LOG_PATTERN = re.compile(
 # Список серверов (с URL) для виджета
 ############################################
 
-SERVERS = [
-    {
-      "name": "208",
-      "ip": "185.186.143.208",
-      "user": "Administrator",
-      "password": "01091945kottT!",
-      "url": "https://hotly-large-coral.cloudpub.ru/",
-      "start_path": r"C:\Users\Administrator\Desktop\GnBots.lnk",  # WMI     
-    },
-    {
-      "name": "F99",
-      "ip": "192.168.31.234",
-      "user": "Administrator",
-      "password": "01091945kottT!",
-      "url": "https://tastelessly-quickened-chub.cloudpub.ru/",
-      "start_path": r"C:\Users\Administrator\Desktop\GnBots.lnk",  # SSH
-    },
-    {
-      "name": "R9",
-      "ip": "192.168.31.46",
-      "user": "administrator",
-      "password": "01091945kottT!",
-      "url": "https://creakily-big-spaniel.cloudpub.ru/",
-      "start_path": r"C:\Users\administrator\Desktop\GnBots.lnk",  # SSH
-    },
-    {
-      "name": "RSS",
-      "ip": "192.168.31.9",
-      "user": "Administrator",
-      "password": "01091945koT",
-      "url": "https://fiendishly-awake-stickleback.cloudpub.ru/",
-      "start_path": r"C:\Users\Administrator\Desktop\GnBots.lnk",  # SSH
-    }
+DEFAULT_SERVER_LINKS = [
+    {"name": "208", "url": "https://hotly-large-coral.cloudpub.ru/"},
+    {"name": "F99", "url": "https://tastelessly-quickened-chub.cloudpub.ru/"},
+    {"name": "R9", "url": "https://creakily-big-spaniel.cloudpub.ru/"},
+    {"name": "RSS", "url": "https://fiendishly-awake-stickleback.cloudpub.ru/"},
 ]
+
+SERVERS: list[dict[str, str]] = []
+
+
+def _normalize_server_item(item: dict) -> dict[str, str] | None:
+    """Оставляем только имя/URL и отсекаем пустые строки."""
+
+    if not isinstance(item, dict):
+        return None
+    name = str(item.get("name", "")).strip()
+    url = str(item.get("url", "")).strip()
+    if not name or not url:
+        return None
+    return {"name": name, "url": url.rstrip("/") + "/"}
+
+
+def _get_server_links_fernet() -> Fernet:
+    key_env = (os.getenv("SERVER_LINKS_KEY") or "").strip()
+    if key_env:
+        key = key_env.encode()
+    elif os.path.exists(SERVER_LINKS_KEY_PATH):
+        with open(SERVER_LINKS_KEY_PATH, "rb") as fh:
+            key = fh.read().strip()
+    else:
+        key = Fernet.generate_key()
+        with open(SERVER_LINKS_KEY_PATH, "wb") as fh:
+            fh.write(key)
+    return Fernet(key)
+
+
+def load_server_links() -> list[dict[str, str]]:
+    """Достаём список ссылок из зашифрованного файла."""
+
+    fernet = _get_server_links_fernet()
+    if not os.path.exists(SERVER_LINKS_PATH):
+        return deepcopy(DEFAULT_SERVER_LINKS)
+
+    try:
+        with open(SERVER_LINKS_PATH, "rb") as fh:
+            payload = fh.read()
+        decrypted = fernet.decrypt(payload)
+        data = json.loads(decrypted.decode("utf-8"))
+        cleaned = []
+        for item in data if isinstance(data, list) else []:
+            normalized = _normalize_server_item(item)
+            if normalized:
+                cleaned.append(normalized)
+        return cleaned or deepcopy(DEFAULT_SERVER_LINKS)
+    except Exception as exc:
+        print(f"[server_links] Ошибка чтения: {exc}")
+        return deepcopy(DEFAULT_SERVER_LINKS)
+
+
+def save_server_links(servers: list[dict]) -> list[dict[str, str]]:
+    """Сохраняем список ссылок в зашифрованном виде."""
+
+    cleaned: list[dict[str, str]] = []
+    for item in servers if isinstance(servers, list) else []:
+        normalized = _normalize_server_item(item)
+        if normalized:
+            cleaned.append(normalized)
+
+    cleaned = cleaned or deepcopy(DEFAULT_SERVER_LINKS)
+
+    fernet = _get_server_links_fernet()
+    try:
+        token = fernet.encrypt(json.dumps(cleaned, ensure_ascii=False).encode("utf-8"))
+        with open(SERVER_LINKS_PATH, "wb") as fh:
+            fh.write(token)
+    except Exception as exc:
+        print(f"[server_links] Ошибка записи: {exc}")
+
+    return cleaned
+
+
+def get_configured_servers() -> list[dict[str, str]]:
+    """Возвращает актуальный список серверов, обновляя кеш при необходимости."""
+
+    global SERVERS
+    if not SERVERS:
+        SERVERS = load_server_links()
+    return SERVERS
+
 
 
 ##############################
@@ -1971,242 +2029,117 @@ def do_fix_logic(acc_id: str,
 # SERVER STATUS (детальная)
 ###########################################
 
-def check_all_servers():
-    """
-    Возвращаем словарь:
-    {
-      "208": {
-        "pingOk": bool,
-        "sshOk": None/False/True,
-        "wmiOk": None/False/True,
-        "gnOk": bool,
-        "dnOk": bool,
-        "url": "...",
-      },
-      ...
+LOCAL_STATUS_LOCK = threading.Lock()
+LOCAL_STATUS_CACHE: dict[str, t.Any] = {}
+
+
+def check_local_processes() -> tuple[bool, bool, int]:
+    """Проверяем локальные процессы GnBots и dnplayer без SSH/WMI."""
+
+    gn, dn, dn_count = False, False, 0
+    for proc in psutil.process_iter(['name']):
+        name = (proc.info.get('name') or '').lower()
+        if 'gnbots.exe' in name:
+            gn = True
+        if 'dnplayer.exe' in name:
+            dn = True
+            dn_count += 1
+    return gn, dn, dn_count
+
+
+def collect_local_status() -> dict[str, t.Any]:
+    """Собираем срез по текущей машине."""
+
+    gn, dn, dn_count = check_local_processes()
+    return {
+        'server': SERVER_NAME,
+        'pingOk': True,
+        'gnOk': gn,
+        'dnOk': dn,
+        'dnCount': dn_count,
+        'cpu': psutil.cpu_percent(interval=0.5),
+        'ram': psutil.virtual_memory().percent,
+        'checked_at': datetime.utcnow().isoformat() + 'Z',
     }
-    """
-    results={}
-    for srv in SERVERS:
-        detail = check_server_details(srv)
-        results[srv["name"]] = detail
+
+
+def get_local_status(force: bool = False) -> dict[str, t.Any]:
+    """Достаём кешированный статус (обновляется раз в минуту)."""
+
+    with LOCAL_STATUS_LOCK:
+        ts = LOCAL_STATUS_CACHE.get('ts')
+        needs_refresh = force or not LOCAL_STATUS_CACHE or not ts or (time.time() - ts > 55)
+        if needs_refresh:
+            LOCAL_STATUS_CACHE['data'] = collect_local_status()
+            LOCAL_STATUS_CACHE['ts'] = time.time()
+        return deepcopy(LOCAL_STATUS_CACHE.get('data', {}))
+
+
+def _server_status_updater(interval: int = 60):
+    while True:
+        try:
+            get_local_status(force=True)
+        except Exception as exc:
+            print(f"[server_status] Ошибка обновления: {exc}")
+        time.sleep(interval)
+
+
+def start_server_status_thread():
+    th = threading.Thread(target=_server_status_updater, args=(60,), daemon=True)
+    th.start()
+
+
+def _build_self_status_url(base_url: str) -> str:
+    base = (base_url or '').rstrip('/')
+    return base + '/api/server/self_status'
+
+
+def fetch_remote_server(server: dict) -> dict[str, t.Any]:
+    """Запрашиваем self_status у соседа."""
+
+    url = _build_self_status_url(server.get('url', ''))
+    try:
+        resp = requests.get(url, timeout=8)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, dict):
+            data.setdefault('server', server.get('name'))
+            return data
+    except Exception as exc:
+        return {
+            'server': server.get('name'),
+            'error': str(exc),
+            'pingOk': False,
+            'gnOk': False,
+            'dnOk': False,
+        }
+    return {'server': server.get('name'), 'pingOk': False, 'gnOk': False, 'dnOk': False}
+
+
+def check_all_servers():
+    """Возвращаем статусы по всем серверам на основе self-status."""
+
+    results = {}
+    for srv in get_configured_servers():
+        if srv.get('name') == SERVER_NAME:
+            results[srv['name']] = get_local_status()
+        else:
+            results[srv['name']] = fetch_remote_server(srv)
     return results
 
 
-
-def check_server_details(server):
-    ip = server["ip"]
-    out = {
-        "pingOk": False, "sshOk": None, "wmiOk": None,
-        "gnOk": False,  "dnOk": False,  "dnCount": None,
-        "cpu": None,    "ram": None,    "url": server["url"]
-    }
-
-    out["pingOk"] = ping_server(ip)
-
-    # ───── ветка 208 / WMI ─────
-    if server["name"] == "208":
-        if out["pingOk"]:
-            gn_ok, dn_ok, wmi_ok = check_processes_wmi_identical(server)
-            out.update({"wmiOk": wmi_ok, "gnOk": gn_ok, "dnOk": dn_ok})
-            if wmi_ok:
-                out["dnCount"] = count_dnplayer_remote_wmi(server)   # ← вместо local
-                out["cpu"]     = psutil.cpu_percent(interval=0.5)
-                out["ram"]     = psutil.virtual_memory().percent
-
-    # ───── все остальные / SSH ─────
-    else:
-        if out["pingOk"]:
-            out["sshOk"] = check_ssh_port(ip)
-            if out["sshOk"]:
-                gn_ok, dn_ok = check_processes_ssh(server)
-                out.update({"gnOk": gn_ok, "dnOk": dn_ok})
-                out["dnCount"] = count_dnplayer_remote_ssh(server)
-
-    return out
-
-
-
-# в самом верху, после import’ов
-
-def count_dnplayer_local():
-    """Считает окна dnplayer.exe на локальной машине."""
-    return sum(
-        1
-        for p in psutil.process_iter(['name'])
-        if 'dnplayer.exe' in (p.info['name'] or '').lower()
-    )
-
-def count_dnplayer_remote_ssh(server):
-    """Считает окна dnplayer.exe через SSH на удалённом сервере."""
-    try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(
-            server['ip'],
-            username=server['user'],
-            password=server['password'],
-            timeout=5
-        )
-        stdin, stdout, _ = ssh.exec_command(
-            'tasklist /FI "IMAGENAME eq dnplayer.exe"'
-        )
-        data = stdout.read().decode('cp866', 'ignore')
-        ssh.close()
-        return data.lower().count('dnplayer.exe')
-    except Exception:
-        return None
-
-
-# ───────── helpers ─────────
-def count_dnplayer_remote_wmi(server: dict) -> int | None:
-    """
-    Возвращает количество процессов dnplayer.exe на удалённом сервере по WMI.
-    Если подключиться не удалось – None.
-    """
-    import pythoncom, wmi
-    pythoncom.CoInitialize()
-    try:
-        conn = wmi.WMI(server["ip"],
-                       user=server["user"],
-                       password=server["password"])
-        return sum(1 for _ in conn.Win32_Process(Name='dnplayer.exe'))
-    except Exception:
-        return None
-    finally:
-        pythoncom.CoUninitialize()
-
-
-def check_processes_wmi_identical(server):
-    """
-    Абсолютно та же логика, что в vrServerStats.py => check_processes_wmi
-    Возвращает (gn_ok, dn_ok, wmi_ok).
-    """
-    import wmi
-    try:
-        if DEBUG:
-            print(f"[WMI] Подключаемся к {server['name']} ({server['ip']})...")
-        conn = wmi.WMI(server["ip"], user=server["user"], password=server["password"])
-        if DEBUG:
-            print(f"[WMI] Успешно! Смотрим процессы Win32_Process...")
-        processes = [p.Name for p in conn.Win32_Process()]
-        if DEBUG:
-            print(f"[WMI] {server['name']} => Количество процессов: {len(processes)} (вывожу до 10: {processes[:10]})")
-        gn_ok = ("GnBots.exe" in processes)
-        dn_ok = ("dnplayer.exe" in processes)
-        return gn_ok, dn_ok, True
-    except Exception as e:
-        if DEBUG:
-            print(f"[WMI] Ошибка при подключении/чтении {server['name']}: {e}")
-        return (False, False, False)
-
-def check_processes_ssh(server):
-    """
-    (gnOk, dnOk) через SSH 'tasklist'
-    """
-    import paramiko
-    gn, dn = False, False
-    try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(server["ip"], username=server["user"], password=server["password"], timeout=5)
-        stdin, stdout, stderr = ssh.exec_command("tasklist")
-        data = stdout.read().decode("cp866","ignore")
-        ssh.close()
-        gn = ("GnBots.exe" in data)
-        dn = ("dnplayer.exe" in data)
-    except Exception as e:
-        if DEBUG:
-            print(f"[SSH] Ошибка: {e}")
-    return gn, dn
-
-def ping_server(ip: str, *, timeout: float = 0.6) -> bool:          # ← NEW
-    """
-    Один ICMP-эхо-запрос через icmplib (~70 мс).
-    Без прав raw-socket откатываемся к штатному ping.
-    """
-    try:
-        reply = icmp_ping(ip, count=1, timeout=timeout, privileged=False)
-        return reply.is_alive
-    except Exception:
-        param = "-n 1" if os.name=="nt" else "-c 1"
-        cmd   = f"ping {param} {ip}"
-        rc    = os.system(cmd + (" > nul 2>&1" if os.name=="nt" else " > /dev/null 2>&1"))
-        return rc == 0
-
-def check_ssh_port(ip):
-    s= socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(2)
-    try:
-        r= s.connect_ex((ip,22))
-    finally:
-        s.close()
-    return (r==0)
-
-def check_processes_wmi_identical(server):
-    # Выполняем COM-инициализацию в начале
-    pythoncom.CoInitialize()
-
-    try:
-        if DEBUG:
-            print(f"[WMI] Подключаемся к {server['name']} ({server['ip']})...")
-
-        conn = wmi.WMI(server["ip"], user=server["user"], password=server["password"])
-        processes = [p.Name for p in conn.Win32_Process()]
-
-        if DEBUG:
-            print(f"[WMI] {server['name']} => {len(processes)} процессов (первые 10: {processes[:10]})")
-
-        gn_ok = ("GnBots.exe" in processes)
-        dn_ok = ("dnplayer.exe" in processes)
-        return gn_ok, dn_ok, True
-
-    except Exception as e:
-        if DEBUG:
-            print(f"[WMI] Ошибка при подключении/чтении {server['name']}: {e}")
-        return (False, False, False)
-
-    finally:
-        # Завершаем COM
-        pythoncom.CoUninitialize()
-
-def check_gn_dn_wmi(server):
-    """
-    Возвращает (gnOk, dnOk)
-    """
-    try:
-        c= wmi.WMI(server["ip"], user=server["user"], password=server["password"])
-        procs = [p.Name for p in c.Win32_Process()]
-        gn= ("GnBots.exe" in procs)
-        dn= ("dnplayer.exe" in procs)
-        return (gn, dn)
-    except:
-        return (False, False)
-
-def check_gn_dn_ssh(server):
-    """
-    Возвращает (gnOk, dnOk)
-    """
-    try:
-        ssh= paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(server["ip"], username=server["user"], password=server["password"], timeout=5)
-        stdin, stdout, stderr= ssh.exec_command("tasklist")
-        data= stdout.read().decode("cp866","ignore")
-        ssh.close()
-        gn= ("GnBots.exe" in data)
-        dn= ("dnplayer.exe" in data)
-        return (gn, dn)
-    except:
-        return (False, False)
+@app.route("/api/server/self_status")
+def api_server_self_status():
+    return jsonify(get_local_status())
 
 
 @app.route("/api/serverStatus")
 def api_serverStatus():
-    results = {}
-    for srv in SERVERS:
-        results[srv["name"]] = check_server_details(srv)
-    return jsonify(results)
+    data = check_all_servers()
+    return jsonify({'servers': get_configured_servers(), 'status': data})
+
+# Запускаем фоновые замеры self_status
+start_server_status_thread()
 
 # ───── Вставьте после @app.route("/api/serverStatus") ─────
 
@@ -3992,20 +3925,29 @@ def api_crashed_emu():
 
 @app.route("/api/paths", methods=["GET"])
 def api_get_paths():
-    # просто отдаем содержимое config.json
-    return jsonify(CONFIG)
+    return jsonify({
+        "paths": CONFIG,
+        "servers": get_configured_servers(),
+    })
 
 @app.route("/api/paths", methods=["PUT"])
 def api_put_paths():
-    data = request.get_json()
-    # сохраняем только ключи, которые уже есть в config.json
+    data = request.get_json() or {}
+    paths = data.get("paths", {}) or {}
+    servers = data.get("servers", []) or []
+
     for k in list(CONFIG):
-        if k in data and isinstance(data[k], str):
-            CONFIG[k] = data[k]
-    # перезаписываем файл
+        if k in paths and isinstance(paths[k], str):
+            CONFIG[k] = paths[k]
+
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(CONFIG, f, ensure_ascii=False, indent=2)
-    return jsonify({"status": "ok", "paths": CONFIG})
+
+    # Обновляем адреса серверов (шифруем перед записью)
+    global SERVERS
+    SERVERS = save_server_links(servers)
+
+    return jsonify({"status": "ok", "paths": CONFIG, "servers": SERVERS})
 
 # === I18N endpoints (Flask) =======================================
 from flask import Blueprint, request, jsonify
@@ -4245,20 +4187,18 @@ def api_reboot():
 @app.route("/api/serverStop", methods=["POST"])
 def api_server_stop():
     name = request.args.get("name", "")
-    server = next((s for s in SERVERS if s["name"] == name), None)
+    server = next((s for s in get_configured_servers() if s["name"] == name), None)
     if not server:
         return jsonify({"error": "server not found"}), 404
-    logs = stop_remote_ssh(server)
-    return jsonify({"status": "ok", "logs": logs})
+    return jsonify({"error": "SSH управление отключено"}), 400
 
 @app.route("/api/serverReboot", methods=["POST"])
 def api_server_reboot():
     name = request.args.get("name", "")
-    server = next((s for s in SERVERS if s["name"] == name), None)
+    server = next((s for s in get_configured_servers() if s["name"] == name), None)
     if not server:
         return jsonify({"error": "server not found"}), 404
-    logs = reboot_remote_ssh(server)
-    return jsonify({"status": "ok", "logs": logs})
+    return jsonify({"error": "SSH управление отключено"}), 400
 
 @app.route("/api/rs_cleanup", methods=["POST"])
 def api_rs_cleanup():

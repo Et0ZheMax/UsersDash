@@ -245,7 +245,8 @@ def collect_one(srv: ServerCfg) -> Dict[str, Any]:
         return out
 
     # ================ API block ================
-    st_raw = (http_json(f"{srv.url}/api/serverStatus") or {}).get(srv.name, {})
+    st_resp = http_json(f"{srv.url}/api/serverStatus") or {}
+    st_raw = st_resp.get("status", st_resp).get(srv.name, {})
     out["gnOk"]    = st_raw.get("gnOk") or st_raw.get("gn") or st_raw.get("gn_running") or True
     out["dnOk"]    = st_raw.get("dnOk") or st_raw.get("dn") or st_raw.get("dn_running") or True
     # --- dnCount (окна LDPlayer) -----------------------------------------

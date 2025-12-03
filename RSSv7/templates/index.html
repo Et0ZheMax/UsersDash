@@ -408,6 +408,8 @@
       margin: 3px 0;
       font-size: 13px;
     }
+    .serverRow { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .serverInput { flex: 1; padding: 6px; }
     .serverLine a {
       color: #0070c9;
       text-decoration: none;
@@ -757,13 +759,8 @@
 
   </style>
   <script>
-    // Статичный список серверов
-    const SERVERS = [
-      { name: "208", url: "https://hotly-large-coral.cloudpub.ru/" },
-      { name: "F99", url: "https://tastelessly-quickened-chub.cloudpub.ru/" },
-      { name: "R9", url: "https://creakily-big-spaniel.cloudpub.ru/" },
-      { name: "RSS", url: "https://fiendishly-awake-stickleback.cloudpub.ru/" }
-    ];
+    // Динамический список серверов (загружается из настроек)
+    let SERVERS = [];
 
     // Глобальные переменные
     let allAccounts = [];
@@ -919,12 +916,56 @@
       }
     }
 
+    function buildServerRow(item) {
+      const row = document.createElement("div");
+      row.className = "serverRow";
+
+      const name = document.createElement("input");
+      name.type = "text";
+      name.placeholder = "Имя";
+      name.value = item.name || "";
+      name.className = "serverInput";
+
+      const url = document.createElement("input");
+      url.type = "text";
+      url.placeholder = "URL";
+      url.value = item.url || "";
+      url.className = "serverInput";
+
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "btn";
+      rm.textContent = "Удалить";
+      rm.onclick = () => row.remove();
+
+      row.appendChild(name);
+      row.appendChild(url);
+      row.appendChild(rm);
+      return row;
+    }
+
+    function renderServerRows(list) {
+      const wrap = document.getElementById("serverLinks");
+      if (!wrap) return;
+      wrap.innerHTML = "";
+      const items = (Array.isArray(list) && list.length) ? list : [{ name: "", url: "" }];
+      items.forEach(item => wrap.appendChild(buildServerRow(item)));
+    }
+
+    function addServerRow() {
+      const wrap = document.getElementById("serverLinks");
+      if (!wrap) return;
+      wrap.appendChild(buildServerRow({ name: "", url: "" }));
+    }
+
     // Показ модального окна путей
     async function showPaths() {
       try {
         const resp = await fetch("/api/paths");
         if (!resp.ok) throw new Error("Ошибка загрузки путей");
-        const paths = await resp.json();
+        const payload = await resp.json();
+        const paths = payload.paths || payload || {};
+        const servers = payload.servers || [];
 
         const form = document.getElementById("pathsForm");
         form.innerHTML = "";
@@ -949,6 +990,8 @@
           form.appendChild(row);
         });
 
+        renderServerRows(servers);
+
         document.getElementById("pathsOverlay").style.display = "block";
         document.getElementById("pathsModal").style.display = "block";
       } catch (e) {
@@ -968,15 +1011,30 @@
       const data = {};
       new FormData(form).forEach((v, k) => data[k] = v);
 
+      const servers = [];
+      document.querySelectorAll('#serverLinks .serverRow').forEach(row => {
+        const [nameInp, urlInp] = row.querySelectorAll('.serverInput');
+        const name = (nameInp?.value || '').trim();
+        const url = (urlInp?.value || '').trim();
+        if (name && url) {
+          servers.push({ name, url });
+        }
+      });
+
       try {
         const resp = await fetch("/api/paths", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(data)
+          body: JSON.stringify({ paths: data, servers })
         });
         const result = await resp.json();
         if (result.status === "ok") {
           showToast("Пути сохранены!");
+          if (Array.isArray(result.servers)) {
+            SERVERS = result.servers;
+            renderServerSkeleton();
+            await updateServerStats();
+          }
           closePaths();
         } else {
           throw new Error("Ошибка сохранения путей");
@@ -1375,6 +1433,11 @@
     function renderServerSkeleton() {
       const box = document.getElementById("serverMiniBox");
       box.innerHTML = "<h4>Серверы</h4>";
+      if (!SERVERS.length) {
+        box.innerHTML += "<div class=\"serverLine\">Добавьте адреса серверов в разделе «Пути».</div>";
+        return;
+      }
+
       SERVERS.forEach(srv => {
         box.innerHTML += `
           <div class="serverLine">
@@ -1395,7 +1458,11 @@
         const resp = await fetch("/api/serverStatus");
         if (!resp.ok) throw new Error("Ошибка загрузки статуса серверов");
         const data = await resp.json();
-        renderServerMiniBox(data);
+        if (Array.isArray(data.servers)) {
+          SERVERS = data.servers;
+          renderServerSkeleton();
+        }
+        renderServerMiniBox(SERVERS, data.status || {});
         msgEl.textContent = "OK";
         setTimeout(() => msgEl.textContent = "", 3000);
       } catch (e) {
@@ -1407,23 +1474,29 @@
     }
 
     // Рендеринг блока серверов
-    function renderServerMiniBox(data) {
+    function renderServerMiniBox(servers, data) {
       const box = document.getElementById("serverMiniBox");
       box.innerHTML = "<h4>Серверы</h4>";
-      SERVERS.forEach(srv => {
+
+      if (!servers.length) {
+        box.innerHTML += "<div class=\"serverLine\">Список серверов пуст.</div>";
+        return;
+      }
+
+      servers.forEach(srv => {
         const st = data[srv.name] || {};
         const pingTag = st.pingOk ? `<span class="okTag">ping</span>` : `<span class="failTag">ping</span>`;
-        const sshTag = st.sshOk != null ? (st.sshOk ? `<span class="okTag">ssh</span>` : `<span class="failTag">ssh</span>`) : "";
-        const wmiTag = st.wmiOk != null ? (st.wmiOk ? `<span class="okTag">wmi</span>` : `<span class="failTag">wmi</span>`) : "";
         const gnTag = st.gnOk ? `<span class="okTag">gn</span>` : `<span class="failTag">gn</span>`;
         const dnCnt = (st.dnCount !== undefined ? st.dnCount : (st.dnOk ? 1 : 0));
         const dnTag = st.dnOk
           ? `<span class="okTag">dn</span><span class="procCount">(${dnCnt})</span>`
           : `<span class="failTag">dn</span><span class="procCount">(${dnCnt})</span>`;
+        const errTag = st.error ? `<span class="failTag">err</span>` : "";
+
         box.innerHTML += `
           <div class="serverLine">
             <a href="${srv.url}" target="_blank" rel="noopener noreferrer">${srv.name}</a>
-            ${pingTag} ${sshTag} ${wmiTag} ${gnTag} ${dnTag}
+            ${errTag} ${pingTag} ${gnTag} ${dnTag}
           </div>
         `;
       });
@@ -2567,6 +2640,9 @@
     <div id="pathsModal" class="modalBox">
       <h2>Настройка путей</h2>
       <form id="pathsForm"></form>
+      <h3>Список серверов</h3>
+      <div id="serverLinks"></div>
+      <button class="btn" type="button" onclick="addServerRow()">Добавить сервер</button>
       <div style="margin-top:10px;">
         <button class="btn" onclick="savePaths()">Сохранить</button>
         <button class="btn" onclick="closePaths()">Закрыть</button>

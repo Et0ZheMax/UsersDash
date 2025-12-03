@@ -1,7 +1,7 @@
 # services/remote_api.py
 # Работа с удалённым RssCounterWebV7:
 # - /api/resources        — ресурсы ферм
-# - /api/serverStatus     — health-check (для админского лога)
+# - /api/server/self_status — self-health без SSH
 # - /api/manage/account/... — настройки шагов (manage)
 
 import json
@@ -768,3 +768,23 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
     }
 
     return payload, ""
+
+
+def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Запрашивает self_status у RssCounter (/api/server/self_status).
+    Возвращает (payload, error).
+    """
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return None, "api_base_url не задан"
+
+    url = f"{base}/server/self_status"
+    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    if data is None:
+        return None, f"Нет ответа от {url}"
+    if not isinstance(data, dict):
+        return None, f"Некорректный ответ от {url}"
+
+    return data, ""
