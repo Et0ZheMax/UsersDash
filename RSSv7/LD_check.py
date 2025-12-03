@@ -39,7 +39,7 @@ if sys.platform == "win32" and not is_admin():
 # Пути/конфиги (оставил ваши дефолты)
 # ─────────────────────────────────────────────────────────────
 config_folder = r'C:\LDPlayer\LDPlayer9\vms\config'
-profile_file  = r'C:/Program Files (x86)/GnBots/profiles/FRESH_NOX.json'
+profile_file  = r'C:/Program Files/GnBots/profiles/FRESH_NOX.json'
 crashed_file  = r'C:\LDPlayer\ldChecker\crashed.json'  # для UI (цвет кнопок)
 
 # Telegram токены (можно через ENV TG_TOKEN / TG_CHAT)
@@ -307,3 +307,4 @@ async def check_all_configs_and_notify():
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     asyncio.run(check_all_configs_and_notify())
+
