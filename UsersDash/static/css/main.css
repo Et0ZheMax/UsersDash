@@ -526,6 +526,33 @@ h1 {
     font-size: 0.82rem;
 }
 
+.kpi-card--clickable {
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.kpi-card--clickable:hover,
+.kpi-card--clickable:focus-visible {
+    border-color: #2b3263;
+    transform: translateY(-1px);
+}
+
+.cash-card__value {
+    font-size: 1.35rem;
+    font-weight: 700;
+    background: linear-gradient(120deg, #f7e8a4, #f2c14f, #f7e8a4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: #f2c14f;
+}
+
+.cash-card__meta,
+.cash-card__note {
+    color: #9ca3af;
+    font-size: 0.95rem;
+}
+
 .kpi-info-card {
     flex: 1 1 260px;
     max-width: 420px;
