@@ -473,6 +473,10 @@ h1 {
 .cash-card__value {
     font-size: 1.35rem;
     font-weight: 700;
+    background: linear-gradient(120deg, #f7e8a4, #f2c14f, #f7e8a4);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: #f2c14f;
 }
 
 .cash-card__meta,
@@ -2597,6 +2601,10 @@ h1 {
   justify-content: center;
   z-index: 500;
   padding: 16px;
+}
+
+.cash-modal[hidden] {
+  display: none !important;
 }
 
 .cash-modal.is-open {
