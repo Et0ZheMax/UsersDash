@@ -5,9 +5,9 @@ import json
 from datetime import datetime
 
 # --- Параметры ---
-LOG_FOLDER       = r"C:\Program Files (x86)\GnBots\logs"            # основная папка с логами
-EXTRA_LOG_FOLDER = r"C:\Program Files (x86)\GnBots\logs"                        # если не нужна — оставьте "" или None
-PROFILE_FILE     = r"C:/Program Files (x86)/GnBots/profiles/FRESH_NOX.json"
+LOG_FOLDER       = r"C:\Program Files\GnBots\logs"            # основная папка с логами
+EXTRA_LOG_FOLDER = r"C:\Program Files\GnBots\logs"                        # если не нужна — оставьте "" или None
+PROFILE_FILE     = r"C:/Program Files/GnBots/profiles/FRESH_NOX.json"
 OUTPUT_FILE      = r"C:\LDPlayer\ldChecker\list_ids.json"
 
 # регулярка для поиска "|account_id| … List IDs: … : list_id"
@@ -83,3 +83,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
