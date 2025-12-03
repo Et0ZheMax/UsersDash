@@ -130,6 +130,10 @@ GNBOTS_SHORTCUT = CONFIG.get("GNBOTS_SHORTCUT", "")
 GNBOTS_PROFILES_PATH = PROFILE_PATH
 SCHEMA_TTL_SECONDS   = 600  # 10 минут
 SERVER_NAME     = os.getenv("SERVER_NAME", CONFIG.get("SERVER_NAME", socket.gethostname()))
+LD_PROBLEMS_SUMMARY_PATH = os.getenv(
+    "LD_PROBLEMS_SUMMARY_PATH",
+    CONFIG.get("LD_PROBLEMS_SUMMARY_PATH", r"C:\\LDPlayer\\ldChecker\\problems_summary.json"),
+)
 
 # 3) БД
 RESOURCES_DB   = os.path.join(BASE_DIR, "resources_web.db")
@@ -4318,6 +4322,25 @@ def api_copy_settings():
 
     return jsonify({"status":"ok"})
 
+
+@app.route("/api/problems/summary")
+def api_problems_summary():
+    """Возвращает компактную сводку ошибок из LD_problems."""
+
+    data = _safe_json_load(LD_PROBLEMS_SUMMARY_PATH) or {}
+    if not data:
+        return jsonify({
+            "server": SERVER_NAME,
+            "generated_at": None,
+            "total_accounts": 0,
+            "total_problems": 0,
+            "accounts": [],
+        })
+
+    if not data.get("server"):
+        data["server"] = SERVER_NAME
+
+    return jsonify(data)
 
 
 @app.route("/api/logstatus")

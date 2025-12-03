@@ -18,6 +18,7 @@ import asyncio
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
 import re
+import socket
 import ctypes
 import sys
 from telegram import Bot
@@ -31,7 +32,18 @@ if sys.platform == "win32":
 # ─────────────────────── ⚙️  Настройки ────────────────────────────
 LOG_FOLDER      = r"C:\Program Files (x86)\GnBots\logs"
 PROBLEMS_FILE   = r"C:\LDPlayer\ldChecker\problems.json"
+SUMMARY_FILE    = os.getenv("LDP_SUMMARY_FILE", r"C:\LDPlayer\ldChecker\problems_summary.json")
 PROFILE_FILE    = r'C:/Program Files (x86)/GnBots/profiles/FRESH_NOX.json'
+SERVER_NAME     = os.getenv("SERVER_NAME") or socket.gethostname()
+
+PROBLEM_LABELS = {
+    "login": "Login🔑",
+    "update": "UPD🔄",
+    "restart": "Restart X4❌",
+    "crash": "Crash💥",
+    "idle": "Idle⌛",
+    "other": "Other⚠️",
+}
 
 telegram_token  = os.getenv("LDP_TG_TOKEN", "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc")
 chat_id         = "275483461"
@@ -148,6 +160,71 @@ def prettify(raw: str, account: str) -> str:
         dt = "-- --:--"
     desc = raw.rsplit("|", 1)[-1].strip()
     return f"🔹 {account}: {dt} {desc}"
+
+
+def _classify_problem(raw_line: str) -> tuple[str, str]:
+    """Возвращает (ключ, компактная метка) для строки ошибки."""
+
+    lower = raw_line.lower()
+
+    if "account expired" in lower or "write gmail" in lower or "no account selected" in lower:
+        return "login", PROBLEM_LABELS["login"]
+    if "update the game" in lower:
+        return "update", PROBLEM_LABELS["update"]
+    if "booting timeout" in lower:
+        return "restart", PROBLEM_LABELS["restart"]
+    if "crash" in lower:
+        return "crash", PROBLEM_LABELS["crash"]
+    if "no actions" in lower:
+        return "idle", PROBLEM_LABELS["idle"]
+
+    return "other", PROBLEM_LABELS["other"]
+
+
+def _format_summary(counter: Counter) -> str:
+    """Собирает компактную строку вида "Login🔑(2) + Restart X4❌"."""
+
+    parts = []
+    for key, count in sorted(counter.items()):
+        label = PROBLEM_LABELS.get(key, PROBLEM_LABELS["other"])
+        suffix = f"({count})" if count > 1 else ""
+        parts.append(f"{label}{suffix}")
+    return " + ".join(parts)
+
+
+def _save_summary(per_account: dict[str, Counter], total_problems: int) -> None:
+    """Сохраняет агрегированную статистику в JSON для веб-интерфейса."""
+
+    accounts: list[dict] = []
+    for acc, counter in sorted(per_account.items()):
+        problems = []
+        for key, cnt in sorted(counter.items()):
+            _, label = _classify_problem(key)
+            problems.append({"kind": key, "label": label, "count": cnt})
+        summary = _format_summary(counter)
+        accounts.append(
+            {
+                "nickname": acc,
+                "summary": summary,
+                "total": sum(counter.values()),
+                "problems": problems,
+            }
+        )
+
+    payload = {
+        "server": SERVER_NAME,
+        "generated_at": datetime.now().isoformat(),
+        "total_accounts": len(accounts),
+        "total_problems": total_problems,
+        "accounts": accounts,
+    }
+
+    try:
+        os.makedirs(os.path.dirname(SUMMARY_FILE) or ".", exist_ok=True)
+        with open(SUMMARY_FILE, "w", encoding="utf-8") as out:
+            json.dump(payload, out, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f"⚠️  Не удалось сохранить сводку наблюдения: {exc}")
 
 def deduplicate(recs: list[dict]) -> list[dict]:
     seen, out = set(), []
@@ -266,6 +343,7 @@ async def check_logs_and_notify() -> None:
     new = [r for r in deduplicate(found) if (r["account"], r["file"], r["line"]) not in old_keys]
 
     if not new:
+        _save_summary({}, 0)
         print("Новых проблем нет.")
         return
 
@@ -275,8 +353,20 @@ async def check_logs_and_notify() -> None:
     for part in split_into_messages(details):
         await safe_send(bot, "F99🚨 Найдены проблемы:\n" + part)
 
-    summary = "\n".join(f"{a}: {c}" for a, c in counts.items())
-    await safe_send(bot, f"F99📊 Сводка: {len(counts)} аккаунтов, {len(new)} проблем\n{summary}")
+    per_account: dict[str, Counter] = defaultdict(Counter)
+    for rec in new:
+        kind, _ = _classify_problem(rec["line"])
+        per_account[rec["account"]][kind] += 1
+
+    summary_lines = []
+    for acc, counter in sorted(per_account.items()):
+        summary_lines.append(f"{acc}: {_format_summary(counter)}")
+
+    header = f"{len(counts)} аккаунтов, {len(new)} проблем"
+    summary_txt = "\n".join(summary_lines) if summary_lines else "—"
+    await safe_send(bot, f"F99📊 Сводка: {header}\n{summary_txt}")
+
+    _save_summary(per_account, len(new))
 
     try:
         with open(PROBLEMS_FILE, "w", encoding="utf-8") as f:
