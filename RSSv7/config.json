@@ -1,10 +1,10 @@
 {
-  "LOGS_DIR": "C:\\Program Files (x86)\\GnBots\\logs",
-  "PROFILE_PATH": "C:\\Program Files (x86)\\GnBots\\profiles\\LDPplayer.json",
+  "LOGS_DIR": "C:\\Program Files\\GnBots\\logs",
+  "PROFILE_PATH": "C:\\Program Files\\GnBots\\profiles\\LDPplayer.json",
   "SRC_VMS": "F:\\BACKUP\\FARM99\\LDPlayer9\\vms",
   "DST_VMS": "C:\\LDPlayer\\LDPlayer9\\vms",
   "GNBOTS_SHORTCUT": "C:\\Users\\Administrator\\Desktop\\GnBots.lnk",
-  "SERVER_NAME": "208",
+  "SERVER_NAME": "",
   "TELEGRAM_TOKEN": "",
   "TELEGRAM_CHAT_ID": "275483461"
 
