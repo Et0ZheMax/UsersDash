@@ -18,7 +18,7 @@ PROJECT_ROOT = CURRENT_FILE.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from flask import Flask, g, redirect, url_for
+from flask import Flask, g, redirect, send_from_directory, url_for
 from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
 from sqlalchemy import inspect, text
@@ -278,6 +278,7 @@ def create_app() -> Flask:
 # -------------------------------------------------
 # Точка входа
 # -------------------------------------------------
+
 
 
 if __name__ == "__main__":
