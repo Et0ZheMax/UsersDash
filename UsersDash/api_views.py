@@ -10,7 +10,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify
 from werkzeug.exceptions import BadRequest
 
-from UsersDash.models import db, Server, Account, FarmData
+from UsersDash.models import db, Server, Account, FarmData, User
 
 api_bp = Blueprint("api", __name__)
 
@@ -85,7 +85,7 @@ def get_farms_v1():
         Account.query
         .filter_by(server_id=srv.id)
         .join(Server, Account.server_id == Server.id)
-        .join("owner")  # User
+        .join(User, Account.owner)
         .all()
     )
 
