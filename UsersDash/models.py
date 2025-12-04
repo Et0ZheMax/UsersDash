@@ -52,6 +52,7 @@ class Server(db.Model):
     name = db.Column(db.String(64), unique=True, nullable=False, index=True)
     host = db.Column(db.String(255), nullable=False)         # IP или DNS
     api_base_url = db.Column(db.String(255), nullable=True)  # URL к локальному API (RssCounter)
+    api_token = db.Column(db.String(255), nullable=True)     # Токен доступа к REST API
     description = db.Column(db.String(255), nullable=True)
     is_active = db.Column(db.Boolean, default=True)
 
