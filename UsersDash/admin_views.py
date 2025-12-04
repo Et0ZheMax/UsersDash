@@ -172,6 +172,47 @@ def _merge_farmdata_for_move(
         db.session.add(target_fd)
 
 
+def _format_checked_at(raw_value: str | None) -> str | None:
+    """Форматирует timestamp self_status в «ДД.ММ ЧЧ:ММ» или возвращает исходник."""
+
+    if not raw_value:
+        return None
+
+    try:
+        dt = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        return dt.strftime("%d.%m %H:%M")
+    except ValueError:
+        return raw_value
+
+
+def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
+    """Подтягивает self_status со всех активных серверов."""
+
+    states: list[dict[str, Any]] = []
+
+    for srv in servers:
+        if not srv.is_active:
+            continue
+
+        status, status_err = fetch_server_self_status(srv)
+
+        states.append(
+            {
+                "name": srv.name,
+                "updated": _format_checked_at(status.get("checked_at"))
+                if isinstance(status, dict)
+                else None,
+                "error": status_err,
+                "ping": bool(status.get("pingOk")) if isinstance(status, dict) else False,
+                "gn": bool(status.get("gnOk")) if isinstance(status, dict) else False,
+                "dn": bool(status.get("dnOk")) if isinstance(status, dict) else False,
+                "dn_count": status.get("dnCount") if isinstance(status, dict) else None,
+            }
+        )
+
+    return states
+
+
 # -------------------- Общий дашборд админа --------------------
 
 
@@ -275,7 +316,6 @@ def admin_dashboard():
     payment_cards.sort(key=lambda x: (x["pay_date"], 0 if x["status"] == "due" else 1))
 
     watch_cards = []
-    server_states = []
     servers = Server.query.order_by(Server.name.asc()).all()
 
     today_date = datetime.utcnow().date()
@@ -305,26 +345,7 @@ def admin_dashboard():
             }
         )
 
-        status, status_err = fetch_server_self_status(srv)
-        checked_fmt = None
-        if isinstance(status, dict) and status.get("checked_at"):
-            try:
-                dt = datetime.fromisoformat(status["checked_at"].replace("Z", "+00:00"))
-                checked_fmt = dt.strftime("%d.%m %H:%M")
-            except ValueError:
-                checked_fmt = status.get("checked_at")
-
-        server_states.append(
-            {
-                "name": srv.name,
-                "updated": checked_fmt,
-                "error": status_err,
-                "ping": bool(status.get("pingOk")) if isinstance(status, dict) else False,
-                "gn": bool(status.get("gnOk")) if isinstance(status, dict) else False,
-                "dn": bool(status.get("dnOk")) if isinstance(status, dict) else False,
-                "dn_count": status.get("dnCount") if isinstance(status, dict) else None,
-            }
-        )
+    server_states = _collect_server_states(servers)
 
     for acc in accounts:
         if not acc.is_active or not acc.server_id:
@@ -373,6 +394,22 @@ def admin_dashboard():
             "days_in_month": days_in_month,
         },
     )
+
+
+@admin_bp.route("/api/server-states", methods=["GET"])
+@login_required
+def api_server_states():
+    """Возвращает self_status по всем активным серверам для админ-панели."""
+
+    admin_required()
+
+    servers = Server.query.order_by(Server.name.asc()).all()
+    server_states = _collect_server_states(servers)
+
+    return jsonify({
+        "items": server_states,
+        "generated_at": datetime.utcnow().isoformat(),
+    })
 
 
 @admin_bp.route("/templates")

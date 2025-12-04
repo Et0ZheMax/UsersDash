@@ -107,7 +107,7 @@
             </div>
         </div>
 
-        <div class="admin-watch-grid">
+        <div class="admin-watch-grid" data-role="server-states-grid">
             {% for srv in server_states %}
                 <div class="admin-watch-card{% if srv.error %} is-error{% endif %}">
                     <div class="admin-watch-card__title">{{ srv.name }}</div>
@@ -137,6 +137,91 @@
             {% endfor %}
         </div>
     </div>
+{% endif %}
+
+{% if server_states %}
+    <script>
+        (() => {
+            const grid = document.querySelector('[data-role="server-states-grid"]');
+            const endpoint = "{{ url_for('admin.api_server_states') }}";
+
+            if (!grid || !endpoint) {
+                return;
+            }
+
+            function buildRow(label, value) {
+                const row = document.createElement('div');
+                row.className = 'admin-watch-card__row';
+
+                const name = document.createElement('span');
+                name.className = 'admin-watch-card__name';
+                name.textContent = label;
+                row.appendChild(name);
+
+                const summary = document.createElement('span');
+                summary.className = 'admin-watch-card__summary';
+                summary.textContent = value;
+                row.appendChild(summary);
+
+                return row;
+            }
+
+            function renderServerStates(states) {
+                grid.innerHTML = '';
+
+                states.forEach((srv) => {
+                    const card = document.createElement('div');
+                    card.className = 'admin-watch-card';
+                    if (srv.error) {
+                        card.classList.add('is-error');
+                    }
+
+                    const title = document.createElement('div');
+                    title.className = 'admin-watch-card__title';
+                    title.textContent = srv.name || '—';
+                    card.appendChild(title);
+
+                    const meta = document.createElement('div');
+                    meta.className = 'admin-watch-card__meta';
+                    meta.textContent = srv.error
+                        ? `Ошибка: ${srv.error}`
+                        : `Обновлено ${srv.updated || '—'}`;
+                    card.appendChild(meta);
+
+                    const list = document.createElement('div');
+                    list.className = 'admin-watch-card__list';
+                    list.appendChild(buildRow('Ping', srv.ping ? 'OK' : '—'));
+                    list.appendChild(buildRow('GnBots', srv.gn ? 'OK' : '—'));
+                    const dnVal = srv.dn_count !== null && srv.dn_count !== undefined
+                        ? srv.dn_count
+                        : (srv.dn ? 1 : '—');
+                    list.appendChild(buildRow('LD', dnVal));
+
+                    card.appendChild(list);
+                    grid.appendChild(card);
+                });
+            }
+
+            async function refreshServerStates() {
+                try {
+                    const resp = await fetch(endpoint, { headers: { 'Accept': 'application/json' } });
+                    if (!resp.ok) {
+                        throw new Error(`HTTP ${resp.status}`);
+                    }
+
+                    const data = await resp.json();
+                    if (data && Array.isArray(data.items)) {
+                        renderServerStates(data.items);
+                    }
+                } catch (error) {
+                    console.error('[server-states] Не удалось обновить раздел:', error);
+                }
+            }
+
+            refreshServerStates();
+            setInterval(refreshServerStates, 60_000);
+        })();
+    </script>
 {% endif %}
 
 {% if watch_cards %}
