@@ -1511,12 +1511,22 @@ def admin_farm_data():
     if current_user.role != "admin":
         abort(403)
 
-    # Получаем все аккаунты, вместе с их владельцами и серверами
+    page = max(1, int(request.args.get("page", 1)))
+    per_page_raw = int(request.args.get("per_page", 200))
+    per_page = min(500, max(50, per_page_raw))
+
+    # Получаем общие размеры выборки, чтобы отрисовать пагинацию.
+    total_accounts = Account.query.count()
+    total_pages = (total_accounts + per_page - 1) // per_page or 1
+
+    # Получаем только нужный диапазон аккаунтов для выбранной страницы
     accounts = (
         Account.query
         .join(User, Account.owner_id == User.id)
         .join(Server, Account.server_id == Server.id)
         .order_by(User.username.asc(), Account.name.asc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
         .all()
     )
 
@@ -1546,6 +1556,10 @@ def admin_farm_data():
         "admin/farm_data.html",
         items=items,
         tariff_price_map=TARIFF_PRICE_MAP,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        total_accounts=total_accounts,
     )
 
 

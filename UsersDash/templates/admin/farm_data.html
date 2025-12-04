@@ -286,7 +286,7 @@
                         <span class="farmdata-badge-dot"></span>
                         Админская таблица
                     </div>
-                    <span>Всего строк: {{ items|length }}</span>
+                    <span>Всего строк: {{ total_accounts }}</span>
                 </div>
             </div>
 
@@ -299,6 +299,34 @@
                            class="farmdata-search-input"
                            placeholder="Начните вводить имя фермы, клиента или IGG..."
                            data-role="admin-farmdata-search">
+                </div>
+                <div class="farmdata-card-meta" style="align-items: flex-start; min-width: 200px;">
+                    {% set start_idx = ((page - 1) * per_page) + (1 if items else 0) %}
+                    {% set end_idx = ((page - 1) * per_page) + items|length %}
+                    <span>Показаны строки {{ start_idx }}–{{ end_idx }} из {{ total_accounts }}.</span>
+                    <form method="get" class="farmdata-pagination" style="display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="hidden" name="page" value="{{ page }}">
+                        <label style="font-size: 0.8rem; color: #9ca3af; display: flex; align-items: center; gap: 0.35rem;">
+                            На странице
+                            <select name="per_page" onchange="this.form.submit()" class="farmdata-input" style="width: auto; padding: 0.2rem 0.4rem;">
+                                {% for option in [50, 100, 200, 300, 500] %}
+                                    <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
+                                {% endfor %}
+                            </select>
+                        </label>
+                    </form>
+                    <div style="display: flex; gap: 0.4rem;">
+                        <a href="{{ url_for('admin.admin_farm_data', page=page-1 if page > 1 else 1, per_page=per_page) }}"
+                           class="btn btn-secondary"
+                           style="padding: 0.35rem 0.7rem; {{ 'pointer-events: none; opacity: 0.5;' if page <= 1 else '' }}">
+                            ← Назад
+                        </a>
+                        <a href="{{ url_for('admin.admin_farm_data', page=page+1 if page < total_pages else total_pages, per_page=per_page) }}"
+                           class="btn btn-secondary"
+                           style="padding: 0.35rem 0.7rem; {{ 'pointer-events: none; opacity: 0.5;' if page >= total_pages else '' }}">
+                            Вперёд →
+                        </a>
+                    </div>
                 </div>
                 <div class="farmdata-actions farmdata-actions--toolbar">
                     <button type="button"
