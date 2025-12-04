@@ -815,6 +815,7 @@
   
       // Обновление статуса серверов
       updateServerStats();
+      setInterval(updateServerStats, 60_000);
 
       // Закрытие модалок по клику в оверлей и по ESC
       ['paths','meta'].forEach(prefix => {
