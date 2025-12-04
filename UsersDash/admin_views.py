@@ -1511,41 +1511,87 @@ def admin_farm_data():
     if current_user.role != "admin":
         abort(403)
 
-    # Получаем все аккаунты, вместе с их владельцами и серверами
+    total_accounts = Account.query.count()
+
+    return render_template(
+        "admin/farm_data.html",
+        tariff_price_map=TARIFF_PRICE_MAP,
+        total_accounts=total_accounts,
+    )
+
+
+@admin_bp.route("/farm-data/chunk")
+@login_required
+def admin_farm_data_chunk():
+    """Возвращает порцию данных ферм для ленивой подгрузки на клиенте."""
+
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    total_accounts = Account.query.count()
+
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except ValueError:
+        offset = 0
+
+    try:
+        raw_limit = int(request.args.get("limit", 200))
+    except ValueError:
+        raw_limit = 200
+
+    limit = min(400, max(50, raw_limit))
+
     accounts = (
         Account.query
         .join(User, Account.owner_id == User.id)
         .join(Server, Account.server_id == Server.id)
         .order_by(User.username.asc(), Account.name.asc())
+        .offset(offset)
+        .limit(limit)
         .all()
     )
 
-    # Подтягиваем все FarmData для владельцев этих аккаунтов
     owner_ids = {acc.owner_id for acc in accounts}
     farmdata_entries = (
         FarmData.query
         .filter(FarmData.user_id.in_(owner_ids))
         .all()
     )
-
-    # Индекс FarmData по (user_id, farm_name)
     fd_index = {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
 
-    # Собираем удобную структуру для шаблона
-    items = []
+    items: list[dict[str, Any]] = []
     for acc in accounts:
-        owner = acc.owner
         fd = fd_index.get((acc.owner_id, acc.name))
-        items.append({
-            "account": acc,
-            "owner": owner,
-            "farmdata": fd,
-        })
+        items.append(
+            {
+                "account_id": acc.id,
+                "owner_name": acc.owner.username if acc.owner else "—",
+                "farm_name": acc.name,
+                "server_bot": acc.server.name if acc.server else "—",
+                "is_active": acc.is_active,
+                "blocked_for_payment": acc.blocked_for_payment,
+                "email": fd.email if fd else None,
+                "password": fd.password if fd else None,
+                "igg_id": fd.igg_id if fd else None,
+                "server": fd.server if fd else None,
+                "telegram_tag": fd.telegram_tag if fd else None,
+                "next_payment_at": acc.next_payment_at.strftime("%Y-%m-%d")
+                if acc.next_payment_at
+                else None,
+                "tariff": acc.next_payment_amount,
+                "manage_url": url_for("admin.manage", account_id=acc.id),
+            }
+        )
 
-    return render_template(
-        "admin/farm_data.html",
-        items=items,
-        tariff_price_map=TARIFF_PRICE_MAP,
+    return jsonify(
+        {
+            "ok": True,
+            "total": total_accounts,
+            "offset": offset,
+            "limit": limit,
+            "items": items,
+        }
     )
 
 

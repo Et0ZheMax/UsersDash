@@ -252,6 +252,31 @@
         cursor: default;
     }
 
+    .farmdata-loader {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        padding: 0.65rem 0.85rem;
+        border-radius: 12px;
+        background: rgba(59, 130, 246, 0.08);
+        color: #cbd5f5;
+        font-size: 0.9rem;
+    }
+
+    .farmdata-loader__spinner {
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 3px solid rgba(125, 211, 252, 0.25);
+        border-top-color: #7dd3fc;
+        animation: farmdata-spin 0.9s linear infinite;
+    }
+
+    .farmdata-loader__progress {
+        font-size: 0.8rem;
+        color: #9ca3af;
+    }
+
     .btn-spinner {
         width: 16px;
         height: 16px;
@@ -286,7 +311,7 @@
                         <span class="farmdata-badge-dot"></span>
                         Админская таблица
                     </div>
-                    <span>Всего строк: {{ items|length }}</span>
+                    <span>Всего строк: <span data-role="farmdata-total">{{ total_accounts }}</span></span>
                 </div>
             </div>
 
@@ -299,6 +324,15 @@
                            class="farmdata-search-input"
                            placeholder="Начните вводить имя фермы, клиента или IGG..."
                            data-role="admin-farmdata-search">
+                </div>
+                <div class="farmdata-card-meta" style="align-items: flex-start; min-width: 240px; gap: 0.35rem;">
+                    <div class="farmdata-loader" data-role="farmdata-loader">
+                        <div class="farmdata-loader__spinner"></div>
+                        <div>
+                            <div>Подгружаем строки таблицы...</div>
+                            <div class="farmdata-loader__progress" data-role="farmdata-progress">0 / {{ total_accounts }}</div>
+                        </div>
+                    </div>
                 </div>
                 <div class="farmdata-actions farmdata-actions--toolbar">
                     <button type="button"
@@ -328,6 +362,10 @@
             </div>
 
             <div class="farmdata-table-wrapper">
+                <div data-role="farmdata-meta"
+                     data-total-rows="{{ total_accounts }}"
+                     data-chunk-size="200"
+                     hidden></div>
                 <table class="farmdata-table" data-role="admin-farmdata-table">
                     <thead>
                     <tr>
@@ -342,128 +380,13 @@
                         <th>Тариф, ₽</th>
                     </tr>
                     </thead>
-                    <tbody>
-                    {% if items and items|length %}
-                        {% for item in items %}
-                            {% set acc = item.account %}
-                            {% set owner = item.owner %}
-                            {% set fd = item.farmdata %}
-                            <tr data-account-id="{{ acc.id }}"
-                                data-owner-name="{{ owner.username }}"
-                                data-farm-name="{{ acc.name }}"
-                                data-is-active="{{ 1 if acc.is_active else 0 }}"
-                                data-payment-blocked="{{ 1 if acc.blocked_for_payment else 0 }}">
-                                <td>
-                                    <div class="farmdata-name-main">
-                                        {{ owner.username }}
-                                    </div>
-                                </td>
-                                <td class="farmdata-name-cell">
-                                    <div class="farmdata-name-main">
-                                        {{ acc.name }}
-                                    </div>
-                                    <div class="farmdata-name-sub">
-                                        Сервер бота: {{ acc.server.name if acc.server else "—" }}
-                                    </div>
-                                </td>
-                                <td>
-                                    <input class="farmdata-input"
-                                           type="email"
-                                           name="email"
-                                           placeholder="email@example.com"
-                                           value="{{ fd.email if fd and fd.email else '' }}">
-                                </td>
-                                <td>
-                                    <input class="farmdata-input"
-                                           type="text"
-                                           name="password"
-                                           placeholder="Пароль"
-                                           value="{{ fd.password if fd and fd.password else '' }}">
-                                </td>
-                                <td>
-                                    <input class="farmdata-input farmdata-input--short"
-                                           type="text"
-                                           name="igg_id"
-                                           placeholder="Только цифры"
-                                           inputmode="numeric"
-                                           pattern="\\d*"
-                                           value="{{ fd.igg_id if fd and fd.igg_id else '' }}">
-                                </td>
-                                <td>
-                                    <input class="farmdata-input"
-                                           type="text"
-                                           name="server"
-                                           placeholder="Королевство аккаунта (игровой сервер)"
-                                           value="{{ fd.server if fd and fd.server else '' }}">
-                                </td>
-                                <td>
-                                    <div class="farmdata-telegram-cell">
-                                        <input class="farmdata-input"
-                                            type="text"
-                                            name="telegram_tag"
-                                            placeholder="@telegram или ник"
-                                            value="{{ fd.telegram_tag if fd and fd.telegram_tag else '' }}">
-                                        <button type="button"
-                                                class="btn btn-ghost btn-telegram"
-                                                data-role="open-telegram-from-row"
-                                                title="Открыть в Telegram">
-                                            TG
-                                        </button>
-                                    </div>
-                                </td>
-                                <td>
-                                    <input class="farmdata-input farmdata-input--short"
-                                           type="date"
-                                           name="next_payment_date"
-                                           value="{{ acc.next_payment_at.strftime('%Y-%m-%d') if acc.next_payment_at else '' }}">
-                                </td>
-                                <td>
-                                    <div class="tariff-cell" data-role="tariff-cell">
-                                        <div class="tariff-inline">
-                                            <input class="farmdata-input farmdata-input--price"
-                                                   type="number"
-                                                   min="0"
-                                                   step="50"
-                                                   name="tariff"
-                                                   placeholder="₽"
-                                                   value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
-                                            <div class="tariff-actions">
-                                                <a class="icon-btn icon-btn--compact"
-                                                   href="{{ url_for('admin.manage', account_id=acc.id) }}"
-                                                   title="Настройки фермы"
-                                                   target="_blank"
-                                                   rel="noopener">
-                                                    ⚙
-                                                </a>
-                                                <button type="button"
-                                                        class="icon-btn icon-btn--compact icon-btn--danger"
-                                                        data-role="farmdata-mark-unpaid"
-                                                        data-account-id="{{ acc.id }}"
-                                                        title="Отключить за неоплату">
-                                                    ✖
-                                                </button>
-                                                <button type="button"
-                                                        class="icon-btn icon-btn--compact"
-                                                        data-role="farmdata-mark-paid"
-                                                        data-account-id="{{ acc.id }}"
-                                                        title="Включить после оплаты">
-                                                    ✔
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div class="tariff-label tariff-label--interactive" data-role="tariff-label"></div>
-                                        <div class="tariff-dropdown" data-role="tariff-dropdown" hidden></div>
-                                    </div>
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr>
+                    <tbody data-role="farmdata-body">
+                        <tr data-role="farmdata-placeholder">
                             <td colspan="9" class="farmdata-no-accounts">
-                                Аккаунты пока не найдены.
+                                Готовим таблицу к отображению...
                             </td>
                         </tr>
-                    {% endif %}
+                    </tbody>
 
 
                     <div class="modal" data-role="sync-modal" hidden>
@@ -609,6 +532,17 @@ document.addEventListener("DOMContentLoaded", function () {
         setTimeout(() => toast.remove(), 2000);
     }
 
+    function setFarmdataLoaderState({ loaded = 0, total = 0, isDone = false } = {}) {
+        const loader = document.querySelector('[data-role="farmdata-loader"]');
+        const progress = document.querySelector('[data-role="farmdata-progress"]');
+
+        if (!loader || !progress) return;
+
+        progress.textContent = `${loaded} / ${total}`;
+        loader.style.opacity = isDone ? "0.65" : "1";
+        loader.querySelector(".farmdata-loader__spinner").style.visibility = isDone ? "hidden" : "visible";
+    }
+
     function formatFarmLabel(tr) {
         if (!tr) return "ферма";
         const owner = tr.dataset.ownerName || "";
@@ -702,6 +636,167 @@ document.addEventListener("DOMContentLoaded", function () {
             applyPaymentStateToRow(row, blocked, active);
         });
     }
+
+    function initFarmdataRow(row) {
+        if (!row) return;
+        const blocked = row.dataset.paymentBlocked === "1";
+        const active = row.dataset.isActive === "1";
+        applyPaymentStateToRow(row, blocked, active);
+
+        const tariffInput = row.querySelector('input[name="tariff"]');
+        if (tariffInput) {
+            updateTariffLabel(tariffInput);
+            renderTariffDropdown(tariffInput.closest('[data-role="tariff-cell"]'));
+        }
+    }
+
+    function buildFarmdataRow(item) {
+        const tr = document.createElement("tr");
+        tr.dataset.accountId = item.account_id;
+        tr.dataset.ownerName = item.owner_name || "";
+        tr.dataset.farmName = item.farm_name || "";
+        tr.dataset.isActive = item.is_active ? "1" : "0";
+        tr.dataset.paymentBlocked = item.blocked_for_payment ? "1" : "0";
+
+        const nextPayment = item.next_payment_at || "";
+        const tariffVal = item.tariff !== null && item.tariff !== undefined ? item.tariff : "";
+
+        tr.innerHTML = `
+            <td>
+                <div class="farmdata-name-main">${escapeHtml(item.owner_name || "—")}</div>
+            </td>
+            <td class="farmdata-name-cell">
+                <div class="farmdata-name-main">${escapeHtml(item.farm_name || "")}</div>
+                <div class="farmdata-name-sub">Сервер бота: ${escapeHtml(item.server_bot || "—")}</div>
+            </td>
+            <td>
+                <input class="farmdata-input" type="email" name="email" placeholder="email@example.com" value="${escapeHtml(item.email || "")}">
+            </td>
+            <td>
+                <input class="farmdata-input" type="text" name="password" placeholder="Пароль" value="${escapeHtml(item.password || "")}">
+            </td>
+            <td>
+                <input class="farmdata-input farmdata-input--short" type="text" name="igg_id" placeholder="Только цифры" inputmode="numeric" pattern="\\d*" value="${escapeHtml(item.igg_id || "")}">
+            </td>
+            <td>
+                <input class="farmdata-input" type="text" name="server" placeholder="Королевство аккаунта (игровой сервер)" value="${escapeHtml(item.server || "")}">
+            </td>
+            <td>
+                <div class="farmdata-telegram-cell">
+                    <input class="farmdata-input" type="text" name="telegram_tag" placeholder="@telegram или ник" value="${escapeHtml(item.telegram_tag || "")}">
+                    <button type="button" class="btn btn-ghost btn-telegram" data-role="open-telegram-from-row" title="Открыть в Telegram">TG</button>
+                </div>
+            </td>
+            <td>
+                <input class="farmdata-input farmdata-input--short" type="date" name="next_payment_date" value="${escapeHtml(nextPayment)}">
+            </td>
+            <td>
+                <div class="tariff-cell" data-role="tariff-cell">
+                    <div class="tariff-inline">
+                        <input class="farmdata-input farmdata-input--price" type="number" min="0" step="50" name="tariff" placeholder="₽" value="${escapeHtml(String(tariffVal))}">
+                        <div class="tariff-actions">
+                            <a class="icon-btn icon-btn--compact" href="${escapeHtml(item.manage_url || '#')}" title="Настройки фермы" target="_blank" rel="noopener">⚙</a>
+                            <button type="button" class="icon-btn icon-btn--compact icon-btn--danger" data-role="farmdata-mark-unpaid" data-account-id="${item.account_id}" title="Отключить за неоплату">✖</button>
+                            <button type="button" class="icon-btn icon-btn--compact" data-role="farmdata-mark-paid" data-account-id="${item.account_id}" title="Включить после оплаты">✔</button>
+                        </div>
+                    </div>
+                    <div class="tariff-label tariff-label--interactive" data-role="tariff-label"></div>
+                    <div class="tariff-dropdown" data-role="tariff-dropdown" hidden></div>
+                </div>
+            </td>`;
+
+        initFarmdataRow(tr);
+        return tr;
+    }
+
+    async function fetchFarmdataChunk(offset, limit) {
+        const resp = await fetch(`/admin/farm-data/chunk?offset=${offset}&limit=${limit}`, {
+            headers: { "Accept": "application/json", "x-skip-loader": "1" }
+        });
+
+        if (!resp.ok) {
+            throw new Error("Не удалось загрузить данные (HTTP).");
+        }
+
+        const data = await resp.json();
+        if (!data.ok) {
+            throw new Error(data.error || "Ошибка загрузки данных.");
+        }
+
+        return data;
+    }
+
+    async function loadFarmdataLazy() {
+        const meta = document.querySelector('[data-role="farmdata-meta"]');
+        const body = document.querySelector('[data-role="farmdata-body"]');
+        const totalSpan = document.querySelector('[data-role="farmdata-total"]');
+        const placeholder = body ? body.querySelector('[data-role="farmdata-placeholder"]') : null;
+
+        if (!meta || !body) return;
+
+        const totalRows = parseInt(meta.dataset.totalRows || "0", 10) || 0;
+        const chunkSize = parseInt(meta.dataset.chunkSize || "200", 10) || 200;
+
+        if (placeholder) {
+            placeholder.remove();
+        }
+
+        if (!totalRows) {
+            const emptyRow = document.createElement("tr");
+            emptyRow.innerHTML = '<td colspan="9" class="farmdata-no-accounts">Аккаунты пока не найдены.</td>';
+            body.appendChild(emptyRow);
+            setFarmdataLoaderState({ loaded: 0, total: 0, isDone: true });
+            return;
+        }
+
+        let offset = 0;
+        let loaded = 0;
+        let total = totalRows;
+        setFarmdataLoaderState({ loaded, total });
+
+        while (loaded < total) {
+            let data;
+            try {
+                data = await fetchFarmdataChunk(offset, chunkSize);
+            } catch (err) {
+                console.error(err);
+                showToast(err.message || "Не удалось загрузить данные ферм.", "error");
+                break;
+            }
+
+            const items = data.items || [];
+            total = typeof data.total === "number" ? data.total : total;
+            if (totalSpan) {
+                totalSpan.textContent = total;
+            }
+
+            if (items.length) {
+                const fragment = document.createDocumentFragment();
+                items.forEach(function (item) {
+                    const row = buildFarmdataRow(item);
+                    fragment.appendChild(row);
+                });
+                body.appendChild(fragment);
+            }
+
+            loaded += items.length;
+            offset += items.length;
+            setFarmdataLoaderState({ loaded, total, isDone: loaded >= total });
+
+            if (!items.length || loaded >= total) {
+                break;
+            }
+        }
+
+        if (loaded === 0) {
+            const emptyRow = document.createElement("tr");
+            emptyRow.innerHTML = '<td colspan="9" class="farmdata-no-accounts">Не удалось загрузить данные.</td>';
+            body.appendChild(emptyRow);
+        }
+
+        setFarmdataLoaderState({ loaded, total, isDone: true });
+    }
+
 
     function setIconBtnLoading(btn, isLoading) {
         if (!btn) return;
@@ -895,6 +990,8 @@ document.addEventListener("DOMContentLoaded", function () {
         "next_payment_date",
         "tariff"
     ]);
+
+    loadFarmdataLazy();
 
     let adminFarmDataAutoSaveTimer = null;
     let adminFarmDataSaveInProgress = false;
