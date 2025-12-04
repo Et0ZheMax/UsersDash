@@ -1,8 +1,19 @@
 # migrate_add_server_api_token.py
 # Одноразовая миграция: добавляет колонку api_token в таблицу servers.
+# Рекомендуемый запуск из корня репозитория (Windows/Linux):
+#   python -m UsersDash.migrate_add_server_api_token
 
+import importlib.util
 import os
 import sqlite3
+import sys
+from pathlib import Path
+
+
+repo_root = Path(__file__).resolve().parent.parent
+if importlib.util.find_spec("UsersDash") is None:
+    sys.path.insert(0, str(repo_root))
+
 from UsersDash.config import Config
 
 
