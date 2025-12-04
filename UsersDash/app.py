@@ -266,6 +266,14 @@ def create_app() -> Flask:
         # по умолчанию считаем, что это клиент
         return redirect(url_for("client.dashboard"))
 
+    @app.route("/favicon.ico")
+    def favicon():
+        """Единая иконка для всех страниц и будущих разделов."""
+
+        return send_from_directory(
+            app.static_folder, "usersdash.png", mimetype="image/png"
+        )
+
     # Выполняем health-check после инициализации
     run_health_check(app)
 
