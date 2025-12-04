@@ -6,6 +6,8 @@
   "GNBOTS_SHORTCUT": "C:\\Users\\Administrator\\Desktop\\GnBots.lnk",
   "SERVER_NAME": "",
   "TELEGRAM_TOKEN": "",
-  "TELEGRAM_CHAT_ID": "275483461"
+  "TELEGRAM_CHAT_ID": "275483461",
+  "USERSDASH_API_URL": "",
+  "USERSDASH_API_TOKEN": ""
 
 }

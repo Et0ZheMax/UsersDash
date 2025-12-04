@@ -111,7 +111,9 @@ def _write_default_config(path):
         "GNBOTS_SHORTCUT": r"C:\\Program Files\\GnBots\\GnBots.lnk",
         "SERVER_NAME": socket.gethostname(),
         "TELEGRAM_TOKEN": "",
-        "TELEGRAM_CHAT_ID": ""
+        "TELEGRAM_CHAT_ID": "",
+        "USERSDASH_API_URL": "",
+        "USERSDASH_API_TOKEN": "",
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(default, f, ensure_ascii=False, indent=2)
@@ -124,6 +126,9 @@ if not os.path.isfile(CONFIG_PATH):
 with open(CONFIG_PATH, "r", encoding="utf-8") as f:
     CONFIG = json.load(f)
 
+CONFIG.setdefault("USERSDASH_API_URL", "")
+CONFIG.setdefault("USERSDASH_API_TOKEN", "")
+
 # 2) Единый источник путей из конфига (убираем дубли: LOG_DIR != LOGS_DIR)
 LOGS_DIR        = CONFIG.get("LOGS_DIR", r"C:\Program Files\GnBots\logs")
 PROFILE_PATH    = CONFIG.get("PROFILE_PATH", "")
@@ -133,6 +138,8 @@ GNBOTS_SHORTCUT = CONFIG.get("GNBOTS_SHORTCUT", "")
 GNBOTS_PROFILES_PATH = PROFILE_PATH
 SCHEMA_TTL_SECONDS   = 600  # 10 минут
 SERVER_NAME     = os.getenv("SERVER_NAME", CONFIG.get("SERVER_NAME", socket.gethostname()))
+USERSDASH_API_URL = (os.getenv("USERSDASH_API_URL") or CONFIG.get("USERSDASH_API_URL", "")).strip()
+USERSDASH_API_TOKEN = (os.getenv("USERSDASH_API_TOKEN") or CONFIG.get("USERSDASH_API_TOKEN", "")).strip()
 LD_PROBLEMS_SUMMARY_PATH = os.getenv(
     "LD_PROBLEMS_SUMMARY_PATH",
     CONFIG.get("LD_PROBLEMS_SUMMARY_PATH", r"C:\\LDPlayer\\ldChecker\\problems_summary.json"),
@@ -2644,7 +2651,9 @@ def api_accounts_meta_full():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
-def load_usersdash_accounts(server_name: str) -> tuple[list[dict], list[str]]:
+def _load_usersdash_from_db(server_name: str) -> tuple[list[dict], list[str]]:
+    """Читает UsersDash из локальной SQLite, если она доступна рядом."""
+
     errors: list[str] = []
     if not os.path.exists(USERDASH_DB):
         errors.append(f"UsersDash DB не найден: {USERDASH_DB}")
@@ -2694,6 +2703,85 @@ def load_usersdash_accounts(server_name: str) -> tuple[list[dict], list[str]]:
         })
 
     return items, errors
+
+
+def _load_usersdash_from_api(server_name: str) -> tuple[list[dict], list[str]]:
+    """Запрашивает UsersDash по REST API, чтобы не зависеть от локальной БД."""
+
+    errors: list[str] = []
+    api_url = (USERSDASH_API_URL or "").rstrip("/")
+
+    if not api_url:
+        return [], errors
+    if not USERSDASH_API_TOKEN:
+        errors.append("USERSDASH_API_TOKEN не задан")
+        return [], errors
+
+    full_url = api_url + "/api/farms/v1"
+    try:
+        resp = requests.get(
+            full_url,
+            params={"server": server_name, "token": USERSDASH_API_TOKEN},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        errors.append(f"Ошибка запроса UsersDash: {exc}")
+        return [], errors
+
+    if not isinstance(payload, dict):
+        errors.append("Некорректный ответ UsersDash")
+        return [], errors
+
+    if payload.get("ok") is not True:
+        errors.append(str(payload.get("error") or "UsersDash вернул ошибку"))
+        return [], errors
+
+    remote_server = str(payload.get("server") or "").strip()
+    if remote_server and server_name and remote_server != server_name:
+        errors.append(
+            f"UsersDash вернул данные для '{remote_server}', ожидали '{server_name}'"
+        )
+
+    items: list[dict] = []
+    for row in payload.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("is_active") is False:
+            continue
+
+        items.append({
+            "usersdash_id": row.get("id") or row.get("usersdash_id"),
+            "name": row.get("name") or "",
+            "internal_id": str(row.get("internal_id") or ""),
+            "is_active": bool(row.get("is_active", True)),
+            "next_payment_at": _normalize_date_str(row.get("next_payment_at")),
+            "tariff": row.get("tariff"),
+            "email": row.get("email") or row.get("login") or "",
+            "password": row.get("password") or "",
+            "igg_id": row.get("igg_id") or "",
+            "server": row.get("kingdom") or row.get("server") or remote_server,
+            "telegram": row.get("telegram_tag") or row.get("telegram") or "",
+        })
+
+    return items, errors
+
+
+def load_usersdash_accounts(server_name: str) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+
+    api_items, api_errors = _load_usersdash_from_api(server_name)
+    errors.extend(api_errors)
+    if USERSDASH_API_URL:
+        if not api_errors:
+            return api_items, errors
+        if not os.path.exists(USERDASH_DB):
+            return api_items, errors
+
+    db_items, db_errors = _load_usersdash_from_db(server_name)
+    errors.extend(db_errors)
+    return db_items, errors
 
 
 @app.route("/api/usersdash_sync_preview")
