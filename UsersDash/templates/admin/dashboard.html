@@ -66,6 +66,14 @@
 
     <div class="admin-top-grid__right">
         <div class="kpi-row kpi-row--stacked">
+            <button class="kpi-card kpi-card--clickable cash-card" type="button" data-role="cash-card"
+                    data-cash-monthly="{{ cash_totals.monthly_total }}"
+                    data-cash-remaining="{{ cash_totals.remaining_total }}">
+                <div class="kpi-label">Ca$h</div>
+                <div class="cash-card__value" data-role="cash-card-total">{{ cash_totals.monthly_total }} ₽</div>
+                <div class="cash-card__meta" data-role="cash-card-remaining">До конца месяца: {{ cash_totals.remaining_total }} ₽</div>
+                <div class="cash-card__list" data-role="cash-card-servers"></div>
+            </button>
             <div class="kpi-card">
                 <div class="kpi-label">Пользователей всего</div>
                 <div class="kpi-value">{{ total_users }}</div>
@@ -86,14 +94,6 @@
                 <div class="kpi-label">Серверов</div>
                 <div class="kpi-value">{{ total_servers }}</div>
             </div>
-            <button class="kpi-card kpi-card--clickable cash-card" type="button" data-role="cash-card"
-                    data-cash-monthly="{{ cash_totals.monthly_total }}"
-                    data-cash-remaining="{{ cash_totals.remaining_total }}">
-                <div class="kpi-label">Ca$h</div>
-                <div class="cash-card__value" data-role="cash-card-total">{{ cash_totals.monthly_total }} ₽</div>
-                <div class="cash-card__meta" data-role="cash-card-remaining">До конца месяца: {{ cash_totals.remaining_total }} ₽</div>
-                <div class="cash-card__note" data-role="cash-card-selected">Серверов в расчёте: {{ server_profits|length }}</div>
-            </button>
         </div>
     </div>
 </div>
@@ -216,7 +216,7 @@
         const modalContent = document.querySelector('[data-role="cash-modal-content"]');
         const modalSummary = document.querySelector('[data-role="cash-modal-summary"]');
         const cashDataEl = document.getElementById('cash-data');
-        const selectedLabel = document.querySelector('[data-role="cash-card-selected"]');
+        const serversList = document.querySelector('[data-role="cash-card-servers"]');
         const totalLabel = document.querySelector('[data-role="cash-card-total"]');
         const remainingLabel = document.querySelector('[data-role="cash-card-remaining"]');
         const LOCAL_STORAGE_KEY = 'usersdash-cash-settings';
@@ -310,11 +310,34 @@
             }).join('');
         }
 
+        function renderCardServers() {
+            if (!serversList) return;
+
+            const selectedServers = new Set(settings.selected || []);
+            const expenses = settings.expenses || {};
+
+            const rows = servers
+                .filter((srv) => selectedServers.has(srv.server_id))
+                .map((srv) => {
+                    const expense = Number(expenses[srv.server_id] || 0);
+                    const monthly = Math.max(0, (srv.monthly_total || 0) - Math.max(0, expense));
+                    const remaining = Math.max(0, Math.round(monthly * daysLeft / daysInMonth));
+                    return `
+                        <div class="cash-card__server-row">
+                            <span class="cash-card__server-name">${srv.server_name}</span>
+                            <span class="cash-card__server-amount">${formatMoney(monthly)} · ${formatMoney(remaining)}</span>
+                        </div>
+                    `;
+                });
+
+            serversList.innerHTML = rows.join('') || '<div class="cash-card__server-empty">Серверы не выбраны</div>';
+        }
+
         function updateCard() {
             const totals = calcTotals(settings);
             totalLabel.textContent = formatMoney(totals.monthlyTotal);
             remainingLabel.textContent = `До конца месяца: ${formatMoney(totals.remainingTotal)}`;
-            selectedLabel.textContent = `Серверов в расчёте: ${totals.selectedCount}`;
+            renderCardServers();
             if (modalSummary) {
                 modalSummary.textContent = `${formatMoney(totals.monthlyTotal)} · до конца месяца ${formatMoney(totals.remainingTotal)}`;
             }
