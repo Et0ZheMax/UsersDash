@@ -428,7 +428,22 @@
             }
         }
 
+        function persistExpense(event) {
+            const expenseInput = event.target.closest('[data-expense-input]');
+            if (!expenseInput) return;
+
+            const srvId = Number(expenseInput.dataset.serverId);
+            const value = Number(expenseInput.value || 0);
+            settings.expenses = {
+                ...settings.expenses,
+                [srvId]: Math.max(0, value),
+            };
+            saveSettings(settings);
+            updateCard();
+        }
+
         function attachModalHandlers() {
+            modalContent.addEventListener('input', persistExpense);
             modalContent.addEventListener('change', (event) => {
                 const checkbox = event.target.closest('.cash-modal__checkbox');
                 if (checkbox) {
@@ -445,17 +460,7 @@
                     return;
                 }
 
-                const expenseInput = event.target.closest('[data-expense-input]');
-                if (expenseInput) {
-                    const srvId = Number(expenseInput.dataset.serverId);
-                    const value = Number(expenseInput.value || 0);
-                    settings.expenses = {
-                        ...settings.expenses,
-                        [srvId]: Math.max(0, value),
-                    };
-                    saveSettings(settings);
-                    updateCard();
-                }
+                persistExpense(event);
             });
         }
 
