@@ -1513,6 +1513,8 @@ h1 {
 .config-field input,
 .config-field select {
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   background: #0c0e16;
   border: 1px solid rgba(148, 163, 184, 0.3);
   color: #e5e7eb;
@@ -3126,6 +3128,9 @@ h1 {
 .config-row select,
 .config-row input[type=text],
 .config-row input[type=number] {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid #1f2439;
   border-radius: 8px;
