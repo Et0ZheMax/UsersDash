@@ -213,6 +213,60 @@ def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
     return states
 
 
+def _build_farmdata_index(
+    accounts: list[Account],
+) -> dict[tuple[int, str], FarmData]:
+    """Возвращает индекс FarmData по ключу (owner_id, farm_name)."""
+
+    owner_ids = {acc.owner_id for acc in accounts if acc.owner_id}
+    if not owner_ids:
+        return {}
+
+    farmdata_entries = FarmData.query.filter(FarmData.user_id.in_(owner_ids)).all()
+    return {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
+
+
+def _collect_incomplete_farms(
+    accounts: list[Account], farmdata_index: dict[tuple[int, str], FarmData]
+) -> list[dict[str, Any]]:
+    """Собирает фермы с незаполненными полями email/password/pay_date/tariff."""
+
+    items: list[dict[str, Any]] = []
+
+    for acc in accounts:
+        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        email = fd.email if fd else None
+        password = fd.password if fd else None
+        next_payment = acc.next_payment_at.strftime("%Y-%m-%d") if acc.next_payment_at else None
+        tariff = acc.next_payment_amount
+
+        missing = {
+            "email": not email,
+            "password": not password,
+            "next_payment_date": not next_payment,
+            "tariff": tariff is None,
+        }
+
+        if not any(missing.values()):
+            continue
+
+        items.append(
+            {
+                "account_id": acc.id,
+                "owner_name": acc.owner.username if acc.owner else "—",
+                "farm_name": acc.name,
+                "server_bot": acc.server.name if acc.server else "—",
+                "email": email,
+                "password": password,
+                "next_payment_at": next_payment,
+                "tariff": tariff,
+                "missing": missing,
+            }
+        )
+
+    return items
+
+
 # -------------------- Общий дашборд админа --------------------
 
 
@@ -239,6 +293,8 @@ def admin_dashboard():
         .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
+
+    farmdata_index = _build_farmdata_index(accounts)
 
     active_accounts_count = sum(1 for acc in accounts if acc.is_active)
 
@@ -270,14 +326,6 @@ def admin_dashboard():
 
     today_date = datetime.utcnow().date()
     payment_accounts = [acc for acc in accounts if acc.next_payment_at]
-    farmdata_by_owner: dict[int, dict[str, FarmData]] = {}
-    if payment_accounts:
-        owner_ids = {acc.owner_id for acc in payment_accounts if acc.owner_id}
-        if owner_ids:
-            farmdata_entries = FarmData.query.filter(FarmData.user_id.in_(owner_ids)).all()
-            for fd in farmdata_entries:
-                owner_map = farmdata_by_owner.setdefault(fd.user_id, {})
-                owner_map[fd.farm_name] = fd
 
     payment_cards = []
     for acc in payment_accounts:
@@ -294,8 +342,7 @@ def admin_dashboard():
             continue
 
         telegram_tag = None
-        owner_map = farmdata_by_owner.get(acc.owner_id, {})
-        fd = owner_map.get(acc.name)
+        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
         if fd and fd.telegram_tag:
             telegram_tag = fd.telegram_tag.lstrip("@")
 
@@ -375,6 +422,8 @@ def admin_dashboard():
         item["remaining_total"] for item in server_profits
     )
 
+    incomplete_accounts = _collect_incomplete_farms(accounts, farmdata_index)
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -393,6 +442,7 @@ def admin_dashboard():
             "days_left": days_left,
             "days_in_month": days_in_month,
         },
+        incomplete_accounts_total=len(incomplete_accounts),
     )
 
 
@@ -410,6 +460,34 @@ def api_server_states():
         "items": server_states,
         "generated_at": datetime.utcnow().isoformat(),
     })
+
+
+@admin_bp.route("/api/incomplete-farm-data", methods=["GET"])
+@login_required
+def api_incomplete_farm_data():
+    """Возвращает список ферм с незаполненными контактами/оплатой для быстрой правки."""
+
+    admin_required()
+
+    accounts = (
+        Account.query.options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .order_by(Account.owner_id.asc(), Account.name.asc())
+        .all()
+    )
+
+    farmdata_index = _build_farmdata_index(accounts)
+    items = _collect_incomplete_farms(accounts, farmdata_index)
+
+    return jsonify(
+        {
+            "ok": True,
+            "items": items,
+            "total": len(items),
+        }
+    )
 
 
 @admin_bp.route("/templates")

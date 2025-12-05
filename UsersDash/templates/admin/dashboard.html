@@ -74,6 +74,12 @@
                 <div class="cash-card__meta" data-role="cash-card-remaining">До конца месяца: {{ cash_totals.remaining_total }} ₽</div>
                 <div class="cash-card__list" data-role="cash-card-servers"></div>
             </button>
+            <button class="kpi-card kpi-card--clickable" type="button" data-role="incomplete-data-card"
+                    data-incomplete-count="{{ incomplete_accounts_total }}">
+                <div class="kpi-label">Заполнить данные</div>
+                <div class="kpi-value" data-role="incomplete-data-count">{{ incomplete_accounts_total }}</div>
+                <div class="kpi-hint">Фермы без почты, пароля, оплаты или тарифа</div>
+            </button>
             <div class="kpi-card">
                 <div class="kpi-label">Пользователей всего</div>
                 <div class="kpi-value">{{ total_users }}</div>
@@ -286,6 +292,45 @@
     </div>
 </div>
 
+<div class="incomplete-data-modal" data-role="incomplete-data-modal" hidden>
+    <div class="incomplete-data-modal__dialog">
+        <button class="incomplete-data-modal__close" type="button" data-role="incomplete-close" aria-label="Закрыть">×</button>
+        <div class="incomplete-data-modal__header">
+            <div class="incomplete-data-modal__title">Заполнить данные</div>
+            <div class="incomplete-data-modal__subtitle">
+                Добавьте почту, пароль, дату оплаты и тариф для всех ферм без заполненных данных.
+            </div>
+        </div>
+
+        <div class="incomplete-data-modal__body">
+            <div class="incomplete-data-modal__loader" data-role="incomplete-loader">Загружаем список ферм…</div>
+            <div class="incomplete-data-modal__empty" data-role="incomplete-empty" hidden>Все фермы уже заполнены.</div>
+            <div class="incomplete-data-modal__table-wrapper" data-role="incomplete-table" hidden>
+                <table class="incomplete-data-modal__table">
+                    <thead>
+                    <tr>
+                        <th>Ферма</th>
+                        <th>Почта</th>
+                        <th>Пароль</th>
+                        <th>Дата оплаты</th>
+                        <th>Тариф, ₽</th>
+                    </tr>
+                    </thead>
+                    <tbody data-role="incomplete-rows"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="incomplete-data-modal__footer">
+            <div class="incomplete-data-modal__status" data-role="incomplete-status"></div>
+            <div class="incomplete-data-modal__actions">
+                <button class="btn btn-ghost" type="button" data-role="incomplete-close">Закрыть</button>
+                <button class="btn" type="button" data-role="incomplete-save">Сохранить</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script id="cash-data" type="application/json">{{ {
     "servers": server_profits,
     "monthly_total": cash_totals.monthly_total,
@@ -482,6 +527,180 @@
         renderModalContent();
         attachModalHandlers();
         updateCard();
+    })();
+</script>
+
+<script>
+    (() => {
+        const card = document.querySelector('[data-role="incomplete-data-card"]');
+        const modal = document.querySelector('[data-role="incomplete-data-modal"]');
+        const loader = modal?.querySelector('[data-role="incomplete-loader"]');
+        const empty = modal?.querySelector('[data-role="incomplete-empty"]');
+        const tableWrap = modal?.querySelector('[data-role="incomplete-table"]');
+        const rowsBody = modal?.querySelector('[data-role="incomplete-rows"]');
+        const statusEl = modal?.querySelector('[data-role="incomplete-status"]');
+        const saveBtn = modal?.querySelector('[data-role="incomplete-save"]');
+        const countEl = card?.querySelector('[data-role="incomplete-data-count"]');
+        const fetchUrl = "{{ url_for('admin.api_incomplete_farm_data') }}";
+        const saveUrl = "{{ url_for('admin.admin_farm_data_save') }}";
+
+        if (!card || !modal || !fetchUrl || !saveUrl) {
+            return;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text == null ? '' : String(text);
+            return div.innerHTML;
+        }
+
+        function setStatus(text, tone) {
+            if (!statusEl) return;
+            statusEl.textContent = text || '';
+            statusEl.classList.remove('is-success', 'is-error', 'is-warning');
+            if (tone) {
+                statusEl.classList.add(`is-${tone}`);
+            }
+        }
+
+        function buildRow(item) {
+            const row = document.createElement('tr');
+            row.dataset.accountId = item.account_id;
+            const missing = item.missing || {};
+            const missingLabels = [];
+            if (missing.email) missingLabels.push('почта');
+            if (missing.password) missingLabels.push('пароль');
+            if (missing.next_payment_date) missingLabels.push('дата оплаты');
+            if (missing.tariff) missingLabels.push('тариф');
+
+            row.innerHTML = `
+                <td>
+                    <div class="incomplete-data-modal__name">${escapeHtml(item.farm_name || '')}</div>
+                    <div class="incomplete-data-modal__meta">${escapeHtml(item.owner_name || '—')} · ${escapeHtml(item.server_bot || '—')}</div>
+                    <div class="incomplete-data-modal__missing">Заполнить: ${missingLabels.join(', ') || '—'}</div>
+                </td>
+                <td><input class="incomplete-data-modal__input" type="email" name="email" value="${escapeHtml(item.email || '')}" placeholder="email@example.com"></td>
+                <td><input class="incomplete-data-modal__input" type="text" name="password" value="${escapeHtml(item.password || '')}" placeholder="Пароль"></td>
+                <td><input class="incomplete-data-modal__input" type="date" name="next_payment_date" value="${escapeHtml(item.next_payment_at || '')}"></td>
+                <td><input class="incomplete-data-modal__input" type="number" min="0" step="50" name="tariff" value="${escapeHtml(item.tariff ?? '')}" placeholder="₽"></td>
+            `;
+
+            return row;
+        }
+
+        function collectRows() {
+            if (!rowsBody) return [];
+            return Array.from(rowsBody.querySelectorAll('tr')).map((row) => {
+                const getVal = (name) => {
+                    const input = row.querySelector(`[name="${name}"]`);
+                    return input ? input.value : '';
+                };
+                return {
+                    account_id: Number(row.dataset.accountId),
+                    email: getVal('email'),
+                    password: getVal('password'),
+                    next_payment_date: getVal('next_payment_date'),
+                    tariff: getVal('tariff'),
+                };
+            });
+        }
+
+        async function loadData() {
+            if (!loader || !empty || !tableWrap || !rowsBody) return;
+            loader.hidden = false;
+            empty.hidden = true;
+            tableWrap.hidden = true;
+            rowsBody.innerHTML = '';
+            setStatus('');
+
+            try {
+                const resp = await fetch(fetchUrl, { headers: { Accept: 'application/json', 'x-skip-loader': '1' } });
+                if (!resp.ok) {
+                    throw new Error('Не удалось загрузить список (HTTP).');
+                }
+                const data = await resp.json();
+                const items = Array.isArray(data.items) ? data.items : [];
+                const total = Number(data.total || 0);
+                if (countEl) {
+                    countEl.textContent = total;
+                }
+                card.dataset.incompleteCount = total;
+                if (!items.length) {
+                    empty.hidden = false;
+                    return;
+                }
+                items.forEach((item) => rowsBody.appendChild(buildRow(item)));
+                tableWrap.hidden = false;
+            } catch (err) {
+                console.error(err);
+                setStatus(err.message || 'Ошибка загрузки.', 'error');
+            } finally {
+                loader.hidden = true;
+            }
+        }
+
+        async function saveData() {
+            const items = collectRows();
+            if (!items.length) {
+                setStatus('Нет строк для сохранения.', 'warning');
+                return;
+            }
+
+            setStatus('Сохраняем изменения…');
+            if (saveBtn) saveBtn.disabled = true;
+            try {
+                const resp = await fetch(saveUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Accept: 'application/json',
+                        'x-skip-loader': '1',
+                    },
+                    body: JSON.stringify({ items }),
+                });
+                const data = await resp.json();
+                if (!resp.ok || !data.ok) {
+                    throw new Error(data.error || 'Не удалось сохранить изменения.');
+                }
+
+                if (Array.isArray(data.warnings) && data.warnings.length) {
+                    setStatus(data.warnings.join('\n'), 'warning');
+                } else {
+                    setStatus('Изменения сохранены.', 'success');
+                }
+
+                await loadData();
+            } catch (err) {
+                console.error(err);
+                setStatus(err.message || 'Ошибка сохранения.', 'error');
+            } finally {
+                if (saveBtn) saveBtn.disabled = false;
+            }
+        }
+
+        function openModal() {
+            modal.hidden = false;
+            modal.classList.add('is-open');
+            loadData();
+        }
+
+        function closeModal() {
+            modal.classList.remove('is-open');
+            modal.hidden = true;
+        }
+
+        card.addEventListener('click', openModal);
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+        modal.querySelectorAll('[data-role="incomplete-close"]').forEach((btn) => {
+            btn.addEventListener('click', closeModal);
+        });
+        if (saveBtn) {
+            saveBtn.addEventListener('click', saveData);
+        }
     })();
 </script>
 
