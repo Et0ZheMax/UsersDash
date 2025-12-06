@@ -5,6 +5,7 @@
 # - /account/<id>/settings/step/...  — AJAX-тоггл шагов
 # - /account/<id>/refresh            — AJAX-обновление ресурсов по ферме
 
+import re
 from flask import (
     Blueprint,
     render_template,
@@ -40,6 +41,12 @@ from UsersDash.services.tariffs import (
 )
 
 client_bp = Blueprint("client", __name__, url_prefix="")
+
+
+def _normalize_guid(raw: Any) -> str:
+    """Унифицирует GUID/ID: нижний регистр и только цифро-буквы."""
+
+    return re.sub(r"[^0-9a-z]", "", str(raw or "").lower())
 
 
 @client_bp.before_app_request
@@ -460,6 +467,8 @@ def dashboard():
 
     info_message = get_global_info_message_text()
 
+    log_alerts: list[dict[str, Any]] = []
+
     if not accounts:
         return render_template(
             "client/dashboard.html",
@@ -471,6 +480,55 @@ def dashboard():
             farmdata_status=farmdata_status,
             blocked_accounts=blocked_accounts,
             info_message=info_message,
+            log_alerts=log_alerts,
+        )
+
+    servers_by_id = {
+        acc.server_id: acc.server for acc in accounts if acc.server_id and acc.server
+    }
+
+    watch_by_server: dict[int, list[dict[str, Any]]] = {}
+    for srv_id, srv in servers_by_id.items():
+        summary, _ = fetch_watch_summary(srv)
+        if summary:
+            watch_by_server[srv_id] = summary.get("accounts") or []
+
+    def _match_watch_issue(acc: Account) -> dict[str, Any] | None:
+        items = watch_by_server.get(acc.server_id) or []
+        acc_guid = _normalize_guid(getattr(acc, "internal_id", None))
+
+        for item in items:
+            if item.get("kind") != "gather_tiles":
+                continue
+
+            remote_guid = _normalize_guid(item.get("remote_id"))
+            nick = str(item.get("nickname") or "")
+
+            if remote_guid and acc_guid and remote_guid == acc_guid:
+                return item
+
+            if nick and nick == acc.name:
+                return item
+
+        return None
+
+    seen_problem_accounts: set[int] = set()
+
+    for acc in accounts:
+        match = _match_watch_issue(acc)
+        if not match:
+            continue
+
+        if acc.id in seen_problem_accounts:
+            continue
+
+        seen_problem_accounts.add(acc.id)
+        log_alerts.append(
+            {
+                "account_name": acc.name,
+                "server_name": acc.server.name if acc.server else None,
+                "summary": match.get("summary") or "Проблема в логах фермы",
+            }
         )
 
     resources_map = fetch_resources_for_accounts(accounts)
@@ -508,6 +566,7 @@ def dashboard():
         farmdata_status=farmdata_status,
         blocked_accounts=blocked_accounts,
         info_message=info_message,
+        log_alerts=log_alerts,
     )
 
 

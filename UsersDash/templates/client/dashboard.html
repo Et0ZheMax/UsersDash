@@ -54,24 +54,40 @@
     <div class="kpi-card kpi-status-card">
         <div class="kpi-label">Статус</div>
         {% set status = farmdata_status %}
+        {% set has_log_alerts = log_alerts and log_alerts|length > 0 %}
 
-        {% if status and status.has_issues %}
+        {% if (status and status.has_issues) or has_log_alerts %}
             <div class="status-chip status-chip--warning">Требуется внимание</div>
-            <div class="status-list">
-                {% if status.missing_details %}
-                    {% for item in status.missing_details %}
+            {% if status and status.has_issues %}
+                <div class="status-list">
+                    {% if status.missing_details %}
+                        {% for item in status.missing_details %}
+                            <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
+                                <div class="status-item-title">{{ item.farm_name }}</div>
+                                <div class="status-item-text">Не заполнено: {{ item.missing_fields|join(', ') }}</div>
+                            </a>
+                        {% endfor %}
+                    {% elif status.missing_accounts %}
                         <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
-                            <div class="status-item-title">{{ item.farm_name }}</div>
-                            <div class="status-item-text">Не заполнено: {{ item.missing_fields|join(', ') }}</div>
+                            Заполните данные ферм: {{ status.missing_accounts|join(', ') }}
                         </a>
+                    {% endif %}
+                </div>
+            {% endif %}
+
+            {% if has_log_alerts %}
+                <div class="status-subtitle">Проблемы по логам</div>
+                <div class="status-list">
+                    {% for alert in log_alerts %}
+                        <div class="status-item status-item--warn">
+                            <div class="status-item-title">{{ alert.account_name }}</div>
+                            <div class="status-item-text">
+                                {{ alert.summary }}{% if alert.server_name %} · {{ alert.server_name }}{% endif %}
+                            </div>
+                        </div>
                     {% endfor %}
-                {% elif status.missing_accounts %}
-                    <a class="status-item status-item--warn status-item--link" href="{{ url_for('client.farm_data') }}">
-                        Заполните данные ферм: {{ status.missing_accounts|join(', ') }}
-                    </a>
-                {% endif %}
-            </div>
-            <div class="status-note">Проблемы по логам будут отображаться здесь позже.</div>
+                </div>
+            {% endif %}
         {% else %}
             <div class="status-chip status-chip--ok">Все Отлично</div>
             <div class="status-note status-note--ok">Новых проблем не обнаружено.</div>
