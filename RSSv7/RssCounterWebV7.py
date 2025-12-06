@@ -144,6 +144,13 @@ LD_PROBLEMS_SUMMARY_PATH = os.getenv(
     "LD_PROBLEMS_SUMMARY_PATH",
     CONFIG.get("LD_PROBLEMS_SUMMARY_PATH", r"C:\\LDPlayer\\ldChecker\\problems_summary.json"),
 )
+GATHER_TILES_STATE_PATH = os.path.join(BASE_DIR, "gather_tiles_state.json")
+GATHER_TILES_LOG_LIMIT = 1500
+GATHER_TILES_STREAK = 3
+GATHER_TILES_PATTERNS = (
+    "gather: cannot find tile",
+    "gather: cannot find level menu",
+)
 
 # 3) БД
 RESOURCES_DB   = os.path.join(BASE_DIR, "resources_web.db")
@@ -3139,6 +3146,135 @@ def _housekeep_cached_logs(conn, keep_days: int = 14):
     except Exception as e:
         print("[housekeep_cached_logs] warn:", e)
 
+
+def _load_gather_state() -> dict[str, t.Any]:
+    """Возвращает сохранённое состояние проблем с плитками (мягко)."""
+
+    state = _safe_json_load(GATHER_TILES_STATE_PATH)
+    return state if isinstance(state, dict) else {}
+
+
+def _save_gather_state(state: dict[str, t.Any]) -> None:
+    """Пишет состояние проблем с плитками на диск с защитой от ошибок."""
+
+    try:
+        os.makedirs(os.path.dirname(GATHER_TILES_STATE_PATH) or ".", exist_ok=True)
+        with open(GATHER_TILES_STATE_PATH, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print(f"[gather-watch] warn: cannot save state: {exc}")
+
+
+def _cycle_has_gather_issue(lines: list[str]) -> bool:
+    """Проверяет, есть ли в рамках цикла подряд >= N ошибок поиска плиток."""
+
+    streak = 0
+    for line in lines:
+        low = line.lower()
+        if any(pat in low for pat in GATHER_TILES_PATTERNS):
+            streak += 1
+            if streak >= GATHER_TILES_STREAK:
+                return True
+        else:
+            streak = 0
+    return False
+
+
+def _extract_last_cycles(rows: list[tuple[str, str, str | None]]):
+    """
+    Возвращает (предыдущий цикл, последний цикл, dt_последнего Account Done).
+
+    rows — список (dt, raw_line, nickname) в хронологическом порядке.
+    Если не хватает завершённых циклов — возвращает (None, None, None).
+    """
+
+    done_idx = [i for i, (_, raw, _) in enumerate(rows) if "account done" in raw.lower()]
+    if len(done_idx) < 2:
+        return None, None, None
+
+    last_end = done_idx[-1]
+    prev_end = done_idx[-2]
+
+    prev_start = done_idx[-3] + 1 if len(done_idx) >= 3 else 0
+
+    prev_cycle = [raw for _, raw, _ in rows[prev_start : prev_end + 1]]
+    last_cycle = [raw for _, raw, _ in rows[prev_end + 1 : last_end + 1]]
+    last_done_dt = rows[last_end][0]
+
+    return prev_cycle, last_cycle, last_done_dt
+
+
+def _collect_gather_watch() -> list[dict[str, t.Any]]:
+    """Ищет повторяющиеся ошибки поиска ресурсных плиток в последних циклах."""
+
+    active = load_active_names()
+    if not active:
+        return []
+
+    state_before = _load_gather_state()
+    new_state: dict[str, t.Any] = {}
+    alerts: list[dict[str, t.Any]] = []
+
+    conn = open_db(LOGS_DB)
+    c = conn.cursor()
+
+    try:
+        for acc_id, nick in active:
+            rows = c.execute(
+                """
+                  SELECT dt, raw_line, COALESCE(nickname, '')
+                  FROM cached_logs
+                  WHERE acc_id = ?
+                  ORDER BY id DESC
+                  LIMIT ?
+                """,
+                (acc_id, GATHER_TILES_LOG_LIMIT),
+            ).fetchall()
+
+            if not rows:
+                continue
+
+            rows = list(reversed(rows))
+            prev_cycle, last_cycle, last_done_dt = _extract_last_cycles(rows)
+            if not last_cycle or not last_done_dt:
+                continue
+
+            last_issue = _cycle_has_gather_issue(last_cycle)
+            prev_issue = _cycle_has_gather_issue(prev_cycle or []) if prev_cycle is not None else False
+
+            prev_state = state_before.get(acc_id) if isinstance(state_before, dict) else None
+
+            persistent = False
+            if prev_state:
+                if prev_state.get("last_done") != last_done_dt:
+                    if prev_state.get("had_issue") and last_issue:
+                        persistent = True
+            elif prev_issue and last_issue:
+                persistent = True
+
+            new_state[acc_id] = {"last_done": last_done_dt, "had_issue": last_issue}
+
+            if persistent:
+                alerts.append(
+                    {
+                        "acc_id": acc_id,
+                        "nickname": nick or rows[-1][2] or acc_id,
+                        "summary": (
+                            "🏕️ Недостаточно свободных ресурсных точек рядом с фермой "
+                            "(повторяется)"
+                        ),
+                        "kind": "gather_tiles",
+                        "total": 1,
+                    }
+                )
+    finally:
+        try:
+            _save_gather_state(new_state)
+        finally:
+            conn.close()
+
+    return alerts
+
 def _compute_cycle_stats(window_hours: int = 24,
                          min_gap_minutes: int = 5,
                          max_gap_hours: int = 3) -> dict:
@@ -4353,22 +4489,29 @@ def api_copy_settings():
 
 @app.route("/api/problems/summary")
 def api_problems_summary():
-    """Возвращает компактную сводку ошибок из LD_problems."""
+    """Возвращает компактную сводку ошибок из LD_problems и наблюдений по логам."""
 
     data = _safe_json_load(LD_PROBLEMS_SUMMARY_PATH) or {}
-    if not data:
-        return jsonify({
-            "server": SERVER_NAME,
-            "generated_at": None,
-            "total_accounts": 0,
-            "total_problems": 0,
-            "accounts": [],
-        })
+    gather_alerts = _collect_gather_watch()
 
-    if not data.get("server"):
-        data["server"] = SERVER_NAME
+    accounts = []
+    if isinstance(data.get("accounts"), list):
+        accounts.extend(data.get("accounts") or [])
 
-    return jsonify(data)
+    accounts.extend(gather_alerts)
+
+    payload = {
+        "server": data.get("server") or SERVER_NAME,
+        "generated_at": data.get("generated_at"),
+        "total_accounts": data.get("total_accounts", 0),
+        "total_problems": data.get("total_problems", 0),
+        "accounts": accounts,
+    }
+
+    if not payload["generated_at"] and accounts:
+        payload["generated_at"] = datetime.now().isoformat()
+
+    return jsonify(payload)
 
 
 @app.route("/api/logstatus")

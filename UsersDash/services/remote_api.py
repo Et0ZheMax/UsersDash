@@ -757,6 +757,8 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
                 "nickname": nick,
                 "summary": summary,
                 "total": item.get("total", 0),
+                "kind": item.get("kind"),
+                "remote_id": item.get("acc_id") or item.get("id"),
             }
         )
 
