@@ -239,12 +239,14 @@ def _collect_incomplete_farms(
         password = fd.password if fd else None
         next_payment = acc.next_payment_at.strftime("%Y-%m-%d") if acc.next_payment_at else None
         tariff = acc.next_payment_amount
+        tariff_name = get_tariff_name_by_price(tariff)
+        is_own_farm_tariff = tariff_name == "Своя ферма"
 
         missing = {
             "email": not email,
             "password": not password,
-            "next_payment_date": not next_payment,
-            "tariff": tariff is None,
+            "next_payment_date": False if is_own_farm_tariff else not next_payment,
+            "tariff": False if is_own_farm_tariff else tariff is None,
         }
 
         if not any(missing.values()):

@@ -74,7 +74,7 @@
                 <div class="cash-card__meta" data-role="cash-card-remaining">До конца месяца: {{ cash_totals.remaining_total }} ₽</div>
                 <div class="cash-card__list" data-role="cash-card-servers"></div>
             </button>
-            <button class="kpi-card kpi-card--clickable" type="button" data-role="incomplete-data-card"
+            <button class="kpi-card kpi-card--clickable kpi-card--incomplete" type="button" data-role="incomplete-data-card"
                     data-incomplete-count="{{ incomplete_accounts_total }}">
                 <div class="kpi-label">Заполнить данные</div>
                 <div class="kpi-value" data-role="incomplete-data-count">{{ incomplete_accounts_total }}</div>
