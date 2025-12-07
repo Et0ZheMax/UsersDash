@@ -6,9 +6,10 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import requests
 from requests import RequestException
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 
 # Таймауты для HTTP-запросов (в секундах)
 DEFAULT_TIMEOUT = 15
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
 def _get_effective_api_base(server) -> Optional[str]:
@@ -232,6 +234,7 @@ def _fmt_last_updated(dt_str: Optional[str]) -> Optional[str]:
         return None
     try:
         dt = datetime.fromisoformat(dt_str)
+        dt = _to_moscow_time(dt)
         return dt.strftime("%H:%M %d.%m.%Y")
     except Exception:
         return dt_str
@@ -243,6 +246,14 @@ def _fmt_generated_at(dt_str: Optional[str]) -> Optional[str]:
     if not dt_str:
         return None
 
+
+def _to_moscow_time(dt: datetime) -> datetime:
+    """Переводит datetime в часовой пояс Москвы."""
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MOSCOW_TZ)
+
     try:
         dt = datetime.fromisoformat(dt_str)
     except ValueError:
@@ -251,6 +262,7 @@ def _fmt_generated_at(dt_str: Optional[str]) -> Optional[str]:
         except Exception:
             return dt_str
 
+    dt = _to_moscow_time(dt)
     return dt.strftime("%d.%m %H:%M")
 
 
@@ -783,6 +795,35 @@ def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
         return None, "api_base_url не задан"
 
     url = f"{base}/server/self_status"
+    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    if data is None:
+        return None, f"Нет ответа от {url}"
+    if not isinstance(data, dict):
+        return None, f"Некорректный ответ от {url}"
+
+    return data, ""
+
+
+def fetch_server_cycle_time(
+    server,
+    *,
+    window_hours: int = 24,
+    min_gap_minutes: int = 5,
+    max_gap_hours: int = 6,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Получает статистику «времени круга» с /api/cycle_time.
+    Возвращает (payload, error).
+    """
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return None, "api_base_url не задан"
+
+    url = (
+        f"{base}/cycle_time?window_hours={window_hours}"
+        f"&min_gap_minutes={min_gap_minutes}&max_gap_hours={max_gap_hours}"
+    )
     data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
     if data is None:
         return None, f"Нет ответа от {url}"

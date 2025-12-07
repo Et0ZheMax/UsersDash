@@ -116,7 +116,12 @@
         <div class="admin-watch-grid" data-role="server-states-grid">
             {% for srv in server_states %}
                 <div class="admin-watch-card{% if srv.error %} is-error{% endif %}">
-                    <div class="admin-watch-card__title">{{ srv.name }}</div>
+                    {% if srv.link %}
+                        <a class="admin-watch-card__title admin-watch-card__title-link" href="{{ srv.link }}"
+                           target="_blank" rel="noopener">{{ srv.name }}</a>
+                    {% else %}
+                        <div class="admin-watch-card__title">{{ srv.name }}</div>
+                    {% endif %}
                     <div class="admin-watch-card__meta">
                         {% if srv.error %}
                             Ошибка: {{ srv.error }}
@@ -126,6 +131,10 @@
                     </div>
 
                     <div class="admin-watch-card__list">
+                        <div class="admin-watch-card__row">
+                            <span class="admin-watch-card__name">Круг</span>
+                            <span class="admin-watch-card__summary">{{ srv.cycle_avg or '—' }}</span>
+                        </div>
                         <div class="admin-watch-card__row">
                             <span class="admin-watch-card__name">Ping</span>
                             <span class="admin-watch-card__summary">{{ 'OK' if srv.ping else '—' }}</span>
@@ -172,6 +181,22 @@
                 return row;
             }
 
+            function buildTitle(name, link) {
+                const tagName = link ? 'a' : 'div';
+                const title = document.createElement(tagName);
+                title.className = 'admin-watch-card__title';
+                title.textContent = name || '—';
+
+                if (link) {
+                    title.classList.add('admin-watch-card__title-link');
+                    title.href = link;
+                    title.target = '_blank';
+                    title.rel = 'noopener';
+                }
+
+                return title;
+            }
+
             function renderServerStates(states) {
                 grid.innerHTML = '';
 
@@ -182,9 +207,7 @@
                         card.classList.add('is-error');
                     }
 
-                    const title = document.createElement('div');
-                    title.className = 'admin-watch-card__title';
-                    title.textContent = srv.name || '—';
+                    const title = buildTitle(srv.name, srv.link);
                     card.appendChild(title);
 
                     const meta = document.createElement('div');
@@ -196,6 +219,7 @@
 
                     const list = document.createElement('div');
                     list.className = 'admin-watch-card__list';
+                    list.appendChild(buildRow('Круг', srv.cycle_avg || '—'));
                     list.appendChild(buildRow('Ping', srv.ping ? 'OK' : '—'));
                     list.appendChild(buildRow('GnBots', srv.gn ? 'OK' : '—'));
                     const dnVal = srv.dn_count !== null && srv.dn_count !== undefined
