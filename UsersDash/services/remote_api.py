@@ -6,12 +6,14 @@
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import requests
+from markupsafe import Markup, escape
 from requests import RequestException
 
 from UsersDash.models import Server
@@ -247,6 +249,33 @@ def _fmt_generated_at(dt_str: Optional[str]) -> Optional[str]:
         return None
 
 
+def _format_resource_value(view: Any, emoji: str) -> Markup:
+    """Возвращает HTML-строку с ресурсом, приростом и эмодзи."""
+
+    if view is None:
+        return Markup(f"?<span class=\"resource-emoji\">{emoji}</span>")
+
+    text = str(view)
+
+    if "<" in text:
+        safe_html = Markup(text.replace("gainValue", "resource-gain"))
+        return safe_html + Markup(f"<span class=\"resource-emoji\">{emoji}</span>")
+
+    base_part = text
+    gain_part = ""
+
+    match = re.match(r"^(.+?)(\+.+)$", text)
+    if match:
+        base_part, gain_part = match.groups()
+
+    base_html = escape(base_part.strip())
+    gain_html = (
+        Markup(f'<span class="resource-gain">{escape(gain_part)}</span>') if gain_part else Markup("")
+    )
+
+    return Markup(base_html) + gain_html + Markup(f"<span class=\"resource-emoji\">{emoji}</span>")
+
+
 def _to_moscow_time(dt: datetime) -> datetime:
     """Переводит datetime в часовой пояс Москвы."""
 
@@ -315,12 +344,14 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
             if not res:
                 continue
 
-            food_view = res.get("food_view", "?")
-            wood_view = res.get("wood_view", "?")
-            stone_view = res.get("stone_view", "?")
-            gold_view = res.get("gold_view", "?")
+            brief_parts = [
+                _format_resource_value(res.get("food_view"), "🍗"),
+                _format_resource_value(res.get("wood_view"), "🌲"),
+                _format_resource_value(res.get("stone_view"), "🧱"),
+                _format_resource_value(res.get("gold_view"), "📀"),
+            ]
 
-            brief = f"{food_view} / {wood_view} / {stone_view} / {gold_view}"
+            brief = Markup(" / ").join(brief_parts)
 
             last_raw = res.get("last_updated")
             last_fmt = _fmt_last_updated(last_raw)
