@@ -156,7 +156,7 @@
         refreshBtn.disabled = true;
         refreshBtn.textContent = 'Обновляем...';
         try {
-            const resp = await fetch(`/api/templates/check?server_id=${serverId}`, {
+            const resp = await fetch(`{{ url_for('admin.api_templates_check') }}?server_id=${serverId}`, {
                 headers: { 'Accept': 'application/json' },
             });
             const data = await resp.json();
