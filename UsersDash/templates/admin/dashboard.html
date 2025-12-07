@@ -443,12 +443,14 @@
             modalContent.innerHTML = servers.map((srv) => {
                 const expense = expenses[srv.server_id] || '';
                 const srvRemaining = Math.floor((srv.monthly_total || 0) * daysLeft / daysInMonth);
+                const activeAccounts = srv.active_accounts || 0;
+                const serverLabel = `${srv.server_name} (${activeAccounts})`;
                 return `
                     <label class="cash-modal__row">
                         <div class="cash-modal__row-main">
                             <input type="checkbox" class="cash-modal__checkbox" data-server-id="${srv.server_id}" ${selectedServers.has(srv.server_id) ? 'checked' : ''}>
                             <div>
-                                <div class="cash-modal__server">${srv.server_name}</div>
+                                <div class="cash-modal__server">${serverLabel}</div>
                                 <div class="cash-modal__server-meta">${formatMoney(srv.monthly_total || 0)} · до конца месяца ${formatMoney(srvRemaining)}</div>
                             </div>
                         </div>
@@ -476,9 +478,11 @@
                     const expense = Number(expenses[srv.server_id] || 0);
                     const monthly = Math.max(0, (srv.monthly_total || 0) - Math.max(0, expense));
                     const remaining = Math.max(0, Math.round(monthly * daysLeft / daysInMonth));
+                    const activeAccounts = srv.active_accounts || 0;
+                    const serverLabel = `${srv.server_name} (${activeAccounts})`;
                     return `
                         <div class="cash-card__server-row">
-                            <span class="cash-card__server-name">${srv.server_name}</span>
+                            <span class="cash-card__server-name">${serverLabel}</span>
                             <span class="cash-card__server-amount">${formatMoney(monthly)} · ${formatMoney(remaining)}</span>
                         </div>
                     `;

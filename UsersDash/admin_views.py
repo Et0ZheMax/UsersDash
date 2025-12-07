@@ -413,6 +413,7 @@ def admin_dashboard():
         server_profit_map[srv.id] = {
             "server_id": srv.id,
             "server_name": srv.name,
+            "active_accounts": 0,
             "monthly_total": 0,
             "remaining_total": 0,
         }
@@ -441,6 +442,7 @@ def admin_dashboard():
         if monthly_amount < 0:
             monthly_amount = 0
 
+        srv_profit["active_accounts"] += 1
         srv_profit["monthly_total"] += monthly_amount
 
     for srv_profit in server_profit_map.values():
