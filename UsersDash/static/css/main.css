@@ -250,6 +250,16 @@ h1 {
     background: #171a2b;
 }
 
+.resource-emoji {
+    margin-left: 4px;
+}
+
+.resource-gain {
+    font-size: 0.85em;
+    color: #9ca3af;
+    margin-left: 2px;
+}
+
 .tariff-cell {
     display: flex;
     flex-direction: column;
