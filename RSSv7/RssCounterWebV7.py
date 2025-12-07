@@ -86,6 +86,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_DIR = os.path.join(BASE_DIR, "settings")
 PROFILES_DIR = os.path.join(SETTINGS_DIR, "profiles")     # профили аккаунтов *.json
 TEMPLATES_DIR = os.path.join(SETTINGS_DIR, "templates")   # шаблоны TRAIN.json, 650.json и т.д.
+TEMPLATES_BACKUP_DIR = os.path.join(TEMPLATES_DIR, "_backup")
 TEMPLATE_ALIASES_PATH = os.path.join(SETTINGS_DIR, "template_aliases.json")
 SCHEMA_CACHE_PATH = os.path.join(SETTINGS_DIR, "schema_cache.json")  # авто-накапливаемая «схема»
 TEMPLATE_GAPS_CACHE_PATH = os.path.join(SETTINGS_DIR, "template_schema_gaps.json")
@@ -383,6 +384,54 @@ def run_templates_schema_audit(schema: dict | None = None) -> dict:
     payload = {"checked_at": now_iso, "gaps": gaps, "ok": not gaps}
     save_template_gap_cache(payload)
     return payload
+
+
+def _backup_template_file(src_path: str) -> str | None:
+    """Создаёт резервную копию шаблона в каталоге _backup."""
+
+    try:
+        os.makedirs(TEMPLATES_BACKUP_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_name = f"{os.path.basename(src_path)}.{ts}.bak"
+        dst_path = os.path.join(TEMPLATES_BACKUP_DIR, backup_name)
+        shutil.copy2(src_path, dst_path)
+        return dst_path
+    except Exception:
+        app.logger.exception("Не удалось создать бэкап шаблона %s", src_path)
+        return None
+
+
+def _diff_template_with_schema(before: list, after: list) -> list[dict]:
+    """Строит diff между исходным и дополненным шаблоном."""
+
+    diffs: list[dict] = []
+    if not isinstance(before, list) or not isinstance(after, list):
+        return diffs
+
+    for idx, (before_step, after_step) in enumerate(zip(before, after)):
+        if not isinstance(after_step, dict):
+            continue
+
+        before_cfg = before_step.get("Config") if isinstance(before_step, dict) else {}
+        after_cfg = after_step.get("Config") or {}
+        if not isinstance(before_cfg, dict):
+            before_cfg = {}
+
+        changes = []
+        for key, new_val in after_cfg.items():
+            existed_before = isinstance(before_cfg, dict) and key in before_cfg
+            old_val = before_cfg.get(key) if existed_before else None
+            if old_val != new_val:
+                changes.append({"key": key, "before": old_val, "after": new_val})
+
+        if changes:
+            diffs.append({
+                "step_index": idx,
+                "script_id": after_step.get("ScriptId"),
+                "changes": changes,
+            })
+
+    return diffs
 
 def merge_template_into_account(account_steps: list, template_steps: list):
     """Полностью заменяет конфиг аккаунта переданным шаблоном."""
@@ -3796,6 +3845,81 @@ def api_templates_check():
         payload["ok"] = not payload.get("gaps")
 
     return jsonify(payload)
+
+
+@app.route("/api/templates/fix", methods=["POST"])
+def api_templates_fix():
+    """
+    POST /api/templates/fix?dry_run=true|false
+
+    Дополняет шаблоны недостающими ключами из схемы. В режиме dry-run возвращает diff
+    без записи файлов, в обычном режиме перезаписывает шаблоны и сохраняет бэкап.
+    """
+
+    payload = request.get_json(silent=True) or {}
+    dry_run_param = request.args.get("dry_run", payload.get("dry_run"))
+    if isinstance(dry_run_param, bool):
+        dry_run = dry_run_param
+    else:
+        dry_run = str(dry_run_param).lower() == "true"
+
+    schema = schema_load()
+    if not schema:
+        return jsonify({"error": "schema_not_found"}), 400
+
+    changes: list[dict] = []
+    updated: list[str] = []
+    backups: list[dict] = []
+    skipped: list[dict] = []
+
+    for name in sorted(os.listdir(TEMPLATES_DIR)):
+        if not name.lower().endswith(".json"):
+            continue
+
+        full_path = os.path.join(TEMPLATES_DIR, name)
+        template_steps = _json_read_or(full_path, None)
+        ok, err = _validate_template_steps(template_steps)
+        if not ok:
+            skipped.append({"template": name, "reason": err})
+            continue
+
+        gaps = find_template_schema_gaps(template_steps, schema)
+        if not gaps:
+            continue
+
+        fixed_steps = template_inflate_with_schema(template_steps, schema)
+        diff = _diff_template_with_schema(template_steps, fixed_steps)
+        changes.append({"template": name, "gaps": gaps, "diff": diff})
+
+        if dry_run:
+            continue
+
+        try:
+            backup_path = _backup_template_file(full_path)
+            safe_write_json(full_path, fixed_steps)
+            updated.append(name)
+            if backup_path:
+                backups.append({"template": name, "backup": backup_path})
+        except Exception:
+            skipped.append({"template": name, "reason": "write_failed"})
+            app.logger.exception("Не удалось сохранить шаблон %s", name)
+
+    audit = run_templates_schema_audit(schema) if not dry_run else load_template_gap_cache()
+
+    if updated:
+        app.logger.info("Templates fixed: %s", ", ".join(updated))
+
+    return jsonify(
+        {
+            "ok": True,
+            "dry_run": dry_run,
+            "changes": changes,
+            "updated": updated,
+            "backups": backups,
+            "skipped": skipped,
+            "audit": audit,
+        }
+    )
 
 @app.route("/api/templates/list", methods=["GET"])
 def api_templates_list():
