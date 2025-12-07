@@ -56,6 +56,9 @@ def _template_candidates(price: int | str | None) -> list[str]:
 
     aliases = TARIFF_TEMPLATE_ALIASES.get(normalized, [])
     candidates.extend(aliases)
+    for alias in aliases:
+        candidates.append(f"{normalized}{alias}")
+        candidates.append(f"{alias}{normalized}")
 
     filename = DEFAULT_CONFIG_FILES.get(normalized)
     if filename:
@@ -198,10 +201,16 @@ def has_defaults_for_tariff(price: int | str | None) -> bool:
     if normalized is None:
         return False
     filename = DEFAULT_CONFIG_FILES.get(normalized)
-    if not filename:
-        return False
-    path = _configs_root() / filename
-    return path.exists() and bool(_load_defaults_from_file(path))
+    file_exists = False
+    if filename:
+        path = _configs_root() / filename
+        file_exists = path.exists() and bool(_load_defaults_from_file(path))
+
+    # Даже если локального файла нет, можем опираться на шаблоны на сервере
+    # (см. _template_candidates).
+    has_templates = bool(_template_candidates(normalized))
+
+    return file_exists or has_templates
 
 
 def apply_defaults_for_account(account: Account, *, tariff_price: int | str | None = None) -> tuple[bool, str]:
