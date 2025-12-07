@@ -3005,6 +3005,15 @@ h1 {
   font-size: 15px;
 }
 
+.admin-watch-card__title-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.admin-watch-card__title-link:hover {
+  text-decoration: underline;
+}
+
 .admin-watch-card__meta {
   color: #cbd2f0;
   font-size: 13px;

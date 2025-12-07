@@ -9,7 +9,8 @@ import io
 import json
 import difflib
 from calendar import monthrange
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import traceback
 from typing import Any
 
@@ -49,6 +50,7 @@ from UsersDash.services.remote_api import (
     fetch_template_schema,
     fetch_templates_list,
     fetch_server_self_status,
+    fetch_server_cycle_time,
     fetch_watch_summary,
     rename_template_payload,
     save_template_payload,
@@ -74,6 +76,17 @@ def admin_required():
     """
     if not current_user.is_authenticated or current_user.role != "admin":
         abort(403)
+
+
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+
+def _to_moscow_time(dt: datetime) -> datetime:
+    """Переводит datetime в часовой пояс Москвы для отображения."""
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(MOSCOW_TZ)
 
 
 def _get_unassigned_user(return_created: bool = False):
@@ -180,9 +193,23 @@ def _format_checked_at(raw_value: str | None) -> str | None:
 
     try:
         dt = datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
+        dt = _to_moscow_time(dt)
         return dt.strftime("%d.%m %H:%M")
     except ValueError:
         return raw_value
+
+
+def _build_server_link(server: Server) -> str | None:
+    """Возвращает ссылку на сервер (api_base_url или host) с протоколом."""
+
+    raw_link = (server.api_base_url or server.host or "").strip()
+    if not raw_link:
+        return None
+
+    if not raw_link.startswith(("http://", "https://")):
+        raw_link = "http://" + raw_link
+
+    return raw_link
 
 
 def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
@@ -195,6 +222,8 @@ def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
             continue
 
         status, status_err = fetch_server_self_status(srv)
+        cycle_stats, _cycle_err = fetch_server_cycle_time(srv)
+        link = _build_server_link(srv)
 
         states.append(
             {
@@ -207,6 +236,10 @@ def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
                 "gn": bool(status.get("gnOk")) if isinstance(status, dict) else False,
                 "dn": bool(status.get("dnOk")) if isinstance(status, dict) else False,
                 "dn_count": status.get("dnCount") if isinstance(status, dict) else None,
+                "cycle_avg": cycle_stats.get("avg_cycle_hms")
+                if isinstance(cycle_stats, dict)
+                else None,
+                "link": link,
             }
         )
 
