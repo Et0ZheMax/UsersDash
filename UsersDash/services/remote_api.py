@@ -253,9 +253,14 @@ def _format_resource_value(view: Any, emoji: str) -> Markup:
     """Возвращает HTML-строку с ресурсом, приростом и эмодзи."""
 
     if view is None:
-        return Markup(f"?{emoji}")
+        return Markup(f"?<span class=\"resource-emoji\">{emoji}</span>")
 
     text = str(view)
+
+    if "<" in text:
+        safe_html = Markup(text.replace("gainValue", "resource-gain"))
+        return safe_html + Markup(f"<span class=\"resource-emoji\">{emoji}</span>")
+
     base_part = text
     gain_part = ""
 
