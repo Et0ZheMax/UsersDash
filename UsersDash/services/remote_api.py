@@ -629,6 +629,12 @@ def fetch_template_schema(server: Server) -> Tuple[Optional[Dict[str, Any]], Opt
     return _request_template_api(server, "GET", "/schema/get")
 
 
+def fetch_templates_check(server: Server) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Запрашивает результаты проверки manage-шаблонов."""
+
+    return _request_template_api(server, "GET", "/templates/check")
+
+
 def fetch_template_payload(server: Server, name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     return _request_template_api(server, "GET", f"/templates/{quote(name)}")
 
