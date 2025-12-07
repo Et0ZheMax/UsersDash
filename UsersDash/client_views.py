@@ -27,6 +27,7 @@ from UsersDash.services.remote_api import (
     fetch_account_settings,
     update_account_step_settings,
     update_account_active,
+    fetch_watch_summary,
 )
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
