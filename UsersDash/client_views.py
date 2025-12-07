@@ -5,6 +5,7 @@
 # - /account/<id>/settings/step/...  — AJAX-тоггл шагов
 # - /account/<id>/refresh            — AJAX-обновление ресурсов по ферме
 
+import json
 import re
 from flask import (
     Blueprint,
@@ -75,6 +76,14 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
     варианты.
     """
 
+    def _parse_json_if_string(value: Any):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
+
     def _safe_menu(data: Any, fallback: Any = None):
         menu = (
             (data.get("MenuData") if isinstance(data, dict) else None)
@@ -94,6 +103,8 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
         - словарь с числовыми ключами ("0", "1", ...);
         - объект одного шага (если прилетел без списка).
         """
+
+        val = _parse_json_if_string(val)
 
         # 1) Уже список
         if isinstance(val, list):
@@ -115,6 +126,8 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
             if isinstance(nested, list):
                 return nested, ctx or "nested-list"
 
+            nested = _parse_json_if_string(nested)
+
             # 4) Data — словарь с числовыми ключами
             if isinstance(nested, dict):
                 keys = list(nested.keys())
@@ -127,6 +140,8 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
                 return [val[k] for k in sorted(val.keys(), key=lambda x: int(x))], ctx or "numeric-map"
 
         return [], ctx or "unknown"
+
+    raw_settings = _parse_json_if_string(raw_settings)
 
     debug_info = {
         "payload_type": type(raw_settings).__name__,
@@ -144,6 +159,7 @@ def _extract_steps_and_menu(raw_settings, return_debug: bool = False):
 
     if isinstance(raw_settings, dict):
         primary = raw_settings.get("Data") or raw_settings.get("data") or raw_settings
+        primary = _parse_json_if_string(primary)
         debug_info.update({
             "primary_type": type(primary).__name__,
             "primary_keys": list(primary.keys()) if isinstance(primary, dict) else None,
@@ -746,7 +762,7 @@ def manage_account_details(account_id: int):
     raw_settings = fetch_account_settings(account)
     raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
     if not raw_steps:
-        return jsonify({"ok": False, "error": "failed to load settings", "debug": debug_info}), 500
+        debug_info = {**debug_info, "error": "no steps extracted"}
 
     is_admin = getattr(current_user, "role", None) == "admin"
     visibility_map = _build_visibility_map(raw_steps)

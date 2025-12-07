@@ -16,6 +16,7 @@ from UsersDash.services.remote_api import (
     apply_template_for_account,
     fetch_account_settings,
     fetch_template_schema,
+    fetch_templates_list,
     update_account_step_settings,
 )
 from UsersDash.services.tariffs import get_tariff_name_by_price
@@ -48,6 +49,31 @@ def _configs_root() -> Path:
     return Path(__file__).resolve().parent.parent / "bot_farm_configs"
 
 
+def _extract_template_names(payload: Any) -> set[str]:
+    names: set[str] = set()
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped:
+                names.add(stripped)
+            return
+
+        if isinstance(value, list):
+            for item in value:
+                _walk(item)
+            return
+
+        if isinstance(value, dict):
+            for key, val in value.items():
+                if isinstance(key, str) and key.strip():
+                    names.add(key.strip())
+                _walk(val)
+
+    _walk(payload)
+    return names
+
+
 def _template_candidates(price: int | str | None) -> list[str]:
     normalized = _normalize_price(price)
     candidates: list[str] = []
@@ -56,6 +82,9 @@ def _template_candidates(price: int | str | None) -> list[str]:
 
     aliases = TARIFF_TEMPLATE_ALIASES.get(normalized, [])
     candidates.extend(aliases)
+    for alias in aliases:
+        candidates.append(f"{normalized}{alias}")
+        candidates.append(f"{alias}{normalized}")
 
     filename = DEFAULT_CONFIG_FILES.get(normalized)
     if filename:
@@ -198,17 +227,34 @@ def has_defaults_for_tariff(price: int | str | None) -> bool:
     if normalized is None:
         return False
     filename = DEFAULT_CONFIG_FILES.get(normalized)
-    if not filename:
-        return False
-    path = _configs_root() / filename
-    return path.exists() and bool(_load_defaults_from_file(path))
+    file_exists = False
+    if filename:
+        path = _configs_root() / filename
+        file_exists = path.exists() and bool(_load_defaults_from_file(path))
+
+    # Даже если локального файла нет, можем опираться на шаблоны на сервере
+    # (см. _template_candidates).
+    has_templates = bool(_template_candidates(normalized))
+
+    return file_exists or has_templates
 
 
 def apply_defaults_for_account(account: Account, *, tariff_price: int | str | None = None) -> tuple[bool, str]:
     price = tariff_price if tariff_price is not None else getattr(account, "next_payment_amount", None)
 
+    server = getattr(account, "server", None)
+    available_templates: set[str] = set()
+    if server:
+        templates_payload, _ = fetch_templates_list(server)
+        if templates_payload:
+            available_templates = {name.lower() for name in _extract_template_names(templates_payload)}
+
     template_attempts: list[str] = []
     for template_name in _template_candidates(price):
+        if available_templates and template_name.lower() not in available_templates:
+            template_attempts.append(f"{template_name}: шаблон отсутствует на сервере")
+            continue
+
         ok, msg = apply_template_for_account(account, template_name)
         if ok:
             label = template_name
