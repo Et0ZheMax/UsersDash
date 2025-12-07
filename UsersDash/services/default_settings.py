@@ -82,9 +82,6 @@ def _template_candidates(price: int | str | None) -> list[str]:
 
     aliases = TARIFF_TEMPLATE_ALIASES.get(normalized, [])
     candidates.extend(aliases)
-    for alias in aliases:
-        candidates.append(f"{normalized}{alias}")
-        candidates.append(f"{alias}{normalized}")
 
     filename = DEFAULT_CONFIG_FILES.get(normalized)
     if filename:
