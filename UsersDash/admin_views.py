@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import difflib
+from pathlib import Path
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -39,6 +40,7 @@ from UsersDash.models import (
     User,
     db,
 )
+from UsersDash.config import Config
 from UsersDash.services.db_backup import backup_database
 from UsersDash.services import client_config_visibility
 from UsersDash.services.audit import settings_audit_context
@@ -49,6 +51,7 @@ from UsersDash.services.remote_api import (
     fetch_template_payload,
     fetch_template_schema,
     fetch_templates_list,
+    fetch_templates_check,
     fetch_server_self_status,
     fetch_server_cycle_time,
     fetch_watch_summary,
@@ -63,6 +66,7 @@ from UsersDash.services.info_message import (
     get_global_info_message,
     set_global_info_message_text,
 )
+from UsersDash.services.notifications import send_notification
 
 
 
@@ -197,6 +201,108 @@ def _format_checked_at(raw_value: str | None) -> str | None:
         return dt.strftime("%d.%m %H:%M")
     except ValueError:
         return raw_value
+
+
+TEMPLATES_CHECK_CACHE = Config.DATA_DIR / "templates_check_cache.json"
+
+
+def _load_templates_check_cache() -> dict[str, Any]:
+    if not TEMPLATES_CHECK_CACHE.exists():
+        return {}
+
+    try:
+        with Path(TEMPLATES_CHECK_CACHE).open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        current_app.logger.warning("[templates-check] Не удалось прочитать кеш, пересоздаём")
+
+    return {}
+
+
+def _save_templates_check_cache(payload: dict[str, Any]) -> None:
+    try:
+        TEMPLATES_CHECK_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with Path(TEMPLATES_CHECK_CACHE).open("w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        current_app.logger.warning("[templates-check] Не удалось сохранить кеш: %s", exc)
+
+
+def _normalize_template_check(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """Приводит отчёт /templates/check к единому виду."""
+
+    raw = raw or {}
+    missing_raw = (
+        raw.get("missing")
+        or raw.get("skipped")
+        or raw.get("gaps")
+        or raw.get("issues")
+        or []
+    )
+    missing: list[dict[str, Any]] = []
+    for item in missing_raw:
+        if not isinstance(item, dict):
+            continue
+        missing.append(
+            {
+                "alias": item.get("alias") or item.get("name") or item.get("alias_name"),
+                "template": item.get("template")
+                or item.get("template_name")
+                or item.get("expected"),
+                "reason": item.get("reason") or item.get("detail") or item.get("error"),
+            }
+        )
+
+    problem_count = raw.get("problem_count") or raw.get("issues_total") or raw.get("total")
+    if not isinstance(problem_count, int):
+        problem_count = len(missing)
+
+    checked_at = raw.get("checked_at") or raw.get("updated_at") or raw.get("generated_at")
+    checked_at_fmt = _format_checked_at(checked_at) if isinstance(checked_at, str) else None
+
+    return {
+        "checked_at": checked_at,
+        "checked_at_fmt": checked_at_fmt,
+        "problem_count": problem_count,
+        "missing": missing,
+    }
+
+
+def _build_gap_key(item: dict[str, Any]) -> str:
+    alias = (item.get("alias") or "").strip().lower()
+    template = (item.get("template") or "").strip().lower()
+    return f"{alias}::{template}" if alias or template else ""
+
+
+def _diff_template_gaps(current: list[dict[str, Any]], previous: list[dict[str, Any]] | None):
+    previous = previous or []
+    prev_map = {_build_gap_key(item): item for item in previous if _build_gap_key(item)}
+    curr_map = {_build_gap_key(item): item for item in current if _build_gap_key(item)}
+
+    new_keys = set(curr_map) - set(prev_map)
+    resolved_keys = set(prev_map) - set(curr_map)
+
+    return {
+        "new": [curr_map[key] for key in sorted(new_keys)],
+        "resolved": [prev_map[key] for key in sorted(resolved_keys)],
+    }
+
+
+def _notify_template_gaps(server: Server, new_gaps: list[dict[str, Any]], report: dict[str, Any]):
+    aliases = []
+    for gap in new_gaps:
+        alias = gap.get("alias") or gap.get("template") or "?"
+        template = gap.get("template") or gap.get("alias") or "?"
+        aliases.append(f"{alias} → {template}")
+
+    timestamp = report.get("checked_at_fmt") or report.get("checked_at") or ""
+    message = (
+        f"[templates] На сервере {server.name} новые пропуски ({len(new_gaps)}): "
+        f"{'; '.join(aliases)}. Проверка: {timestamp}"
+    )
+    send_notification(message)
 
 
 def _build_server_link(server: Server) -> str | None:
@@ -537,6 +643,16 @@ def templates_editor():
     return render_template("admin/templates_editor.html", servers=servers)
 
 
+@admin_bp.route("/templates/check")
+@login_required
+def templates_check_page():
+    """Страница проверки manage-шаблонов и расхождений по алиасам."""
+
+    admin_required()
+    servers = Server.query.order_by(Server.name.asc()).all()
+    return render_template("admin/templates_check.html", servers=servers)
+
+
 def _get_server_from_request():
     server_id = request.args.get("server_id", type=int)
     if not server_id:
@@ -564,6 +680,46 @@ def api_admin_templates_list():
         return jsonify({"error": message or "не удалось получить шаблоны"}), 502
 
     return jsonify(data)
+
+
+@admin_bp.route("/api/templates/check", methods=["GET"])
+@login_required
+def api_templates_check():
+    """Возвращает свежий отчёт /templates/check с диффом по последнему сохранённому."""
+
+    admin_required()
+    server, err = _get_server_from_request()
+    if err:
+        return err
+
+    raw_data, message = fetch_templates_check(server)
+    if raw_data is None:
+        return jsonify({"error": message or "не удалось получить отчёт"}), 502
+
+    current_report = _normalize_template_check(raw_data)
+    cache = _load_templates_check_cache()
+    prev_report = cache.get(str(server.id)) if cache else None
+    diff = _diff_template_gaps(
+        current_report.get("missing", []),
+        prev_report.get("missing") if isinstance(prev_report, dict) else [],
+    )
+
+    cache[str(server.id)] = current_report
+    _save_templates_check_cache(cache)
+
+    if diff.get("new"):
+        _notify_template_gaps(server, diff["new"], current_report)
+
+    return jsonify(
+        {
+            "ok": True,
+            "server_id": server.id,
+            "server_name": server.name,
+            "current": current_report,
+            "previous": prev_report,
+            "diff": diff,
+        }
+    )
 
 
 @admin_bp.route("/api/templates/schema", methods=["GET"])

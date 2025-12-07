@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+
+{% block title %}Проверка manage-шаблонов{% endblock %}
+
+{% block content %}
+<h1>Проверка manage-шаблонов</h1>
+<p class="page-subtitle">
+    Получает отчёт <code>/api/templates/check</code> с выбранного сервера, показывает пропуски по алиасам
+    и подсвечивает новые или исчезнувшие расхождения.
+</p>
+
+<div class="templates-check" data-role="templates-check">
+    <div class="templates-check__header">
+        <label class="templates-check__server">
+            <span class="templates-check__label">Сервер</span>
+            <select class="form-select" data-role="server-select">
+                {% for srv in servers %}
+                    <option value="{{ srv.id }}">{{ srv.name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <div class="templates-check__actions">
+            <button class="btn" type="button" data-role="refresh">Обновить отчёт</button>
+        </div>
+    </div>
+
+    <div class="templates-check__summary">
+        <div class="templates-check__metric">
+            <div class="templates-check__metric-label">Последняя проверка</div>
+            <div class="templates-check__metric-value" data-role="checked-at">—</div>
+        </div>
+        <div class="templates-check__metric">
+            <div class="templates-check__metric-label">Проблемных шаблонов</div>
+            <div class="templates-check__metric-value" data-role="issues-count">—</div>
+        </div>
+        <div class="templates-check__metric templates-check__metric--accent" data-role="diff-summary" hidden>
+            <div class="templates-check__metric-label">Изменения</div>
+            <div class="templates-check__metric-value" data-role="diff-text"></div>
+        </div>
+    </div>
+
+    <div class="templates-check__list" data-role="issues-list">
+        <div class="templates-check__empty">Нет данных. Нажмите «Обновить отчёт».</div>
+    </div>
+
+    <div class="templates-check__resolved" data-role="resolved-block" hidden>
+        <div class="templates-check__resolved-title">Решённые несоответствия</div>
+        <ul class="templates-check__resolved-list" data-role="resolved-list"></ul>
+    </div>
+</div>
+
+<script>
+(() => {
+    const root = document.querySelector('[data-role="templates-check"]');
+    if (!root) return;
+
+    const serverSelect = root.querySelector('[data-role="server-select"]');
+    const refreshBtn = root.querySelector('[data-role="refresh"]');
+    const checkedAtEl = root.querySelector('[data-role="checked-at"]');
+    const issuesCountEl = root.querySelector('[data-role="issues-count"]');
+    const listEl = root.querySelector('[data-role="issues-list"]');
+    const diffBlock = root.querySelector('[data-role="diff-summary"]');
+    const diffText = root.querySelector('[data-role="diff-text"]');
+    const resolvedBlock = root.querySelector('[data-role="resolved-block"]');
+    const resolvedList = root.querySelector('[data-role="resolved-list"]');
+
+    function buildIssueItem(issue, state) {
+        const item = document.createElement('div');
+        item.className = 'templates-check__item';
+        if (state === 'new') item.classList.add('is-new');
+        if (state === 'resolved') item.classList.add('is-resolved');
+
+        const title = document.createElement('div');
+        title.className = 'templates-check__item-title';
+        const alias = issue.alias || '—';
+        const template = issue.template || '—';
+        title.textContent = `${alias} → ${template}`;
+        item.appendChild(title);
+
+        if (issue.reason) {
+            const reason = document.createElement('div');
+            reason.className = 'templates-check__item-reason';
+            reason.textContent = issue.reason;
+            item.appendChild(reason);
+        }
+
+        const badge = document.createElement('span');
+        badge.className = 'templates-check__badge';
+        if (state === 'new') {
+            badge.textContent = 'Новое';
+            badge.classList.add('templates-check__badge--new');
+        } else if (state === 'resolved') {
+            badge.textContent = 'Решено';
+            badge.classList.add('templates-check__badge--resolved');
+        }
+        if (state) {
+            item.appendChild(badge);
+        }
+
+        return item;
+    }
+
+    function issueKey(issue) {
+        const alias = (issue.alias || '').toLowerCase().trim();
+        const template = (issue.template || '').toLowerCase().trim();
+        return `${alias}::${template}`;
+    }
+
+    function renderReport(report) {
+        const current = report.current || {};
+        const diff = report.diff || {};
+        const missing = Array.isArray(current.missing) ? current.missing : [];
+        const newSet = new Set((diff.new || []).map(issueKey));
+        const resolved = Array.isArray(diff.resolved) ? diff.resolved : [];
+
+        checkedAtEl.textContent = current.checked_at_fmt || current.checked_at || '—';
+        issuesCountEl.textContent = current.problem_count ?? missing.length;
+
+        listEl.innerHTML = '';
+        if (missing.length === 0) {
+            listEl.innerHTML = '<div class="templates-check__empty">Проблемы не найдены.</div>';
+        } else {
+            missing.forEach((item) => {
+                const state = newSet.has(issueKey(item)) ? 'new' : '';
+                listEl.appendChild(buildIssueItem(item, state));
+            });
+        }
+
+        if ((diff.new && diff.new.length) || (diff.resolved && diff.resolved.length)) {
+            diffBlock.hidden = false;
+            const parts = [];
+            if (diff.new && diff.new.length) parts.push(`+${diff.new.length} новых`);
+            if (diff.resolved && diff.resolved.length) parts.push(`−${diff.resolved.length} решено`);
+            diffText.textContent = parts.join(' · ');
+        } else {
+            diffBlock.hidden = true;
+        }
+
+        resolvedList.innerHTML = '';
+        if (resolved.length) {
+            resolvedBlock.hidden = false;
+            resolved.forEach((item) => {
+                const li = document.createElement('li');
+                li.appendChild(buildIssueItem(item, 'resolved'));
+                resolvedList.appendChild(li);
+            });
+        } else {
+            resolvedBlock.hidden = true;
+        }
+    }
+
+    async function loadReport() {
+        const serverId = serverSelect.value;
+        if (!serverId) return;
+
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Обновляем...';
+        try {
+            const resp = await fetch(`/api/templates/check?server_id=${serverId}`, {
+                headers: { 'Accept': 'application/json' },
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || `HTTP ${resp.status}`);
+            }
+            renderReport(data);
+        } catch (error) {
+            console.error('[templates-check] Не удалось загрузить отчёт', error);
+            alert(`Ошибка загрузки отчёта: ${error.message || error}`);
+        } finally {
+            refreshBtn.disabled = false;
+            refreshBtn.textContent = 'Обновить отчёт';
+        }
+    }
+
+    refreshBtn.addEventListener('click', loadReport);
+    serverSelect.addEventListener('change', loadReport);
+
+    if (serverSelect.value) {
+        loadReport();
+    }
+})();
+</script>
+{% endblock %}
