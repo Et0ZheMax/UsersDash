@@ -3324,6 +3324,47 @@ def _collect_gather_watch() -> list[dict[str, t.Any]]:
 
     return alerts
 
+
+def _load_inactive_watch() -> list[dict[str, t.Any]]:
+    """Подмешиваем список неактивных аккаунтов (dayGain=0 > THRESH)."""
+
+    path = Path(__file__).with_name("inactive15.json")
+    data = _safe_json_load(path)
+
+    if not isinstance(data, list):
+        return []
+
+    alerts: list[dict[str, t.Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        nick = item.get("nickname") or item.get("name")
+        hours = item.get("hours")
+        tag = item.get("tag") or "0gain🍽️"
+
+        if not nick or hours is None:
+            continue
+
+        try:
+            hours_num = float(hours)
+        except (TypeError, ValueError):
+            continue
+
+        hours_txt = f"{hours_num:.1f}".replace(".0", "")
+        alerts.append(
+            {
+                "nickname": nick,
+                "summary": f"{tag} {hours_txt}ч без прироста",
+                "total": 1,
+                "kind": "inactive",
+                "hours": hours_num,
+                "tag": tag,
+            }
+        )
+
+    return alerts
+
 def _compute_cycle_stats(window_hours: int = 24,
                          min_gap_minutes: int = 5,
                          max_gap_hours: int = 3) -> dict:
@@ -4617,18 +4658,20 @@ def api_problems_summary():
 
     data = _safe_json_load(LD_PROBLEMS_SUMMARY_PATH) or {}
     gather_alerts = _collect_gather_watch()
+    inactive_alerts = _load_inactive_watch()
 
     accounts = []
     if isinstance(data.get("accounts"), list):
         accounts.extend(data.get("accounts") or [])
 
     accounts.extend(gather_alerts)
+    accounts.extend(inactive_alerts)
 
     payload = {
         "server": data.get("server") or SERVER_NAME,
         "generated_at": data.get("generated_at"),
         "total_accounts": data.get("total_accounts", 0),
-        "total_problems": data.get("total_problems", 0),
+        "total_problems": data.get("total_problems", 0) + len(inactive_alerts),
         "accounts": accounts,
     }
 

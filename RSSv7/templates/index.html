@@ -2041,7 +2041,8 @@
         // 2) «>15 ч без прироста» – жёлтый + ❗ + часы
         inactive.forEach(obj => {
           const h = obj.hours.toFixed(1).replace('.0','');  // 17.4 → 17.4, 17.0 → 17
-          pushRow({nick: obj.nickname, cls: 'yellow', extra: ` ❗ ${h}ч`});
+          const tag = obj.tag || '0gain🍽️';
+          pushRow({nick: obj.nickname, cls: 'yellow', extra: ` ${tag} ❗ ${h}ч`, key: `inactive-${obj.nickname}`});
         });
 
         const tplGaps = Array.isArray(tplAudit.gaps) ? tplAudit.gaps : [];
@@ -2072,7 +2073,9 @@
           if (!nick) return;
           const summaryText = item.summary || buildSummary(item.problems);
           const extraText = summaryText ? `: ${summaryText}` : '';
-          pushRow({nick, cls: 'red', extra: extraText, key: `ld-${nick}`});
+          const kind = item.kind || '';
+          const cls = kind === 'inactive' ? 'yellow' : 'red';
+          pushRow({nick, cls, extra: extraText, key: `ld-${kind || 'default'}-${nick}`});
         });
 
         // max-height
