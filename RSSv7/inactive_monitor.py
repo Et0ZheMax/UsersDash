@@ -32,6 +32,8 @@ ALERT_SHORT = BASE_DIR / "inactive15.json"       # лёгкий список д�
 ALERT_FULL  = BASE_DIR / "inactive_alerts.json"  # подробности для админа
 STATE_FILE  = BASE_DIR / "inactive_state.json"   # кого слали в прошлый раз
 
+TAG_TEXT = "0gain🍽️"
+
 THRESH_HOURS = int(os.getenv("INACTIVE_HOURS", "15"))
 TELEGRAM_TOKEN = os.getenv("TG_TOKEN", "")
 TELEGRAM_CHAT  = os.getenv("TG_CHAT", "")
@@ -155,26 +157,41 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
             continue
 
         # считаем dayGain (по food+wood+stone+gold)
-        bf, bw, bs, bg = baseline.get(acc_id, (0, 0, 0, 0))
-        day_gain = (f - bf) + (w - bw) + (s - bs) + (g - bg)
+        base_row = baseline.get(acc_id)
+        if base_row:
+            bf, bw, bs, bg = base_row
+            day_gain = (f - bf) + (w - bw) + (s - bs) + (g - bg)
+        else:
+            # Нет baseline на сегодня — считаем, что прироста нет, но отмечаем отсутствие данных
+            day_gain = None
 
-        if day_gain != 0:
-            continue  # есть прирост — не шлём
+        hours_inactive = (now - dt).total_seconds() / 3600
+        is_stale = now - dt >= threshold
+        zero_gain = day_gain is None or day_gain == 0
 
-        if now - dt > threshold:
+        if is_stale and zero_gain:
             offenders.append({
                 "id": acc_id,
                 "nickname": nick,
                 "last": dt.isoformat(),
-                "hours": round((now - dt).total_seconds() / 3600, 1),
-                "day_gain": 0
+                "hours": round(hours_inactive, 1),
+                "day_gain": 0,
+                "baseline_missing": base_row is None,
+                "tag": TAG_TEXT,
             })
 
     # ── сохраняем json ────────────────────────────────────────────────
     try:
         ALERT_SHORT.write_text(
             json.dumps(
-                [{"nickname": o["nickname"], "hours": o["hours"]} for o in offenders],
+                [
+                    {
+                        "nickname": o["nickname"],
+                        "hours": o["hours"],
+                        "tag": o.get("tag", TAG_TEXT),
+                    }
+                    for o in offenders
+                ],
                 ensure_ascii=False,
                 indent=2
             ),
@@ -204,7 +221,8 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
                 for o in sorted(diff_added, key=lambda x: x["hours"], reverse=True):
                     ts = _tz_aware_from_iso(o["last"]).astimezone() if o["last"] else None
                     when = ts.strftime("%d.%m %H:%M") if ts else "?"
-                    lines.append(f"❗ {o['nickname']} — {when}  ({o['hours']} ч)")
+                    tag = o.get("tag") or TAG_TEXT
+                    lines.append(f"❗ {tag} {o['nickname']} — {when}  ({o['hours']} ч)")
             if diff_removed:
                 lines.append("")
                 lines.append("✅ Вышли из списка: " + ", ".join(diff_removed))
