@@ -23,7 +23,7 @@ import socket
 import ctypes
 import sys
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import TelegramError, TimedOut
 
 # ─────────────────── Путь до локальной конфигурации ───────────────
 BASE_DIR    = Path(__file__).resolve().parent
@@ -166,11 +166,18 @@ def split_into_messages(lines: list[str]) -> list[str]:
     return msgs
 
 async def safe_send(bot: Bot, text: str) -> None:
-    """Отправка сообщения в TG с защитой от Flood-limit и длины."""
+    """Отправка сообщения в TG с защитой от Flood-limit и таймаутов."""
+    retries = 0
     while True:
         try:
             await bot.send_message(chat_id=chat_id, text=text)
             return
+        except TimedOut:
+            retries += 1
+            if retries > 3:
+                print("Telegram-error: Timed out (превышено число попыток)")
+                return
+            await asyncio.sleep(min(5 * retries, 20))
         except TelegramError as e:
             m = str(e)
             if "Flood control exceeded" in m:
