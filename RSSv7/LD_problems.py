@@ -69,7 +69,7 @@ PROBLEM_LABELS = {
     "restart": "Restart X4❌",
     "crash": "Crash💥",
     "idle": "Idle⌛",
-    "no_tasks": "No tasks🤷🏼‍♀️📑",
+    "no_tasks": "No tasks🤷🏼‍♀️📋",
     "other": "Other⚠️",
 }
 
@@ -428,4 +428,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Прерывание пользователем.")
+
 
