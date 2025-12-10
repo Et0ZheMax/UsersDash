@@ -17,12 +17,36 @@ import json
 import asyncio
 from datetime import datetime, timedelta
 from collections import Counter, defaultdict
+from pathlib import Path
 import re
 import socket
 import ctypes
 import sys
 from telegram import Bot
-from telegram.error import TelegramError
+from telegram.error import TelegramError, TimedOut
+
+# ─────────────────── Путь до локальной конфигурации ───────────────
+BASE_DIR    = Path(__file__).resolve().parent
+CONFIG_PATH = BASE_DIR / "config.json"
+
+
+def _load_config(path: Path) -> dict:
+    """Пытаемся прочитать config.json рядом со скриптом."""
+
+    try:
+        with open(path, "r", encoding="utf-8") as cfg:
+            data = json.load(cfg)
+        print(f"⚙️  Загружен config.json: {path}")
+        return data
+    except FileNotFoundError:
+        print("⚠️  config.json не найден, используем значения по умолчанию.")
+    except Exception as exc:
+        print(f"⚠️  Не удалось прочитать config.json: {exc}")
+    return {}
+
+
+CONFIG = _load_config(CONFIG_PATH)
+
 
 # ────────────── Заголовок консольного окна (Windows) ──────────────
 title = "LD_problems"
@@ -30,11 +54,14 @@ if sys.platform == "win32":
     ctypes.windll.kernel32.SetConsoleTitleW(title)
 
 # ─────────────────────── ⚙️  Настройки ────────────────────────────
-LOG_FOLDER      = r"C:\Program Files\GnBots\logs"
+DEFAULT_LOG_FOLDER    = r"C:\Program Files\GnBots\logs"
+DEFAULT_PROFILE_FILE  = r"C:/Program Files/GnBots/profiles/FRESH_NOX.json"
+
+LOG_FOLDER      = os.getenv("LDP_LOG_FOLDER") or CONFIG.get("LOGS_DIR", DEFAULT_LOG_FOLDER)
 PROBLEMS_FILE   = r"C:\LDPlayer\ldChecker\problems.json"
 SUMMARY_FILE    = os.getenv("LDP_SUMMARY_FILE", r"C:\LDPlayer\ldChecker\problems_summary.json")
-PROFILE_FILE    = r'C:/Program Files/GnBots/profiles/FRESH_NOX.json'
-SERVER_NAME     = os.getenv("SERVER_NAME") or socket.gethostname()
+PROFILE_FILE    = os.getenv("LDP_PROFILE_FILE") or CONFIG.get("PROFILE_PATH", DEFAULT_PROFILE_FILE)
+SERVER_NAME     = os.getenv("SERVER_NAME") or CONFIG.get("SERVER_NAME") or socket.gethostname()
 
 PROBLEM_LABELS = {
     "login": "Login🔑",
@@ -42,11 +69,15 @@ PROBLEM_LABELS = {
     "restart": "Restart X4❌",
     "crash": "Crash💥",
     "idle": "Idle⌛",
+    "no_tasks": "No tasks🤷🏼‍♀️📑",
     "other": "Other⚠️",
 }
 
-telegram_token  = os.getenv("LDP_TG_TOKEN", "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc")
-chat_id         = "275483461"
+DEFAULT_TG_TOKEN = "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc"
+
+telegram_token  = os.getenv("LDP_TG_TOKEN") or CONFIG.get("TELEGRAM_TOKEN") or DEFAULT_TG_TOKEN
+chat_id         = os.getenv("LDP_TG_CHAT") or CONFIG.get("TELEGRAM_CHAT_ID", "275483461")
+SERVER_LABEL    = (SERVER_NAME or "LD").strip() or "LD"
 
 # 1️⃣  Мгновенные шаблоны
 regex_list = [
@@ -56,6 +87,7 @@ regex_list = [
     re.compile(r'Write gmail'),
     re.compile(r'Update the Game'),
     re.compile(r'no actions'),
+    re.compile(r'Found\s+0\s+active\s+Actions'),
     re.compile(r'Ignoring'),
 ]
 
@@ -134,11 +166,18 @@ def split_into_messages(lines: list[str]) -> list[str]:
     return msgs
 
 async def safe_send(bot: Bot, text: str) -> None:
-    """Отправка сообщения в TG с защитой от Flood-limit и длины."""
+    """Отправка сообщения в TG с защитой от Flood-limit и таймаутов."""
+    retries = 0
     while True:
         try:
             await bot.send_message(chat_id=chat_id, text=text)
             return
+        except TimedOut:
+            retries += 1
+            if retries > 3:
+                print("Telegram-error: Timed out (превышено число попыток)")
+                return
+            await asyncio.sleep(min(5 * retries, 20))
         except TelegramError as e:
             m = str(e)
             if "Flood control exceeded" in m:
@@ -177,6 +216,8 @@ def _classify_problem(raw_line: str) -> tuple[str, str]:
         return "crash", PROBLEM_LABELS["crash"]
     if "no actions" in lower:
         return "idle", PROBLEM_LABELS["idle"]
+    if "found 0 active actions" in lower:
+        return "no_tasks", PROBLEM_LABELS["no_tasks"]
 
     return "other", PROBLEM_LABELS["other"]
 
@@ -351,7 +392,7 @@ async def check_logs_and_notify() -> None:
     counts  = Counter(r["account"] for r in new)
 
     for part in split_into_messages(details):
-        await safe_send(bot, "F99🚨 Найдены проблемы:\n" + part)
+        await safe_send(bot, f"{SERVER_LABEL}🚨 Найдены проблемы:\n" + part)
 
     per_account: dict[str, Counter] = defaultdict(Counter)
     for rec in new:
@@ -364,7 +405,7 @@ async def check_logs_and_notify() -> None:
 
     header = f"{len(counts)} аккаунтов, {len(new)} проблем"
     summary_txt = "\n".join(summary_lines) if summary_lines else "—"
-    await safe_send(bot, f"F99📊 Сводка: {header}\n{summary_txt}")
+    await safe_send(bot, f"{SERVER_LABEL}📊 Сводка: {header}\n{summary_txt}")
 
     _save_summary(per_account, len(new))
 
