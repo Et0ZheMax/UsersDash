@@ -362,10 +362,12 @@ def _collect_watch_cards(servers: list[Server]) -> list[dict[str, Any]]:
             continue
 
         summary, err = fetch_watch_summary(srv)
+        raw_updated = summary.get("generated_at") if summary else None
         cards.append(
             {
                 "server": summary.get("server") if summary else srv.name,
-                "updated": summary.get("generated_at_fmt") if summary else None,
+                "updated": _format_checked_at(raw_updated) if raw_updated else None,
+                "updated_raw": raw_updated,
                 "accounts": summary.get("accounts") if summary else [],
                 "error": err,
             }

@@ -370,10 +370,11 @@
 
                     const meta = document.createElement('div');
                     meta.className = 'admin-watch-card__meta';
+                    const cardUpdated = formatUpdatedAt(card.updated_raw || card.updated) || card.updated;
                     if (card.error) {
                         meta.textContent = `Ошибка: ${card.error}`;
-                    } else if (card.updated) {
-                        meta.textContent = `Обновлено ${card.updated}`;
+                    } else if (cardUpdated) {
+                        meta.textContent = `Обновлено ${cardUpdated}`;
                     } else {
                         meta.textContent = 'Нет свежих данных';
                     }
