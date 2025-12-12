@@ -216,6 +216,279 @@
         }
     }
 
+    function formatMoscowDate(raw) {
+        if (!raw) return null;
+
+        const dt = new Date(raw);
+        if (Number.isNaN(dt.getTime())) {
+            return null;
+        }
+
+        return dt.toLocaleString('ru-RU', {
+            timeZone: 'Europe/Moscow',
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        });
+    }
+
+    function createWatchPlaceholder(text, tone) {
+        const card = document.createElement('div');
+        card.className = 'admin-watch-card admin-watch-card--placeholder';
+        if (tone === 'error') {
+            card.classList.add('is-error');
+        }
+        card.textContent = text;
+        return card;
+    }
+
+    function setupServerStatesSection() {
+        const panel = document.querySelector('[data-role="server-states-panel"]');
+        if (!panel) return;
+
+        const grid = panel.querySelector('[data-role="server-states-grid"]');
+        const updatedLabel = panel.querySelector('[data-role="server-states-updated"]');
+        const endpoint = panel.dataset.endpoint;
+
+        if (!grid || !endpoint) return;
+
+        const renderError = (message) => {
+            grid.innerHTML = '';
+            grid.appendChild(createWatchPlaceholder(message || 'Не удалось загрузить данные.', 'error'));
+            if (updatedLabel) {
+                updatedLabel.textContent = '';
+            }
+        };
+
+        const buildRow = (label, value) => {
+            const row = document.createElement('div');
+            row.className = 'admin-watch-card__row';
+
+            const name = document.createElement('span');
+            name.className = 'admin-watch-card__name';
+            name.textContent = label;
+            row.appendChild(name);
+
+            const summary = document.createElement('span');
+            summary.className = 'admin-watch-card__summary';
+            summary.textContent = value;
+            row.appendChild(summary);
+
+            return row;
+        };
+
+        const buildTitle = (name, link) => {
+            const tagName = link ? 'a' : 'div';
+            const title = document.createElement(tagName);
+            title.className = 'admin-watch-card__title';
+            title.textContent = name || '—';
+
+            if (link) {
+                title.classList.add('admin-watch-card__title-link');
+                title.href = link;
+                title.target = '_blank';
+                title.rel = 'noopener';
+            }
+
+            return title;
+        };
+
+        const renderServerStates = (items) => {
+            grid.innerHTML = '';
+            const states = Array.isArray(items) ? items : [];
+            if (states.length === 0) {
+                grid.appendChild(createWatchPlaceholder('Нет данных о серверах.'));
+                return;
+            }
+
+            states.forEach((srv) => {
+                const card = document.createElement('div');
+                card.className = 'admin-watch-card';
+                if (srv.error) {
+                    card.classList.add('is-error');
+                }
+
+                card.appendChild(buildTitle(srv.name, srv.link));
+
+                const meta = document.createElement('div');
+                meta.className = 'admin-watch-card__meta';
+                meta.textContent = srv.error
+                    ? `Ошибка: ${srv.error}`
+                    : `Обновлено ${srv.updated || '—'}`;
+                card.appendChild(meta);
+
+                const list = document.createElement('div');
+                list.className = 'admin-watch-card__list';
+                list.appendChild(buildRow('Круг', srv.cycle_avg || '—'));
+                list.appendChild(buildRow('Ping', srv.ping ? 'OK' : '—'));
+                list.appendChild(buildRow('GnBots', srv.gn ? 'OK' : '—'));
+                const dnVal = srv.dn_count !== null && srv.dn_count !== undefined
+                    ? srv.dn_count
+                    : (srv.dn ? 1 : '—');
+                list.appendChild(buildRow('LD', dnVal));
+
+                card.appendChild(list);
+                grid.appendChild(card);
+            });
+        };
+
+        let serverStatesFirstLoad = true;
+
+        const refreshServerStates = async () => {
+            if (serverStatesFirstLoad) {
+                grid.innerHTML = '';
+                grid.appendChild(createWatchPlaceholder('Загружаем данные…'));
+            }
+
+            try {
+                const resp = await fetch(endpoint, { headers: { Accept: 'application/json' } });
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                }
+
+                const data = await resp.json();
+                renderServerStates(data && data.items);
+
+                serverStatesFirstLoad = false;
+
+                const updatedAt = formatMoscowDate(data && data.generated_at);
+                if (updatedLabel) {
+                    updatedLabel.textContent = updatedAt ? `Обновлено ${updatedAt}` : '';
+                }
+            } catch (error) {
+                console.error('[server-states] Не удалось обновить раздел:', error);
+                renderError('Не удалось загрузить данные о серверах.');
+            } finally {
+                serverStatesFirstLoad = false;
+            }
+        };
+
+        refreshServerStates();
+        setInterval(refreshServerStates, 60_000);
+    }
+
+    function setupWatchCardsSection() {
+        const panel = document.querySelector('[data-role="watch-cards-panel"]');
+        if (!panel) return;
+
+        const grid = panel.querySelector('[data-role="watch-cards-grid"]');
+        const updatedLabel = panel.querySelector('[data-role="watch-cards-updated"]');
+        const endpoint = panel.dataset.endpoint;
+
+        if (!grid || !endpoint) return;
+
+        const renderError = (message) => {
+            grid.innerHTML = '';
+            grid.appendChild(createWatchPlaceholder(message || 'Не удалось загрузить данные.', 'error'));
+            if (updatedLabel) {
+                updatedLabel.textContent = '';
+            }
+        };
+
+        const renderWatchCards = (items) => {
+            grid.innerHTML = '';
+            const cards = Array.isArray(items) ? items : [];
+            if (cards.length === 0) {
+                grid.appendChild(createWatchPlaceholder('Проблем не обнаружено.'));
+                return;
+            }
+
+            cards.forEach((cardData) => {
+                const item = document.createElement('div');
+                item.className = 'admin-watch-card';
+                if (cardData.error) {
+                    item.classList.add('is-error');
+                }
+
+                const title = document.createElement('div');
+                title.className = 'admin-watch-card__title';
+                title.textContent = cardData.server || '—';
+                item.appendChild(title);
+
+                const meta = document.createElement('div');
+                meta.className = 'admin-watch-card__meta';
+                const cardUpdated = formatMoscowDate(cardData.updated_raw || cardData.updated) || cardData.updated;
+                if (cardData.error) {
+                    meta.textContent = `Ошибка: ${cardData.error}`;
+                } else if (cardUpdated) {
+                    meta.textContent = `Обновлено ${cardUpdated}`;
+                } else {
+                    meta.textContent = 'Нет свежих данных';
+                }
+                item.appendChild(meta);
+
+                const accounts = Array.isArray(cardData.accounts) ? cardData.accounts : [];
+                if (accounts.length === 0) {
+                    const empty = document.createElement('div');
+                    empty.className = 'admin-watch-card__empty';
+                    empty.textContent = 'Проблем не обнаружено';
+                    item.appendChild(empty);
+                } else {
+                    const list = document.createElement('ul');
+                    list.className = 'admin-watch-card__list';
+
+                    accounts.forEach((acc) => {
+                        const row = document.createElement('li');
+                        row.className = 'admin-watch-card__row';
+
+                        const name = document.createElement('span');
+                        name.className = 'admin-watch-card__name';
+                        name.textContent = acc.nickname || '—';
+                        row.appendChild(name);
+
+                        if (acc.summary) {
+                            const summary = document.createElement('span');
+                            summary.className = 'admin-watch-card__summary';
+                            summary.textContent = acc.summary;
+                            row.appendChild(summary);
+                        }
+
+                        list.appendChild(row);
+                    });
+
+                    item.appendChild(list);
+                }
+
+                grid.appendChild(item);
+            });
+        };
+
+        let watchCardsFirstLoad = true;
+
+        const refreshWatchCards = async () => {
+            if (watchCardsFirstLoad) {
+                grid.innerHTML = '';
+                grid.appendChild(createWatchPlaceholder('Загружаем данные…'));
+            }
+
+            try {
+                const resp = await fetch(endpoint, { headers: { Accept: 'application/json' } });
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                }
+
+                const data = await resp.json();
+                renderWatchCards(data && data.items);
+
+                watchCardsFirstLoad = false;
+
+                const updatedAt = formatMoscowDate(data && data.generated_at);
+                if (updatedLabel) {
+                    updatedLabel.textContent = updatedAt ? `Обновлено ${updatedAt}` : '';
+                }
+            } catch (error) {
+                console.error('[watch-cards] Не удалось обновить раздел:', error);
+                renderError('Не удалось загрузить сводку наблюдения.');
+            } finally {
+                watchCardsFirstLoad = false;
+            }
+        };
+
+        refreshWatchCards();
+        setInterval(refreshWatchCards, 60_000);
+    }
+
     // ---------- Действия ----------
 
     async function handleRefreshAccount(btn) {
@@ -546,6 +819,8 @@
         setupAccountSearch();
         applyFarmDataStatusUI();
         loadAdminAccountResources();
+        setupServerStatesSection();
+        setupWatchCardsSection();
     });
 
     // ---------- Делегированный обработчик кликов ----------

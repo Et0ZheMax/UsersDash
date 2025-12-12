@@ -509,7 +509,6 @@ def admin_dashboard():
     payment_cards.sort(key=lambda x: (x["pay_date"], 0 if x["status"] == "due" else 1))
 
     servers = Server.query.order_by(Server.name.asc()).all()
-    watch_cards = _collect_watch_cards(servers)
 
     today_date = datetime.utcnow().date()
     days_in_month = monthrange(today_date.year, today_date.month)[1]
@@ -528,8 +527,6 @@ def admin_dashboard():
             "monthly_total": 0,
             "remaining_total": 0,
         }
-
-    server_states = _collect_server_states(servers)
 
     for acc in accounts:
         if not acc.is_active or not acc.server_id:
@@ -571,8 +568,6 @@ def admin_dashboard():
         total_servers=total_servers,
         accounts_data=accounts_data,
         payment_cards=payment_cards,
-        watch_cards=watch_cards,
-        server_states=server_states,
         server_profits=server_profits,
         cash_totals={
             "monthly_total": overall_monthly_profit,
