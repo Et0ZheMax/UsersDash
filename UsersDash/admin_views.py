@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import difflib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from calendar import monthrange
 from datetime import datetime, timedelta, timezone
@@ -321,59 +322,76 @@ def _build_server_link(server: Server) -> str | None:
 def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
     """Подтягивает self_status со всех активных серверов."""
 
-    states: list[dict[str, Any]] = []
-
-    for srv in servers:
-        if not srv.is_active:
-            continue
-
+    def _build_server_state(srv: Server) -> dict[str, Any]:
         status, status_err = fetch_server_self_status(srv)
         cycle_stats, _cycle_err = fetch_server_cycle_time(srv)
         link = _build_server_link(srv)
 
-        states.append(
-            {
-                "name": srv.name,
-                "updated": _format_checked_at(status.get("checked_at"))
-                if isinstance(status, dict)
-                else None,
-                "error": status_err,
-                "ping": bool(status.get("pingOk")) if isinstance(status, dict) else False,
-                "gn": bool(status.get("gnOk")) if isinstance(status, dict) else False,
-                "dn": bool(status.get("dnOk")) if isinstance(status, dict) else False,
-                "dn_count": status.get("dnCount") if isinstance(status, dict) else None,
-                "cycle_avg": cycle_stats.get("avg_cycle_hms")
-                if isinstance(cycle_stats, dict)
-                else None,
-                "link": link,
-            }
-        )
+        return {
+            "name": srv.name,
+            "updated": _format_checked_at(status.get("checked_at"))
+            if isinstance(status, dict)
+            else None,
+            "error": status_err,
+            "ping": bool(status.get("pingOk")) if isinstance(status, dict) else False,
+            "gn": bool(status.get("gnOk")) if isinstance(status, dict) else False,
+            "dn": bool(status.get("dnOk")) if isinstance(status, dict) else False,
+            "dn_count": status.get("dnCount") if isinstance(status, dict) else None,
+            "cycle_avg": cycle_stats.get("avg_cycle_hms")
+            if isinstance(cycle_stats, dict)
+            else None,
+            "link": link,
+        }
 
-    return states
+    active_servers = [(idx, srv) for idx, srv in enumerate(servers) if srv.is_active]
+    if not active_servers:
+        return []
+
+    states: list[tuple[int, dict[str, Any]]] = []
+    max_workers = min(8, len(active_servers))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(_build_server_state, srv): idx for idx, srv in active_servers
+        }
+
+        for future in as_completed(future_map):
+            states.append((future_map[future], future.result()))
+
+    return [state for _, state in sorted(states, key=lambda pair: pair[0])]
 
 
 def _collect_watch_cards(servers: list[Server]) -> list[dict[str, Any]]:
     """Собирает сводку наблюдения по активным серверам."""
 
-    cards: list[dict[str, Any]] = []
-
-    for srv in servers:
-        if not srv.is_active:
-            continue
-
+    def _build_watch_card(srv: Server) -> dict[str, Any]:
         summary, err = fetch_watch_summary(srv)
         raw_updated = summary.get("generated_at") if summary else None
-        cards.append(
-            {
-                "server": summary.get("server") if summary else srv.name,
-                "updated": _format_checked_at(raw_updated) if raw_updated else None,
-                "updated_raw": raw_updated,
-                "accounts": summary.get("accounts") if summary else [],
-                "error": err,
-            }
-        )
 
-    return cards
+        return {
+            "server": summary.get("server") if summary else srv.name,
+            "updated": _format_checked_at(raw_updated) if raw_updated else None,
+            "updated_raw": raw_updated,
+            "accounts": summary.get("accounts") if summary else [],
+            "error": err,
+        }
+
+    active_servers = [(idx, srv) for idx, srv in enumerate(servers) if srv.is_active]
+    if not active_servers:
+        return []
+
+    cards: list[tuple[int, dict[str, Any]]] = []
+    max_workers = min(8, len(active_servers))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {
+            executor.submit(_build_watch_card, srv): idx for idx, srv in active_servers
+        }
+
+        for future in as_completed(future_map):
+            cards.append((future_map[future], future.result()))
+
+    return [card for _, card in sorted(cards, key=lambda pair: pair[0])]
 
 
 def _build_farmdata_index(
