@@ -111,6 +111,7 @@
                 <h2 class="admin-watch-panel__title">Состояние серверов</h2>
                 <div class="admin-watch-panel__subtitle">Self‑status без SSH, обновляется примерно раз в минуту.</div>
             </div>
+            <div class="admin-watch-panel__meta" data-role="server-states-updated"></div>
         </div>
 
         <div class="admin-watch-grid" data-role="server-states-grid">
@@ -159,6 +160,7 @@
         (() => {
             const grid = document.querySelector('[data-role="server-states-grid"]');
             const endpoint = "{{ url_for('admin.api_server_states') }}";
+            const updatedLabel = document.querySelector('[data-role="server-states-updated"]');
 
             if (!grid || !endpoint) {
                 return;
@@ -195,6 +197,25 @@
                 }
 
                 return title;
+            }
+
+            function formatUpdatedAt(raw) {
+                if (!raw) {
+                    return null;
+                }
+
+                const dt = new Date(raw);
+                if (Number.isNaN(dt.getTime())) {
+                    return null;
+                }
+
+                return dt.toLocaleString('ru-RU', {
+                    timeZone: 'Europe/Moscow',
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                });
             }
 
             function renderServerStates(states) {
@@ -242,6 +263,10 @@
                     const data = await resp.json();
                     if (data && Array.isArray(data.items)) {
                         renderServerStates(data.items);
+                        const updatedAt = formatUpdatedAt(data.generated_at);
+                        if (updatedLabel) {
+                            updatedLabel.textContent = updatedAt ? `Обновлено ${updatedAt}` : '';
+                        }
                     }
                 } catch (error) {
                     console.error('[server-states] Не удалось обновить раздел:', error);
@@ -261,9 +286,10 @@
                 <h2 class="admin-watch-panel__title">Наблюдение</h2>
                 <div class="admin-watch-panel__subtitle">Короткая сводка проблем со всех серверов RSSv7.</div>
             </div>
+            <div class="admin-watch-panel__meta" data-role="watch-cards-updated"></div>
         </div>
 
-        <div class="admin-watch-grid">
+        <div class="admin-watch-grid" data-role="watch-cards-grid">
             {% for card in watch_cards %}
                 <div class="admin-watch-card{% if card.error %} is-error{% endif %}">
                     <div class="admin-watch-card__title">{{ card.server }}</div>
@@ -295,6 +321,124 @@
             {% endfor %}
         </div>
     </div>
+{% endif %}
+
+{% if watch_cards %}
+    <script>
+        (() => {
+            const grid = document.querySelector('[data-role="watch-cards-grid"]');
+            const endpoint = "{{ url_for('admin.api_watch_cards') }}";
+            const updatedLabel = document.querySelector('[data-role="watch-cards-updated"]');
+
+            if (!grid || !endpoint) {
+                return;
+            }
+
+            function formatUpdatedAt(raw) {
+                if (!raw) {
+                    return null;
+                }
+
+                const dt = new Date(raw);
+                if (Number.isNaN(dt.getTime())) {
+                    return null;
+                }
+
+                return dt.toLocaleString('ru-RU', {
+                    timeZone: 'Europe/Moscow',
+                    day: '2-digit',
+                    month: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                });
+            }
+
+            function renderWatchCards(cards) {
+                grid.innerHTML = '';
+
+                cards.forEach((card) => {
+                    const item = document.createElement('div');
+                    item.className = 'admin-watch-card';
+                    if (card.error) {
+                        item.classList.add('is-error');
+                    }
+
+                    const title = document.createElement('div');
+                    title.className = 'admin-watch-card__title';
+                    title.textContent = card.server || '—';
+                    item.appendChild(title);
+
+                    const meta = document.createElement('div');
+                    meta.className = 'admin-watch-card__meta';
+                    if (card.error) {
+                        meta.textContent = `Ошибка: ${card.error}`;
+                    } else if (card.updated) {
+                        meta.textContent = `Обновлено ${card.updated}`;
+                    } else {
+                        meta.textContent = 'Нет свежих данных';
+                    }
+                    item.appendChild(meta);
+
+                    const accounts = Array.isArray(card.accounts) ? card.accounts : [];
+                    if (accounts.length === 0) {
+                        const empty = document.createElement('div');
+                        empty.className = 'admin-watch-card__empty';
+                        empty.textContent = 'Проблем не обнаружено';
+                        item.appendChild(empty);
+                    } else {
+                        const list = document.createElement('ul');
+                        list.className = 'admin-watch-card__list';
+
+                        accounts.forEach((acc) => {
+                            const row = document.createElement('li');
+                            row.className = 'admin-watch-card__row';
+
+                            const name = document.createElement('span');
+                            name.className = 'admin-watch-card__name';
+                            name.textContent = acc.nickname || '—';
+                            row.appendChild(name);
+
+                            if (acc.summary) {
+                                const summary = document.createElement('span');
+                                summary.className = 'admin-watch-card__summary';
+                                summary.textContent = acc.summary;
+                                row.appendChild(summary);
+                            }
+
+                            list.appendChild(row);
+                        });
+
+                        item.appendChild(list);
+                    }
+
+                    grid.appendChild(item);
+                });
+            }
+
+            async function refreshWatchCards() {
+                try {
+                    const resp = await fetch(endpoint, { headers: { 'Accept': 'application/json' } });
+                    if (!resp.ok) {
+                        throw new Error(`HTTP ${resp.status}`);
+                    }
+
+                    const data = await resp.json();
+                    if (data && Array.isArray(data.items)) {
+                        renderWatchCards(data.items);
+                        const updatedAt = formatUpdatedAt(data.generated_at);
+                        if (updatedLabel) {
+                            updatedLabel.textContent = updatedAt ? `Обновлено ${updatedAt}` : '';
+                        }
+                    }
+                } catch (error) {
+                    console.error('[watch-cards] Не удалось обновить раздел:', error);
+                }
+            }
+
+            refreshWatchCards();
+            setInterval(refreshWatchCards, 60_000);
+        })();
+    </script>
 {% endif %}
 
 <div class="cash-modal" data-role="cash-modal" hidden>
