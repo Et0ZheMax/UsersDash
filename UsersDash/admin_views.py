@@ -2607,6 +2607,54 @@ def _export_settings_log(entries, export_format: str) -> Response:
     return Response(output.getvalue(), mimetype="text/csv", headers=headers)
 
 
+def _safe_parse_json(value: str | None):
+    if value is None:
+        return None
+
+    try:
+        return json.loads(value)
+    except Exception:
+        return value
+
+
+def _format_diff_value(value: Any) -> str:
+    if value is None:
+        return "—"
+
+    if isinstance(value, (dict, list)):
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        except Exception:
+            return str(value)
+
+    return str(value)
+
+
+def _collect_diff_changes(old_value: Any, new_value: Any) -> list[dict[str, str]]:
+    if isinstance(old_value, dict) and isinstance(new_value, dict):
+        keys = sorted(set(old_value.keys()) | set(new_value.keys()))
+        return [
+            {
+                "label": key,
+                "old": _format_diff_value(old_value.get(key)),
+                "new": _format_diff_value(new_value.get(key)),
+            }
+            for key in keys
+            if old_value.get(key) != new_value.get(key)
+        ]
+
+    if old_value != new_value:
+        return [
+            {
+                "label": "Значение",
+                "old": _format_diff_value(old_value),
+                "new": _format_diff_value(new_value),
+            }
+        ]
+
+    return []
+
+
 @admin_bp.route("/settings-log")
 @login_required
 def settings_log():
@@ -2676,8 +2724,11 @@ def settings_log_diff(log_id: int):
     admin_required()
 
     log_entry = SettingsAuditLog.query.get_or_404(log_id)
-    old_val = (log_entry.old_value or "").split("\n")
-    new_val = (log_entry.new_value or "").split("\n")
+    old_raw = log_entry.old_value
+    new_raw = log_entry.new_value
+
+    old_val = (old_raw or "").split("\n")
+    new_val = (new_raw or "").split("\n")
     diff_lines = list(
         difflib.unified_diff(
             old_val,
@@ -2688,7 +2739,21 @@ def settings_log_diff(log_id: int):
         )
     )
 
+    old_parsed = _safe_parse_json(old_raw)
+    new_parsed = _safe_parse_json(new_raw)
+    changes = _collect_diff_changes(old_parsed, new_parsed)
+
     return jsonify({
         "diff": "\n".join(diff_lines),
         "id": log_entry.id,
+        "field_name": log_entry.field_name,
+        "account": {
+            "id": log_entry.account.id,
+            "name": log_entry.account.name,
+        }
+        if log_entry.account
+        else None,
+        "old_value": _format_diff_value(old_parsed),
+        "new_value": _format_diff_value(new_parsed),
+        "changes": changes,
     })
