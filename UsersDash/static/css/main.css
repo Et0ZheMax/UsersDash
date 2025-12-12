@@ -2853,6 +2853,12 @@ h1 {
   font-size: 18px;
 }
 
+.admin-watch-panel__meta {
+  color: #9aa5b5;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* Cash modal */
 
 .cash-modal {

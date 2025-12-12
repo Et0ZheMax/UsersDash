@@ -352,6 +352,30 @@ def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
     return states
 
 
+def _collect_watch_cards(servers: list[Server]) -> list[dict[str, Any]]:
+    """Собирает сводку наблюдения по активным серверам."""
+
+    cards: list[dict[str, Any]] = []
+
+    for srv in servers:
+        if not srv.is_active:
+            continue
+
+        summary, err = fetch_watch_summary(srv)
+        raw_updated = summary.get("generated_at") if summary else None
+        cards.append(
+            {
+                "server": summary.get("server") if summary else srv.name,
+                "updated": _format_checked_at(raw_updated) if raw_updated else None,
+                "updated_raw": raw_updated,
+                "accounts": summary.get("accounts") if summary else [],
+                "error": err,
+            }
+        )
+
+    return cards
+
+
 def _build_farmdata_index(
     accounts: list[Account],
 ) -> dict[tuple[int, str], FarmData]:
@@ -503,8 +527,8 @@ def admin_dashboard():
 
     payment_cards.sort(key=lambda x: (x["pay_date"], 0 if x["status"] == "due" else 1))
 
-    watch_cards = []
     servers = Server.query.order_by(Server.name.asc()).all()
+    watch_cards = _collect_watch_cards(servers)
 
     today_date = datetime.utcnow().date()
     days_in_month = monthrange(today_date.year, today_date.month)[1]
@@ -523,16 +547,6 @@ def admin_dashboard():
             "monthly_total": 0,
             "remaining_total": 0,
         }
-
-        summary, err = fetch_watch_summary(srv)
-        watch_cards.append(
-            {
-                "server": summary.get("server") if summary else srv.name,
-                "updated": summary.get("generated_at_fmt") if summary else None,
-                "accounts": summary.get("accounts") if summary else [],
-                "error": err,
-            }
-        )
 
     server_states = _collect_server_states(servers)
 
@@ -601,6 +615,22 @@ def api_server_states():
 
     return jsonify({
         "items": server_states,
+        "generated_at": datetime.utcnow().isoformat(),
+    })
+
+
+@admin_bp.route("/api/watch-cards", methods=["GET"])
+@login_required
+def api_watch_cards():
+    """Возвращает сводку наблюдения по всем активным серверам для админки."""
+
+    admin_required()
+
+    servers = Server.query.order_by(Server.name.asc()).all()
+    watch_cards = _collect_watch_cards(servers)
+
+    return jsonify({
+        "items": watch_cards,
         "generated_at": datetime.utcnow().isoformat(),
     })
 
