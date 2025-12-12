@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 from markupsafe import Markup, escape
-from requests import RequestException
+from requests import RequestException, Timeout
 
 from UsersDash.models import Server
 
@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 # Таймауты для HTTP-запросов (в секундах)
 DEFAULT_TIMEOUT = 15
+HEALTH_TIMEOUT = 5
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
@@ -60,7 +61,9 @@ def _get_effective_api_base(server) -> Optional[str]:
     return base + "/api"
 
 
-def _safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[Dict[str, Any]]:
+def _safe_get_json(
+    url: str, *, timeout: int = DEFAULT_TIMEOUT, source: str | None = None
+) -> Optional[Dict[str, Any]]:
     """
     Безопасный GET-запрос:
     - не роняет приложение при ошибке;
@@ -79,6 +82,12 @@ def _safe_get_json(url: str, timeout: int = DEFAULT_TIMEOUT) -> Optional[Dict[st
             except Exception as exc:
                 print(f"[remote_api] ERROR: GET {url} JSON decode failed: {exc}")
                 return None
+    except Timeout:
+        label = source or url
+        log.warning(
+            "[remote_api] Таймаут %s с при запросе %s", timeout, label
+        )
+        return None
     except Exception as exc:
         print(f"[remote_api] ERROR: GET {url} failed: {exc}")
         return None
@@ -94,7 +103,9 @@ def ping_server(server) -> Tuple[bool, str]:
         return False, "api_base_url не задан"
 
     url = f"{base}/serverStatus"
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _safe_get_json(
+        url, timeout=DEFAULT_TIMEOUT, source=f"serverStatus {server.name}"
+    )
     if data is None:
         return False, f"Нет ответа от {url}"
 
@@ -130,7 +141,7 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
         return {}
 
     url = f"{base}/resources"
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT, source=f"resources {server.name}")
     if not data or "accounts" not in data:
         print(f"[remote_api] WARNING: /api/resources вернул пусто или без 'accounts' для сервера {server.name}")
         return {}
@@ -447,7 +458,9 @@ def fetch_account_settings(account) -> Optional[Dict[str, Any]]:
         return None
 
     url = f"{base}/manage/account/{remote_id}/settings"
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _safe_get_json(
+        url, timeout=DEFAULT_TIMEOUT, source=f"account settings {server.name}"
+    )
     data = _unwrap_manage_payload(data)
 
     if isinstance(data, dict):
@@ -789,7 +802,9 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
         return None, "api_base_url не задан"
 
     url = f"{base}/problems/summary"
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _safe_get_json(
+        url, timeout=HEALTH_TIMEOUT, source=f"problems/summary {server.name}"
+    )
     if data is None:
         return None, f"Нет ответа от {url}"
 
@@ -832,7 +847,9 @@ def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
         return None, "api_base_url не задан"
 
     url = f"{base}/server/self_status"
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _safe_get_json(
+        url, timeout=HEALTH_TIMEOUT, source=f"self_status {server.name}"
+    )
     if data is None:
         return None, f"Нет ответа от {url}"
     if not isinstance(data, dict):
@@ -861,7 +878,9 @@ def fetch_server_cycle_time(
         f"{base}/cycle_time?window_hours={window_hours}"
         f"&min_gap_minutes={min_gap_minutes}&max_gap_hours={max_gap_hours}"
     )
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT)
+    data = _safe_get_json(
+        url, timeout=HEALTH_TIMEOUT, source=f"cycle_time {server.name}"
+    )
     if data is None:
         return None, f"Нет ответа от {url}"
     if not isinstance(data, dict):
