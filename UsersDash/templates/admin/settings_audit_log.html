@@ -71,7 +71,22 @@
                 <td>{{ log.created_at or '—' }}</td>
                 <td>{{ log.user.username if log.user else '—' }}</td>
                 <td>{{ log.actor.username if log.actor else '—' }}</td>
-                <td>{{ log.account.name if log.account else '—' }}</td>
+                <td>
+                    {% if log.account %}
+                        <div class="cell-with-action">
+                            <span>{{ log.account.name }}</span>
+                            <a
+                                class="icon-btn icon-btn--compact"
+                                href="{{ url_for('admin.manage') }}?account_id={{ log.account.id }}"
+                                target="_blank"
+                                rel="noopener"
+                                title="Открыть настройки фермы в новой вкладке"
+                            >⚙</a>
+                        </div>
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
                 <td>{{ log.action_type }}</td>
                 <td>{{ log.field_name or '—' }}</td>
                 <td class="mono small">{{ (log.old_value or '—')|truncate(80) }}</td>
@@ -100,11 +115,30 @@
 {% endif %}
 
 <div class="modal" id="diff-modal" hidden>
-    <div class="modal-content">
-        <h3>Дифф</h3>
-        <pre data-role="diff-body" class="mono"></pre>
-        <div class="form-actions">
-            <button class="btn" data-action="close-diff">Закрыть</button>
+    <div class="modal-backdrop" data-action="close-diff"></div>
+    <div class="modal-dialog diff-modal">
+        <div class="modal-header">
+            <div>
+                <h3>Дифф настроек</h3>
+                <div class="muted small" data-role="diff-meta">Изменения настроек фермы</div>
+            </div>
+            <button class="btn btn-outline" data-action="close-diff">Закрыть</button>
+        </div>
+        <div class="modal-body">
+            <div class="diff-columns">
+                <div class="diff-column diff-column--old">
+                    <div class="diff-column__title">Было</div>
+                    <div class="diff-column__body" data-role="diff-old"></div>
+                </div>
+                <div class="diff-column diff-column--new">
+                    <div class="diff-column__title">Стало</div>
+                    <div class="diff-column__body" data-role="diff-new"></div>
+                </div>
+            </div>
+            <details class="diff-raw">
+                <summary>Текстовый дифф</summary>
+                <pre data-role="diff-body" class="mono"></pre>
+            </details>
         </div>
     </div>
 </div>
@@ -113,6 +147,54 @@
 (function() {
     const diffModal = document.getElementById('diff-modal');
     const diffBody = diffModal?.querySelector('[data-role="diff-body"]');
+    const diffOld = diffModal?.querySelector('[data-role="diff-old"]');
+    const diffNew = diffModal?.querySelector('[data-role="diff-new"]');
+    const diffMeta = diffModal?.querySelector('[data-role="diff-meta"]');
+
+    const renderColumn = (container, changes, key) => {
+        if (!container) return;
+        container.innerHTML = '';
+
+        if (!changes || !changes.length) {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'diff-empty muted';
+            placeholder.textContent = 'Нет данных';
+            container.appendChild(placeholder);
+            return;
+        }
+
+        changes.forEach((change) => {
+            const item = document.createElement('div');
+            item.className = 'diff-item';
+
+            const label = document.createElement('div');
+            label.className = 'diff-item__label';
+            label.textContent = change.label || 'Значение';
+
+            const value = document.createElement('pre');
+            value.className = 'diff-item__value';
+            value.textContent = change[key] ?? '—';
+
+            item.appendChild(label);
+            item.appendChild(value);
+            container.appendChild(item);
+        });
+    };
+
+    const renderDiff = (data) => {
+        const changes = Array.isArray(data.changes) && data.changes.length
+            ? data.changes
+            : [{ label: 'Значение', old: data.old_value ?? '—', new: data.new_value ?? '—' }];
+
+        renderColumn(diffOld, changes, 'old');
+        renderColumn(diffNew, changes, 'new');
+
+        if (diffMeta) {
+            const field = data.field_name ? `Поле: ${data.field_name}` : 'Изменения настроек фермы';
+            const account = data.account?.name ? ` • Ферма: ${data.account.name}` : '';
+            diffMeta.textContent = `${field}${account}`;
+        }
+    };
 
     const showDiff = async (id) => {
         const res = await fetch(`{{ url_for('admin.settings_log') }}/${id}/diff`);
@@ -123,6 +205,7 @@
         const data = await res.json();
         if (diffBody) {
             diffBody.textContent = data.diff || '—';
+            renderDiff(data);
             diffModal.hidden = false;
         }
     };
