@@ -463,31 +463,12 @@ def admin_dashboard():
 
     active_accounts_count = sum(1 for acc in accounts if acc.is_active)
 
-    resources_map = fetch_resources_for_accounts(accounts)
-    accounts_data = []
-    for acc in accounts:
-        res_info = resources_map.get(acc.id)
-
-        if res_info:
-            resources_brief = res_info.get("brief", "—")
-            today_gain = res_info.get("today_gain")
-            last_updated = res_info.get("last_updated_fmt") or res_info.get("last_updated")
-            has_data = True
-        else:
-            resources_brief = "—"
-            today_gain = None
-            last_updated = None
-            has_data = False
-
-        accounts_data.append(
-            {
-                "account": acc,
-                "resources_brief": resources_brief,
-                "today_gain": today_gain,
-                "last_updated": last_updated,
-                "has_data": has_data,
-            }
-        )
+    accounts_data = [
+        {
+            "account": acc,
+        }
+        for acc in accounts
+    ]
 
     today_date = datetime.utcnow().date()
     payment_accounts = [acc for acc in accounts if acc.next_payment_at]
@@ -600,6 +581,53 @@ def admin_dashboard():
             "days_in_month": days_in_month,
         },
         incomplete_accounts_total=len(incomplete_accounts),
+    )
+
+
+@admin_bp.route("/api/account-resources", methods=["GET"])
+@login_required
+def api_account_resources():
+    """Возвращает ресурсы всех аккаунтов для админской таблицы."""
+
+    admin_required()
+
+    accounts = (
+        Account.query.options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
+        .all()
+    )
+
+    res_map = fetch_resources_for_accounts(accounts)
+    items = []
+
+    for acc in accounts:
+        res_info = res_map.get(acc.id)
+        resources_brief = res_info.get("brief") if res_info else None
+        today_gain = res_info.get("today_gain") if res_info else None
+        last_updated = (
+            res_info.get("last_updated_fmt") or res_info.get("last_updated")
+            if res_info
+            else None
+        )
+
+        items.append(
+            {
+                "account_id": acc.id,
+                "resources_brief": str(resources_brief) if resources_brief is not None else None,
+                "today_gain": today_gain,
+                "last_updated": last_updated,
+            }
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "items": items,
+            "generated_at": datetime.utcnow().isoformat(),
+        }
     )
 
 

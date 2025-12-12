@@ -160,6 +160,62 @@
         applyFilter();
     }
 
+    async function loadAdminAccountResources() {
+        const table = document.querySelector('[data-role="accounts-table"]');
+        if (!table) return;
+
+        const endpoint = table.dataset.resourcesEndpoint;
+        if (!endpoint) return;
+
+        const rows = new Map();
+        table.querySelectorAll('tbody tr[data-account-id]').forEach((row) => {
+            const accountId = row.dataset.accountId;
+            if (!accountId) return;
+
+            rows.set(accountId, {
+                resourcesCell: row.querySelector('[data-role="resources"]'),
+                gainCell: row.querySelector('[data-role="today-gain"]'),
+                updatedCell: row.querySelector('[data-role="last-updated"]'),
+            });
+        });
+
+        if (rows.size === 0) return;
+
+        try {
+            const resp = await fetch(endpoint, { headers: { 'x-skip-loader': '1' } });
+            const data = await resp.json().catch(() => ({}));
+
+            if (!resp.ok || !data.ok) {
+                throw new Error((data && data.error) || 'Не удалось загрузить ресурсы.');
+            }
+
+            (data.items || []).forEach((item) => {
+                const rowInfo = rows.get(String(item.account_id));
+                if (!rowInfo) return;
+
+                const resourcesValue = item.resources_brief || '—';
+                const gainValue = item.today_gain || '—';
+                const updatedValue = item.last_updated || '—';
+
+                if (rowInfo.resourcesCell) {
+                    rowInfo.resourcesCell.innerHTML = resourcesValue;
+                    rowInfo.resourcesCell.dataset.state = 'loaded';
+                }
+                if (rowInfo.gainCell) {
+                    rowInfo.gainCell.textContent = gainValue;
+                    rowInfo.gainCell.dataset.state = 'loaded';
+                }
+                if (rowInfo.updatedCell) {
+                    rowInfo.updatedCell.textContent = updatedValue;
+                    rowInfo.updatedCell.dataset.state = 'loaded';
+                }
+            });
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || 'Ошибка при загрузке ресурсов.', 'error');
+        }
+    }
+
     // ---------- Действия ----------
 
     async function handleRefreshAccount(btn) {
@@ -489,6 +545,7 @@
         setupNavToggle();
         setupAccountSearch();
         applyFarmDataStatusUI();
+        loadAdminAccountResources();
     });
 
     // ---------- Делегированный обработчик кликов ----------

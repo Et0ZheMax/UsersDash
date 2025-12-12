@@ -908,7 +908,8 @@
         </div>
     </div>
     <div class="table-responsive">
-        <table class="table">
+        <table class="table" data-role="accounts-table"
+               data-resources-endpoint="{{ url_for('admin.api_account_resources') }}">
             <thead>
             <tr>
                 <th>Имя фермы</th>
@@ -931,27 +932,9 @@
                     <td>{{ acc.name }}</td>
                     <td>{{ acc.server.name if acc.server else "N/A" }}</td>
                     <td>{{ acc.owner.username if acc.owner else "—" }}</td>
-                    <td data-role="resources">
-                        {% if item.has_data %}
-                            {{ item.resources_brief|safe }}
-                        {% else %}
-                            —
-                        {% endif %}
-                    </td>
-                    <td data-role="today-gain">
-                        {% if item.today_gain %}
-                            {{ item.today_gain }}
-                        {% else %}
-                            —
-                        {% endif %}
-                    </td>
-                    <td data-role="last-updated">
-                        {% if item.last_updated %}
-                            {{ item.last_updated }}
-                        {% else %}
-                            —
-                        {% endif %}
-                    </td>
+                    <td data-role="resources" data-state="loading">Загрузка...</td>
+                    <td data-role="today-gain" data-state="loading">—</td>
+                    <td data-role="last-updated" data-state="loading">—</td>
                     <td class="actions-cell">
                         <a href="{{ url_for('admin.manage', account_id=acc.id) }}" class="action-pill">
                             <span class="btn-icon-symbol">⚙</span>
