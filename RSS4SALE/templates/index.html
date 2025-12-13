@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>RSS</title>
+  <link rel="icon" href="{{ url_for('static', filename='99.png') }}" type="image/png">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  
+
+  <style>
+    /* Общие стили */
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: #F5F5F7;
+      color: #1D1D1F;
+      transition: background 0.3s, color 0.3s;
+    }
+    body.dark {
+      background: #121212;
+      color: #eee;
+    }
+    .dark .total-item,
+    .dark .checkboxContainer,
+    .dark .infoBox,
+    .dark table {
+      background: #2a2a2a;
+      color: #eee;
+    }
+    .dark th {
+      color: #ccc;
+    }
+    .dark .header {
+      background: #333;
+    }
+    .dark .btn {
+      background-color: #444 !important;
+      color: #fff !important;
+    }
+    .dark .btn:hover {
+      background-color: #666 !important;
+    }
+
+    @keyframes fadeInOut {
+    0% { opacity: 0; transform: translate(-50%, 20px); }
+    15% { opacity: 1; transform: translate(-50%, 0); }
+    85% { opacity: 1; transform: translate(-50%, 0); }
+    100% { opacity: 0; transform: translate(-50%, 20px); }
+    }
+
+    .btn.loading .spinner-btn {
+      display: inline-block;
+    }
+
+    .btn.loading .btn-text {
+      opacity: 0.7;
+    }
+
+    /* НОВИНКА ШАПКИ */
+    .page-header {
+      background:#fff;
+      padding:16px 20px;
+      border-bottom:1px solid #E5E5EA;
+      margin-bottom: 14px;
+      position:sticky; top:0; z-index:5; /* удобно на скролле */
+    }
+
+    .page-header__title {
+      font-weight:600;
+      font-size:20px;
+      line-height:1.2;
+      text-align:center;
+      margin:0 0 10px 0;
+      color:#1D1D1F;
+    }
+
+    .page-header__controls {
+      display:grid;
+      grid-template-columns: repeat(3, minmax(150px, 200px));
+      gap:8px 12px;
+      justify-content:center;
+      align-items:end;
+    }
+
+    .control label {
+      display:block;
+      font-size:11px;
+      color:#6E6E73;
+      margin:0 0 6px 8px;
+    }
+
+    .input-inline { position:relative; }
+    .input-inline input {
+      width:80%;
+      padding:10px 28px 10px 12px; /* место под суффикс справа */
+      border:1px solid #D2D2D7;
+      border-radius:10px;
+      background:#FAFAFA;
+      font-size:14px;
+      color:#1D1D1F;
+      outline:none;
+    }
+    .input-inline input:focus {
+      border-color:#0A84FF;
+      box-shadow:0 0 0 3px rgba(10,132,255,0.15);
+      background:#fff;
+    }
+    .input-inline .suffix {
+      position:absolute; right:8px; top:50%; transform:translateY(-50%);
+      font-size:13px; color:#6E6E73; pointer-events:none;
+    }
+
+    /* Адаптив: 2 колонки, затем 1 */
+    @media (max-width: 900px) {
+      .page-header__controls { grid-template-columns: repeat(2, minmax(190px, 1fr)); }
+    }
+    @media (max-width: 560px) {
+      .page-header__controls { grid-template-columns: 1fr; }
+    }
+    /* КОРНЕЦ НОВИНКИ */
+
+    .spinner-btn {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      display: none;
+      margin-left: 8px;
+    }
+
+
+    .btn-loader {
+    position: relative;
+    }
+    .btn-loader .spinner-btn {
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      animation: spin 1s linear infinite;
+      display: none;
+      margin-left: 8px;
+    }
+    .btn-loader.loading .spinner-btn {
+      display: inline-block;
+    }
+    .btn-loader.loading .btn-text {
+      opacity: 0.7;
+    }
+
+    .header {
+      text-align: center;
+      padding: 8px;
+      background: #FFFFFF;
+      box-shadow: 0 0 5px rgba(0,0,0,0.08);
+      margin-bottom: 10px;
+    }
+    .header h1 {
+      margin: 0; 
+      font-size: 18px;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 0 10px 20px;
+    }
+
+    .totals {
+      display: flex; flex-wrap: wrap;
+      gap: 10px; margin-bottom: 10px;
+    }
+    .total-item {
+      flex: 1 1 80px;
+      background: #FFFFFF;
+      border-radius: 6px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      padding: 8px;
+      text-align: center;
+    }
+    .total-item span.value {
+      display: block; font-size: 1.1em;
+      font-weight: 600; color: #0070c9;
+      margin-top: 5px;
+    }
+
+    .btn {
+      display: inline-block; padding: 6px 10px;
+      margin-top: 5px; font-size: 14px;
+      color: #fff; background-color: #0070c9;
+      border-radius: 6px; border: none;
+      cursor: pointer; text-decoration: none;
+      text-align: center;
+    }
+    .btn:hover {
+      background-color: #005999;
+    }
+
+    .filtersRow {
+      display: flex; gap: 10px;
+      margin-bottom: 10px; flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .checkboxContainer {
+      width: 200px;
+      max-height: 260px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 8px;
+      background: #FFFFFF;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    }
+    #searchRow {
+      display: flex; align-items: center; gap: 4px;
+      margin-bottom: 6px;
+    }
+    #accSearch {
+      flex: 1; font-size: 12px; padding: 3px; width: 100px;
+    }
+
+    .infoBox {
+      background: #fff; 
+      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      border-radius: 6px; 
+      padding: 8px;
+      min-width: 120px;
+    }
+    .infoLine {
+      margin-bottom: 3px; 
+      font-size: 14px;
+    }
+
+    .processLog {
+      background: #f2f2f2; padding:6px;
+      border-radius:6px; max-height:120px;
+      overflow-y:auto; font-size:13px;
+      white-space:pre-wrap; margin-top:8px;
+    }
+
+    table {
+      width: 100%; border-collapse: collapse;
+      background: #FFFFFF; box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+      border-radius: 6px; overflow: hidden;
+    }
+    thead {
+      background: #F7F7F9;
+    }
+    th, td {
+      padding: 8px; border-bottom: 1px solid #ECECEC;
+      font-size: 13px;
+    }
+    th {
+      text-align: left; font-weight: 600;
+      color: #666; cursor: pointer;
+    }
+    tbody tr:last-child td {
+      border-bottom: none;
+    }
+    tbody tr:hover {
+      background-color: #EEF2FF;
+    }
+    .gainValue {
+      font-size: 11px; color: #888; margin-left: 3px;
+    }
+
+    /* Спиннер */
+    .spinner {
+      position: fixed;
+      top: 15px; 
+      right: 15px;
+      width:40px; 
+      height:40px;
+      border: 4px solid #ccc;
+      border-top-color: #0070c9;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      z-index:9999;
+    }
+    .hidden { 
+      display: none; 
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    
+  </style>
+  <script>
+    // Глобальные переменные
+    let allAccounts = [];
+    let checkboxStates = {};
+    let allChecked = true;
+    let sortAsc = true;
+    let lastUpdate = "";
+    let darkMode = false;
+
+    // Цены/процент — дефолты до прихода ответа от сервера
+    let priceFWS100 = 300;   // Е/Д/К — ₽ за 100 млн
+    let priceGold100 = 500;  // Золото — ₽ за 100 млн
+    let discountPercent = 30;
+
+    // ===== API для цен =====
+    async function fetchPrices() {
+      const r = await fetch("/api/prices");
+      if (!r.ok) throw new Error("prices fetch failed");
+      const p = await r.json();
+      priceFWS100     = Number(p.fws100)  || priceFWS100;
+      priceGold100    = Number(p.gold100) || priceGold100;
+      discountPercent = Number(p.percent) || discountPercent;
+    }
+
+    async function pushPrices() {
+      await fetch("/api/prices", {
+        method: "PUT",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          fws100:  priceFWS100,
+          gold100: priceGold100,
+          percent: discountPercent
+        })
+      });
+    }
+
+    // ===== UI helpers (твои существующие функции) =====
+    function showSpinner(){ document.getElementById("spinner").classList.remove("hidden"); }
+    function hideSpinner(){ document.getElementById("spinner").classList.add("hidden"); }
+    function toggleDark(){ darkMode=!darkMode; document.body.classList.toggle("dark", darkMode); }
+    function showToast(message, isError = false) { /* как у тебя */ }
+
+    function getSearchValue(){ return (document.getElementById("accSearch")?.value||"").toLowerCase().trim(); }
+    function passSearch(acc, searchVal){
+      if(!searchVal) return true;
+      const nm= acc.nickname.toLowerCase();
+      const inst= String(acc.instanceId||"").toLowerCase();
+      return nm.includes(searchVal) || inst.includes(searchVal);
+    }
+
+    function updateAccountsCount(){
+      const el = document.getElementById("accountsCount");
+      if(!el) return;
+      const searchVal = getSearchValue();
+      const filtered = allAccounts.filter(acc => passSearch(acc, searchVal));
+      const selected = filtered.filter(acc => !!checkboxStates[acc.id]).length;
+      el.textContent = String(selected);
+    }
+
+    async function loadResources(){
+      showSpinner();
+      try{
+        const resp= await fetch("/api/resources");
+        const data= await resp.json();
+        allAccounts= data.accounts||[];
+
+        document.getElementById("total-food").textContent  = data.totals.food;
+        document.getElementById("total-wood").textContent  = data.totals.wood;
+        document.getElementById("total-stone").textContent = data.totals.stone;
+        document.getElementById("total-gold").textContent  = data.totals.gold;
+
+        updateAccountsCount();
+
+        allAccounts.forEach(acc=>{ if(!(acc.id in checkboxStates)) checkboxStates[acc.id]= true; });
+        renderCheckboxes();
+        updateTableAndSum();
+      }catch(e){
+        console.error("Ошибка loadResources:", e);
+      }finally{
+        hideSpinner();
+      }
+    }
+
+    function renderCheckboxes(){
+      const boxList= document.getElementById("checkboxesList");
+      if(!boxList) return;
+      boxList.innerHTML="";
+
+      const searchVal= getSearchValue();
+      const filtered= allAccounts.filter(acc=> passSearch(acc, searchVal));
+
+      filtered.forEach(acc=>{
+        if(!(acc.id in checkboxStates)) checkboxStates[acc.id]=true;
+        const label= document.createElement("label");
+        label.style.display="block";
+
+        const chk= document.createElement("input");
+        chk.type="checkbox";
+        chk.value= acc.id;
+        chk.checked= checkboxStates[acc.id];
+        chk.addEventListener("change", e=>{
+          checkboxStates[acc.id]= e.target.checked;
+          updateTableAndSum();
+          updateAccountsCount();
+        });
+        label.appendChild(chk);
+        label.append(" "+ acc.nickname +"_"+acc.instanceId);
+        boxList.appendChild(label);
+      });
+      updateAccountsCount();
+    }
+
+    function toggleAllChecks(){
+      const searchVal= getSearchValue();
+      const filtered= allAccounts.filter(acc=> passSearch(acc, searchVal));
+      if(allChecked){
+        filtered.forEach(a=> checkboxStates[a.id]= false);
+        allChecked=false;
+        document.getElementById("toggleAllBtn").textContent="Выделить все";
+      } else {
+        filtered.forEach(a=> checkboxStates[a.id]= true);
+        allChecked=true;
+        document.getElementById("toggleAllBtn").textContent="Снять все";
+      }
+      renderCheckboxes();
+      updateTableAndSum();
+      updateAccountsCount();
+    }
+
+    function onSearchInput(){
+      renderCheckboxes();
+      updateTableAndSum();
+      updateAccountsCount();
+    }
+
+    function updateTableAndSum () {
+      const searchVal = getSearchValue();
+      const filtered = allAccounts.filter(acc => checkboxStates[acc.id] && passSearch(acc, searchVal));
+
+      let sumFood = 0, sumWood = 0, sumStone = 0, sumGold = 0;
+      filtered.forEach(acc => {
+        sumFood  += acc.food_raw  || 0;
+        sumWood  += acc.wood_raw  || 0;
+        sumStone += acc.stone_raw || 0;
+        sumGold  += acc.gold_raw  || 0;
+      });
+
+      const factor = (100 - discountPercent) / 100;
+
+      document.getElementById("total-food").textContent  = shortenNumber(Math.floor(sumFood  * factor));
+      document.getElementById("total-wood").textContent  = shortenNumber(Math.floor(sumWood  * factor));
+      document.getElementById("total-stone").textContent = shortenNumber(Math.floor(sumStone * factor));
+      document.getElementById("total-gold").textContent  = shortenNumber(Math.floor(sumGold  * factor));
+
+      const priceFWS_per1m  = (priceFWS100  || 0) / 100.0;
+      const priceGold_per1m = (priceGold100 || 0) / 100.0;
+
+      const grossIncome =
+          ((sumFood + sumWood + sumStone) / 1e6) * priceFWS_per1m +
+          (sumGold / 1e6) * priceGold_per1m;
+
+      const incomeTotal = grossIncome * factor;
+      document.getElementById("total-income").textContent = `~ ${incomeTotal.toFixed(2)} ₽`;
+
+      const tb = document.getElementById("resourcesBody");
+      tb.innerHTML = "";
+      filtered.forEach(acc => {
+        const rowGross =
+          ((acc.food_raw + acc.wood_raw + acc.stone_raw) / 1e6) * priceFWS_per1m +
+          (acc.gold_raw / 1e6) * priceGold_per1m;
+
+        const rowIncome = rowGross * factor;
+
+        tb.insertAdjacentHTML("beforeend", `
+          <tr>
+            <td>${acc.nickname}_${acc.instanceId}</td>
+            <td>${acc.food_view}</td>
+            <td>${acc.wood_view}</td>
+            <td>${acc.stone_view}</td>
+            <td>${acc.gold_view}</td>
+            <td>~ ${rowIncome.toFixed(2)} ₽</td>
+            <td>${acc.today_gain}</td>
+            <td>${formatDateTime(acc.last_updated)}</td>
+          </tr>
+        `);
+      });
+    }
+
+    function toggleSortTodayGain(){
+      sortAsc=!sortAsc;
+      allAccounts.sort((a,b)=>{
+        const aNum= parseShort(a.today_gain);
+        const bNum= parseShort(b.today_gain);
+        return sortAsc? (aNum-bNum) : (bNum-aNum);
+      });
+      renderCheckboxes();
+      updateTableAndSum();
+    }
+
+    async function doRefresh(){
+      showSpinner();
+      try{
+        const resp= await fetch("/api/refresh",{method:"POST"});
+        const data= await resp.json();
+        lastUpdate= data.last_update;
+        await loadResources();
+        updateLastUpdateDisplay();
+      }catch(e){
+        console.error("Ошибка doRefresh:", e);
+      }finally{
+        hideSpinner();
+      }
+    }
+
+    function updateLastUpdateDisplay(){
+      const el= document.getElementById("lastUpdate");
+      if(!lastUpdate){ el.textContent="—"; return; }
+      const d= new Date(lastUpdate);
+      if (isNaN(d)) { el.textContent="—"; return; }
+      const hh= String(d.getHours()).padStart(2,"0");
+      const mm= String(d.getMinutes()).padStart(2,"0");
+      const ss= String(d.getSeconds()).padStart(2,"0");
+      const day= String(d.getDate()).padStart(2,"0");
+      const mon= String(d.getMonth()+1).padStart(2,"0");
+      el.textContent= `${hh}:${mm}:${ss} ${day}.${mon}`;
+    }
+
+    function updateLocalTime(){
+      const now= new Date();
+      const hh= String(now.getHours()).padStart(2,"0");
+      const mm= String(now.getMinutes()).padStart(2,"0");
+      const ss= String(now.getSeconds()).padStart(2,"0");
+      const day= String(now.getDate()).padStart(2,"0");
+      const mon= String(now.getMonth()+1).padStart(2,"0");
+      document.getElementById("currentTime").textContent= `${hh}:${mm}:${ss} ${day}.${mon}`;
+    }
+
+    function parseShort(txt){
+      if(!txt) return 0;
+      const lower = String(txt).toLowerCase().replace(/\s|,/g,'').trim();
+      const base = /[kmb]$/.test(lower) ? lower.slice(0, -1) : lower;
+      const num = parseFloat(base);
+      if (isNaN(num)) return 0;
+      if (lower.endsWith('k')) return num * 1e3;
+      if (lower.endsWith('m')) return num * 1e6;
+      if (lower.endsWith('b')) return num * 1e9;
+      return num;
+    }
+
+    function shortenNumber(num){
+      if(num<1000) return String(num);
+      else if(num<1e6) return Math.floor(num/1e3)+"k";
+      else if(num<1e9) return Math.floor(num/1e6)+"m";
+      else return (num/1e9).toFixed(1)+"b";
+    }
+
+    function formatDateTime(str){
+      if(!str)return "—";
+      const d= new Date(str);
+      if(isNaN(d.getTime())) return str;
+      const hh= String(d.getHours()).padStart(2,"0");
+      const mm= String(d.getMinutes()).padStart(2,"0");
+      const day= String(d.getDate()).padStart(2,"0");
+      const mon= String(d.getMonth()+1).padStart(2,"0");
+      return `${hh}:${mm} ${day}.${mon}`;
+    }
+
+    // STOP / REBOOT / Paths — оставляю как у тебя (без изменений)
+    // STOP / REBOOT / Paths — рабочие реализации
+    async function doStop(){
+      try{
+        const btns = document.querySelectorAll('button.btn');
+        btns.forEach(b=>b.disabled=true);
+        const r = await fetch('/api/stop', { method:'POST' });
+        if(!r.ok) throw new Error('stop failed');
+        showToast('Остановлено');
+      }catch(e){
+        console.error(e);
+        showToast('Ошибка при остановке', true);
+      }finally{
+        const btns = document.querySelectorAll('button.btn');
+        btns.forEach(b=>b.disabled=false);
+      }
+    }
+
+    async function forceRefreshToday(){
+      try{
+        showSpinner();
+        const r = await fetch('/api/forceRefreshToday', { method:'POST' });
+        if(!r.ok) throw new Error('force refresh failed');
+        await loadResources();
+        showToast('Логи перечитаны');
+      }catch(e){
+        console.error(e);
+        showToast('Ошибка перечтения логов', true);
+      }finally{
+        hideSpinner();
+      }
+    }
+
+
+    async function doReboot(){
+      if(!confirm('Перезагрузить сервер?')) return;
+      try{
+        const r = await fetch('/api/reboot', { method:'POST' });
+        if(!r.ok) throw new Error('reboot failed');
+        showToast('Команда перезагрузки отправлена');
+      }catch(e){
+        console.error(e);
+        showToast('Ошибка перезагрузки', true);
+      }
+    }
+
+    // ====== Paths (модалка «Пути») ======
+    async function showPaths(){
+      try{
+        const r = await fetch('/api/paths');
+        if(!r.ok) throw new Error('paths fetch failed');
+        const data = await r.json();
+        const form = document.getElementById('pathsForm');
+        form.innerHTML = '';
+        Object.entries(data).forEach(([key, val])=>{
+          const row = document.createElement('div');
+          row.style.marginBottom = '8px';
+          row.innerHTML = `
+            <label style="display:block;font-size:12px;color:#6E6E73;margin-bottom:4px">${key}</label>
+            <input type="text" name="${key}" value="${val || ''}" style="width:100%;padding:6px 8px;border:1px solid #D2D2D7;border-radius:6px;">
+          `;
+          form.appendChild(row);
+        });
+        document.getElementById('pathsOverlay').style.display = 'block';
+        document.getElementById('pathsModal').style.display = 'block';
+      }catch(e){
+        console.error(e);
+        showToast('Не удалось загрузить пути', true);
+      }
+    }
+
+    async function savePaths(){
+      try{
+        const form = document.getElementById('pathsForm');
+        const body = {};
+        [...form.querySelectorAll('input[name]')].forEach(inp=>{
+          body[inp.name] = inp.value;
+        });
+        const r = await fetch('/api/paths', {
+          method:'PUT',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(body)
+        });
+        if(!r.ok) throw new Error('paths save failed');
+        showToast('Пути сохранены');
+        closePaths();
+      }catch(e){
+        console.error(e);
+        showToast('Ошибка сохранения путей', true);
+      }
+    }
+
+    function closePaths(){
+      document.getElementById('pathsOverlay').style.display = 'none';
+      document.getElementById('pathsModal').style.display = 'none';
+    }
+
+
+    function showFixPage(){ window.location.href="/fix"; }
+    function showLogsPage(){ window.location.href="/logs"; }
+    function showManagePage(){ window.location.href="/manage"; }
+
+    // ===== Единый вход =====
+    document.addEventListener("DOMContentLoaded", async () => {
+      // 1) Цены с сервера
+      try { await fetchPrices(); } catch(e) { console.warn(e); }
+
+      // 2) Проставляем в поля
+      const percentInput = document.getElementById("percentInput");
+      const fwsInput     = document.getElementById("priceFWS100");
+      const goldInput    = document.getElementById("priceGold100");
+      if (percentInput) percentInput.value = discountPercent;
+      if (fwsInput)     fwsInput.value     = priceFWS100;
+      if (goldInput)    goldInput.value    = priceGold100;
+
+      // 3) Обработчики → пересчёт → сохранение на сервер
+      const onPercent = async () => {
+        let v = parseFloat(percentInput.value);
+        if (isNaN(v)) v = 0;
+        v = Math.max(0, Math.min(100, v));
+        discountPercent = v;
+        percentInput.value = v;
+        updateTableAndSum();
+        try { await pushPrices(); } catch(e) { console.warn(e); }
+      };
+      const onPriceChange = async () => {
+        priceFWS100  = parseFloat(fwsInput.value)  || 0;
+        priceGold100 = parseFloat(goldInput.value) || 0;
+        updateTableAndSum();
+        try { await pushPrices(); } catch(e) { console.warn(e); }
+      };
+      percentInput?.addEventListener("input", onPercent);
+      percentInput?.addEventListener("change", onPercent);
+      fwsInput?.addEventListener("input", onPriceChange);
+      goldInput?.addEventListener("input", onPriceChange);
+      fwsInput?.addEventListener("change", onPriceChange);
+      goldInput?.addEventListener("change", onPriceChange);
+
+      // 4) Telegram + UI init
+      if(window.Telegram && Telegram.WebApp) Telegram.WebApp.expand();
+      setInterval(updateLocalTime, 1000);
+
+      // навесим сортировку по «За сегодня»
+      setTimeout(()=>{
+        const heads= document.querySelectorAll("thead th");
+        heads.forEach(th=>{
+          if(th.innerText.includes("За сегодня")){
+            th.addEventListener("click", toggleSortTodayGain);
+          }
+        });
+      }, 300);
+
+      // 5) Первичная загрузка данных
+      await doRefresh();
+      await loadResources();
+      updateTableAndSum();
+    });
+  </script>
+
+</head>
+<body>
+
+  <!-- Спиннер (по умолчанию скрыт) -->
+  <div id="spinner" class="spinner hidden"></div>
+
+  <!-- Кнопка для темной темы (в правом верхнем углу) -->
+  <div style="text-align:right; margin:6px;">
+    <button class="btn" onclick="toggleDark()">DarkMode</button>
+  </div>
+
+
+
+  <!-- <div class="header">
+    <h1>Статус Ферм RSS на продажу</h1>
+    <div class="percent-control">Текущий процент: <input id="percentInput" type="number" min="0" max="100" value="30"/>%</div>
+      НОВОЕ: цены за 100м -->
+    <!-- <div class="price-control" style="font-size:14px;">
+      Цены за 100&nbsp;млн:&nbsp;
+      Е/Д/К:
+      <input id="priceFWS100" type="number" min="0" step="0.01" style="width:90px" />
+      ₽ &nbsp; | &nbsp; Золото:
+      <input id="priceGold100" type="number" min="0" step="0.01" style="width:90px" />
+      ₽
+    </div>
+  </div> --> 
+   
+  <header class="page-header">
+    <div class="page-header__title">Статус Ферм RSS на продажу</div>
+
+    <form class="page-header__controls" onsubmit="return false">
+      <div class="control">
+        <label for="percentInput">Текущий процент</label>
+        <div class="input-inline">
+          <input id="percentInput" type="number" min="0" max="100" />
+          <span class="suffix">%</span>
+        </div>
+      </div>
+
+      <div class="control">
+        <label for="priceFWS100">Е/Д/К за 100&nbsp;млн</label>
+        <div class="input-inline">
+          <input id="priceFWS100" type="number" min="0" step="1" />
+          <span class="suffix">₽</span>
+        </div>
+      </div>
+
+      <div class="control">
+        <label for="priceGold100">Золото за 100&nbsp;млн</label>
+        <div class="input-inline">
+          <input id="priceGold100" type="number" min="0" step="1" />
+          <span class="suffix">₽</span>
+        </div>
+      </div>
+    </form>
+  </header>
+
+
+  <div class="container">
+    <!-- Суммарные ресурсы -->
+    <div class="totals">
+      <div class="total-item">
+        Еда
+        <span class="value" id="total-food">0</span>
+      </div>
+      <div class="total-item">
+        Дерево
+        <span class="value" id="total-wood">0</span>
+      </div>
+      <div class="total-item">
+        Камень
+        <span class="value" id="total-stone">0</span>
+      </div>
+      <div class="total-item">
+        Золото
+        <span class="value" id="total-gold">0</span>
+      </div>
+      <div class="total-item">
+        Доход ₽
+        <span class="value" id="total-income">0</span>
+      </div>
+    </div>
+    <p>Аккаунтов: <span id="accountsCount">0</span></p>
+
+    <div style="margin-bottom:10px;">
+      <button class="btn" onclick="doStop()">STOP</button>
+      <button class="btn" onclick="doReboot()">REBOOT</button>
+      <button class="btn" onclick="showPaths()">Пути</button>
+      <div class="processLog" id="processLog"></div>
+    </div>
+
+    <div class="filtersRow">
+      <!-- Левая часть: чекбоксы -->
+      <div class="checkboxContainer">
+        <div id="searchRow">
+          <button class="btn" id="toggleAllBtn" onclick="toggleAllChecks()">Снять все</button>
+          <input type="text" id="accSearch" placeholder="Поиск..." oninput="onSearchInput()" />
+        </div>
+        <div id="checkboxesList"></div>
+      </div>
+
+     
+            <!-- Пути: Modal -->
+      <div id="pathsModal" style="
+      position:fixed; top:50%; left:50%;
+      transform:translate(-50%,-50%);
+      background:#fff; padding:20px; box-shadow:0 2px 10px rgba(0,0,0,0.3);
+      display:none; z-index:10000; border-radius:6px;
+      width:400px;
+      ">
+      <h3>Редактирование путей</h3>
+      <form id="pathsForm">
+      <!-- JS заполнит input’ы сюда -->
+      </form>
+      <div style="text-align:right; margin-top:10px">
+      <button class="btn" onclick="savePaths()">Сохранить</button>
+      <button class="btn" onclick="closePaths()">Отмена</button>
+      </div>
+      </div>
+      <div id="pathsOverlay" style="
+      position:fixed; top:0; left:0; width:100%; height:100%;
+      background:rgba(0,0,0,0.3); display:none; z-index:9999;
+      " onclick="closePaths()"></div>
+
+    <!-- Правая колонка: сначала виджет «Время», затем кнопки -->
+    <div class="controls" style="flex: 1 1 auto; display: flex; flex-direction: column; gap: 10px;">
+
+
+      <!-- 1) Виджет «Время» -->
+      <div class="infoBox" style="width: 200px;">
+        <h4>Время</h4>
+        <div class="infoLine">Текущее: <span id="currentTime">--:--</span></div>
+        <div class="infoLine">Обновление: <span id="lastUpdate">—</span></div>
+        <button class="btn" onclick="doRefresh()">Обновить</button>
+        <button class="btn" onclick="forceRefreshToday()">Перечитать логи</button>
+      </div>
+
+      <!-- 2) Группа кнопок под виджетом -->
+      <div class="buttonGroup" style="display: flex; gap: 10px;">
+        <button class="btn" onclick="showLogsPage()">Показать логи</button>
+        <button class="btn" onclick="showFixPage()">FIX</button>
+        <button class="btn" onclick="showManagePage()">Manage</button>
+      </div>
+
+     </div>
+    </div>
+
+
+    <!-- Таблица -->
+    <table>
+      <thead>
+        <tr>
+          <th>Ник</th>
+          <th>Еда</th>
+          <th>Дерево</th>
+          <th>Камень</th>
+          <th>Золото</th>
+          <th>Доход ₽</th>
+          <th>За сегодня</th>
+          <th>Обновлено</th>
+        </tr>
+      </thead>
+      <tbody id="resourcesBody"></tbody>
+    </table>
+  </div>
+</body>
+</html>

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Логи RSS</title>
+  <style>
+    body {
+      margin:0; padding:0;
+      background:#F5F5F7;
+      font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+      color:#1D1D1F;
+    }
+    .header {
+      text-align:center;
+      padding:8px;
+      background:#fff;
+      box-shadow:0 0 5px rgba(0,0,0,0.08);
+      margin-bottom:10px;
+    }
+    .header h1 {
+      margin:0; font-size:18px;
+    }
+    .container {
+      max-width:600px;
+      margin:0 auto;
+      background:#fff;
+      padding:10px;
+      border-radius:6px;
+      box-shadow:0 1px 2px rgba(0,0,0,0.1);
+    }
+
+    .controls {
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      margin-bottom:10px;
+      align-items:center;
+    }
+    .accBtn {
+      display:inline-block;
+      padding:8px 10px;
+      background:#8e44ad; /* фиолет */
+      color:#fff;
+      border-radius:4px;
+      cursor:pointer;
+      margin:3px 3px 6px 0; 
+      border:none;
+      outline:none;
+    }
+    .accBtn:hover {
+      background:#722e91;
+    }
+    /* Желтый фон, если zeroGain */
+    .accBtn.zeroGain {
+      background:yellow;
+      color:#000;
+    }
+    /* Красный фон, если нет "no more marches" */
+    .accBtn.noMarch {
+      background:red;
+      color:#fff;
+    }
+    /* Синяя обводка, если найдено "update the game" */
+    .accBtn.updateGame {
+      outline:3px solid blue; /* можете задать толще или тоньше */
+      outline-offset: -2px;  /* небольшой "сдвиг" внутрь/вовнутрь */
+    }
+
+    /* Если хотите хитрое сочетание красного и желтого фона, когда оба условия */
+    /* Можно сделать градиент: */
+    .accBtn.noMarch.zeroGain {
+      /* пример: диагональный градиент */
+      background: linear-gradient(45deg, red 50%, yellow 50%);
+      color:#000; 
+    }
+
+    /* Кнопка */
+    .btn {
+      display:inline-block;
+      padding:6px 10px;
+      background:#8e44ad;
+      color:#fff;
+      border-radius:4px;
+      cursor:pointer;
+      text-decoration:none;
+      border:none;
+      outline:none;
+      margin-right:10px;
+    }
+    .btn:hover {
+      background:#722e91;
+    }
+
+    .logLines {
+      white-space:pre-wrap;
+      background:#f2f2f2;
+      padding:8px;
+      border-radius:4px;
+      max-height:400px;
+      overflow-y:auto;
+      font-size:14px;
+    }
+  </style>
+
+  <script>
+    let allAccounts=[];    // Список аккаунтов [{id, nickname, zeroGain, hasNoMoreMarches, hasUpdateGame}, ...]
+    let accountMap={};     // Если нужно кэшировать более детально
+    let accLogStatus={};   // Статусы из /api/logstatus: {acc_id: {...}}
+
+    document.addEventListener("DOMContentLoaded", ()=>{
+      loadData();
+    });
+
+    async function loadData(){
+      // 1) Загружаем список аккаунтов + их прирост
+      const resp1= await fetch("/api/resources");
+      const data1= await resp1.json();
+      // data1.accounts => массив аккаунтов
+      //   .id, .nickname, .today_gain и т.д.
+
+      // Создадим карту приростов
+      let gainMap={}; 
+      (data1.accounts||[]).forEach(a=>{
+        gainMap[a.id] = {
+          nickname: a.nickname,
+          zeroGain: (a.today_gain === "0" || a.today_gain === "0k" || a.today_gain === "0m"), 
+          // Логика: если "0" — значит нет прироста. 
+          // Или можно вычислять и сравнивать
+        };
+      });
+
+      // 2) Загружаем статусы логов (есть ли no more marches, есть ли update the game)
+      //   /api/logstatus -> { acc_id: { zeroGain:boolean, hasNoMoreMarches:boolean, hasUpdateGame:boolean, nickname:"..."}, ... }
+      const resp2= await fetch("/api/logstatus");
+      const data2= await resp2.json();
+
+      allAccounts=[]; 
+      // Объединяем данные
+      for(const [acc_id, st] of Object.entries(data2)){
+        // Для удобства
+        let fromGainMap = gainMap[acc_id] || {};
+        // zeroGain может прийти как из /api/logstatus, так и из /api/resources => объединяем/уточняем
+        // но предпочтительнее брать из logstatus точнее? Или наоборот? 
+        // Тут зависит от вашей реализации.
+        let combinedZero = (st.zeroGain || fromGainMap.zeroGain);
+
+        allAccounts.push({
+          id: acc_id,
+          nickname: st.nickname || fromGainMap.nickname || "??",
+          // no more marches: если hasNoMoreMarches==false => красный
+          // Но удобнее хранить сразу флаг noMarch = !hasNoMoreMarches
+          noMarch: !st.hasNoMoreMarches, 
+
+          zeroGain: combinedZero,
+          hasUpdateGame: !!st.hasUpdateGame
+        });
+      }
+
+      renderAccList();
+    }
+
+    // Сортировка и отрисовка
+    function renderAccList(){
+      applySort();
+      const cont = document.getElementById("accList");
+      cont.innerHTML = "";
+
+      allAccounts.forEach(acc => {
+        let btn = document.createElement("button");
+        btn.className = "accBtn";
+
+        btn.textContent = acc.nickname;
+
+        // Флаги:
+        if(acc.noMarch){
+          // Нет фразы "No more marches" => красный
+          btn.classList.add("noMarch");
+        }
+        if(acc.zeroGain){
+          // Нет прироста => желтый
+          btn.classList.add("zeroGain");
+        }
+        if(acc.hasUpdateGame){
+          // Найдено обновление => синяя обводка
+          btn.classList.add("updateGame");
+        }
+
+        // При клике покажем логи
+        btn.onclick = ()=> loadLogsFor(acc.id, acc.nickname);
+
+        cont.appendChild(btn);
+      });
+    }
+
+    function applySort(){
+      // Читаем чекбоксы
+      let alphaChk = document.getElementById("alphaChk").checked;
+      let noMarchChk = document.getElementById("noMarchChk").checked;
+      let zeroChk = document.getElementById("zeroChk").checked;
+      let updChk = document.getElementById("updateChk").checked;
+
+      // Сортируем последовательно — сначала по алфавиту, потом по другим критериям
+      if(alphaChk){
+        allAccounts.sort((a,b) => a.nickname.localeCompare(b.nickname));
+      }
+
+      // Если нужно «сдвинуть в конец» аккаунты, где noMarch==true
+      if(noMarchChk){
+        allAccounts.sort((a,b)=>{
+          // Сортируем так: false < true
+          // чтобы "true" (noMarch) шло в конец
+          if(a.noMarch === b.noMarch) return 0;
+          return a.noMarch ? 1 : -1;
+        });
+      }
+
+      // Аналогично для zeroGain
+      if(zeroChk){
+        allAccounts.sort((a,b)=>{
+          if(a.zeroGain === b.zeroGain) return 0;
+          return a.zeroGain ? 1 : -1;
+        });
+      }
+
+      // И для hasUpdateGame
+      if(updChk){
+        allAccounts.sort((a,b)=>{
+          if(a.hasUpdateGame === b.hasUpdateGame) return 0;
+          return a.hasUpdateGame ? 1 : -1;
+        });
+      }
+    }
+
+    // Загрузка логов конкретного аккаунта
+    async function loadLogsFor(acc_id, nickname){
+      document.getElementById("accName").textContent = "Логи: " + nickname;
+      let resp = await fetch(`/api/logs?acc_id=${acc_id}`);
+      let data = await resp.json();
+      let lines = data.logs || [];
+
+      document.getElementById("logLines").textContent = lines.join("\n");
+    }
+
+    // Кнопка "Обновить" (полное обновление логов на сервере и повторная загрузка)
+    async function doRefresh(){
+      // 1) Делаем запрос /api/refresh (запускает parse_logs на сервере)
+      await fetch("/api/refresh",{ method:"POST" });
+      // 2) Снова грузим все данные
+      await loadData();
+      // 3) Очищаем блок логов
+      document.getElementById("logLines").textContent = "Обновлено...";
+    }
+
+    // Возвращаемся на главную (если нужно)
+    function goBack(){
+      window.location.href = "/";
+    }
+  </script>
+</head>
+<body>
+  <div class="header">
+    <h1>Просмотр логов</h1>
+  </div>
+
+  <!-- Кнопки управления -->
+  <div style="max-width:600px; margin:0 auto; padding:10px;">
+    <button class="btn" onclick="goBack()">Назад</button>
+    <button class="btn" onclick="doRefresh()">Обновить</button>
+  </div>
+
+  <div class="container">
+    <div class="controls">
+      <label><input type="checkbox" id="alphaChk" onchange="renderAccList()" />A-Z</label>
+      <label><input type="checkbox" id="noMarchChk" onchange="renderAccList()" />NoMarch→в конец</label>
+      <label><input type="checkbox" id="zeroChk" onchange="renderAccList()" />ZeroGain→в конец</label>
+      <label><input type="checkbox" id="updateChk" onchange="renderAccList()" />UpdateGame→в конец</label>
+    </div>
+
+    <div id="accList" style="margin-bottom:10px;"></div>
+
+    <h3 id="accName">Логи: ...</h3>
+    <div id="logLines" class="logLines"></div>
+  </div>
+</body>
+</html>
