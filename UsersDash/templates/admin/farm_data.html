@@ -617,6 +617,11 @@ document.addEventListener("DOMContentLoaded", function () {
         { price: 1000, name: TARIFF_PRICE_MAP["1000"] || TARIFF_PRICE_MAP[1000] || "Расширенный" },
         { price: 1400, name: PREMIUM_TARIFF_NAME }
     ].filter(function (opt) { return !!opt.name; });
+    const HIDE_PRICE_TARIFFS = new Set(
+        TARIFF_OPTIONS
+            .filter(function (opt) { return opt.hidePrice; })
+            .map(function (opt) { return String(opt.price); })
+    );
 
     const PAYMENT_URL_PAID = {{ url_for('admin.mark_account_paid', account_id=0)|tojson }};
     const PAYMENT_URL_UNPAID = {{ url_for('admin.mark_account_unpaid', account_id=0)|tojson }};
@@ -669,6 +674,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
         const nextPayment = item.next_payment_at || "";
         const tariffVal = item.tariff !== null && item.tariff !== undefined ? item.tariff : "";
+        const tariffStr = tariffVal !== null && tariffVal !== undefined && tariffVal !== ""
+            ? String(tariffVal)
+            : "";
+        const hideTariffPrice = tariffStr && HIDE_PRICE_TARIFFS.has(tariffStr);
+        const tariffInputValue = hideTariffPrice ? "" : tariffVal;
+        const tariffCellAttrs = tariffStr ? ` data-selected-tariff-price="${escapeHtml(tariffStr)}"` : "";
 
         tr.innerHTML = `
             <td>
@@ -700,9 +711,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 <input class="farmdata-input farmdata-input--short" type="date" name="next_payment_date" value="${escapeHtml(nextPayment)}">
             </td>
             <td>
-                <div class="tariff-cell" data-role="tariff-cell">
+                <div class="tariff-cell" data-role="tariff-cell"${tariffCellAttrs}>
                     <div class="tariff-inline">
-                        <input class="farmdata-input farmdata-input--price" type="number" min="0" step="50" name="tariff" placeholder="₽" value="${escapeHtml(String(tariffVal))}">
+                        <input class="farmdata-input farmdata-input--price" type="number" min="0" step="50" name="tariff" placeholder="₽" value="${escapeHtml(String(tariffInputValue))}">
                         <div class="tariff-actions">
                             <a class="icon-btn icon-btn--compact" href="${escapeHtml(item.manage_url || '#')}" title="Настройки фермы" target="_blank" rel="noopener">⚙</a>
                             <button type="button" class="icon-btn icon-btn--compact icon-btn--danger" data-role="farmdata-mark-unpaid" data-account-id="${item.account_id}" title="Отключить за неоплату">✖</button>
@@ -899,6 +910,9 @@ document.addEventListener("DOMContentLoaded", function () {
             btn.className = "tariff-dropdown__option";
             btn.dataset.role = "tariff-option";
             btn.dataset.price = String(opt.price);
+            if (opt.hidePrice) {
+                btn.dataset.hidePrice = "1";
+            }
 
             const priceSpan = document.createElement("span");
             priceSpan.className = "tariff-dropdown__option-price";
@@ -1046,14 +1060,17 @@ document.addEventListener("DOMContentLoaded", function () {
                 return el && el.value ? el.value.trim() : "";
             }
 
+            const tariffCell = tr.querySelector('[data-role="tariff-cell"]');
+            const selectedTariff = getTariffSelection(tariffCell);
+
             const nextPaymentInput = val('input[name="next_payment_date"]');
             const nextPaymentResult = normalizeDateInput(nextPaymentInput);
             if (!nextPaymentResult.isValid && nextPaymentInput) {
                 formatWarnings.push(`«След. оплата» — ${farmLabel}`);
             }
 
-            const tariffInput = val('input[name="tariff"]');
-            const tariffResult = normalizeTariffInput(tariffInput);
+            const tariffInput = val('input[name="tariff"]') || selectedTariff;
+            const tariffResult = normalizeTariffInput(tariffInput || selectedTariff);
             if (!tariffResult.isValid && tariffInput) {
                 formatWarnings.push(`«Тариф» — ${farmLabel}`);
             }
@@ -1253,6 +1270,21 @@ document.addEventListener("DOMContentLoaded", function () {
         totalSpan.textContent = visibleCount;
     }
 
+    function updateFarmdataVisibleTotal() {
+        const totalSpan = document.querySelector('[data-role="farmdata-total"]');
+        const rows = document.querySelectorAll('[data-role="admin-farmdata-table"] tbody tr[data-account-id]');
+
+        if (!totalSpan) {
+            return;
+        }
+
+        const visibleCount = Array.from(rows).filter(function (row) {
+            return row.style.display !== "none";
+        }).length;
+
+        totalSpan.textContent = visibleCount;
+    }
+
     function handleAdminFarmDataFieldChange(e) {
         const target = e.target;
         if (!target || target.tagName !== "INPUT") return;
@@ -1288,7 +1320,7 @@ document.addEventListener("DOMContentLoaded", function () {
             const input = cell ? cell.querySelector('input[name="tariff"]') : null;
             if (input) {
                 setTariffSelection(cell, optionBtn.dataset.price || "");
-                input.value = optionBtn.dataset.price || "";
+                input.value = optionBtn.dataset.hidePrice === "1" ? "" : optionBtn.dataset.price || "";
                 input.dispatchEvent(new Event("input", { bubbles: true }));
                 updateTariffLabel(input);
                 closeTariffDropdowns();

@@ -625,7 +625,11 @@ def admin_dashboard():
         if not srv_profit:
             continue
 
-        monthly_amount = acc.next_payment_amount or 0
+        monthly_amount = acc.next_payment_amount
+        if not is_tariff_billable(monthly_amount):
+            continue
+
+        monthly_amount = monthly_amount or 0
         if monthly_amount < 0:
             monthly_amount = 0
 
