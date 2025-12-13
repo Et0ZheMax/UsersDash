@@ -8,8 +8,11 @@ from typing import Iterable
 from UsersDash.models import Account
 
 # Конфигурация тарифов и их биллинговый статус
+RSS_FOR_SALE_TARIFF_PRICE = 50
+
 TARIFFS: dict[int, dict[str, object]] = {
     0: {"name": "Своя ферма", "billable": False},
+    RSS_FOR_SALE_TARIFF_PRICE: {"name": "На продажу RSS", "billable": False},
     500: {"name": "Только Фарм", "billable": True},
     1000: {"name": "Расширенный", "billable": True},
     1400: {"name": "Премиум", "billable": True},

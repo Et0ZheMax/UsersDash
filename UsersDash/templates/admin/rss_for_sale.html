@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+
+{% block title %}RSS на продажу{% endblock %}
+
+{% block content %}
+<h1>RSS на продажу</h1>
+<p class="muted">Собираем ресурсы с ферм на тарифе «На продажу RSS» и считаем потенциальный доход с учётом налога.</p>
+
+<div class="card">
+    <div class="dashboard-filters">
+        <div class="filter-block">
+            <label class="filter-label" for="priceFws">Еда/дерево/камень за 100 млн</label>
+            <input id="priceFws" type="number" class="form-input" min="0" step="1"
+                   value="{{ price_fws_100 }}" data-role="price-input" data-key="fws">
+            <div class="filter-hint">По умолчанию {{ default_prices.fws }} ₽.</div>
+        </div>
+        <div class="filter-block">
+            <label class="filter-label" for="priceGold">Золото за 100 млн</label>
+            <input id="priceGold" type="number" class="form-input" min="0" step="1"
+                   value="{{ price_gold_100 }}" data-role="price-input" data-key="gold">
+            <div class="filter-hint">По умолчанию {{ default_prices.gold }} ₽.</div>
+        </div>
+        <div class="filter-block">
+            <label class="filter-label" for="taxPercent">Налог, %</label>
+            <input id="taxPercent" type="number" class="form-input" min="0" max="100" step="0.1"
+                   value="{{ tax_percent }}" data-role="price-input" data-key="tax">
+            <div class="filter-hint">По умолчанию {{ default_prices.tax }}%.</div>
+        </div>
+    </div>
+</div>
+
+<div class="kpi-row kpi-row--stacked" style="margin-top: 16px;">
+    <div class="kpi-card">
+        <div class="kpi-label">Всего ферм</div>
+        <div class="kpi-value">{{ totals.accounts }}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Сумма ресурсов</div>
+        <div class="kpi-value" data-role="total-rss"
+             data-total-food="{{ totals.resources.food }}"
+             data-total-wood="{{ totals.resources.wood }}"
+             data-total-stone="{{ totals.resources.stone }}"
+             data-total-gold="{{ totals.resources.gold }}">
+            {{ shorten_number(totals.resources.food + totals.resources.wood + totals.resources.stone + totals.resources.gold) }}
+        </div>
+        <div class="kpi-hint">Еда + дерево + камень + золото</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Доход брутто</div>
+        <div class="kpi-value" data-role="total-gross">{{ '%.2f'|format(totals.gross_income) }} ₽</div>
+        <div class="kpi-hint">До налога</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Доход чистыми</div>
+        <div class="kpi-value" data-role="total-net">{{ '%.2f'|format(totals.net_income) }} ₽</div>
+        <div class="kpi-hint" data-role="tax-hint">Налог {{ tax_percent }}%</div>
+    </div>
+</div>
+
+<div class="kpi-row" style="margin-top: 12px;">
+    <div class="kpi-card">
+        <div class="kpi-label">Еда</div>
+        <div class="kpi-value" data-role="total-food" data-raw="{{ totals.resources.food }}">
+            {{ shorten_number(totals.resources.food) }}
+        </div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Дерево</div>
+        <div class="kpi-value" data-role="total-wood" data-raw="{{ totals.resources.wood }}">
+            {{ shorten_number(totals.resources.wood) }}
+        </div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Камень</div>
+        <div class="kpi-value" data-role="total-stone" data-raw="{{ totals.resources.stone }}">
+            {{ shorten_number(totals.resources.stone) }}
+        </div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Золото</div>
+        <div class="kpi-value" data-role="total-gold" data-raw="{{ totals.resources.gold }}">
+            {{ shorten_number(totals.resources.gold) }}
+        </div>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+    <h2>Сводка по королевствам</h2>
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Королевство</th>
+                <th>Ферм</th>
+                <th>Еда</th>
+                <th>Дерево</th>
+                <th>Камень</th>
+                <th>Золото</th>
+                <th>Доход брутто</th>
+                <th>Доход чистыми</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for group in groups %}
+                <tr data-group-row
+                    data-group-name="{{ group.name }}"
+                    data-food="{{ group.resources.food }}"
+                    data-wood="{{ group.resources.wood }}"
+                    data-stone="{{ group.resources.stone }}"
+                    data-gold="{{ group.resources.gold }}">
+                    <td>{{ group.name }}</td>
+                    <td>{{ group.count }}</td>
+                    <td><span data-role="group-food">{{ shorten_number(group.resources.food) }}</span></td>
+                    <td><span data-role="group-wood">{{ shorten_number(group.resources.wood) }}</span></td>
+                    <td><span data-role="group-stone">{{ shorten_number(group.resources.stone) }}</span></td>
+                    <td><span data-role="group-gold">{{ shorten_number(group.resources.gold) }}</span></td>
+                    <td><span data-role="group-gross">{{ '%.2f'|format(group.gross_income) }}</span> ₽</td>
+                    <td><span data-role="group-net">{{ '%.2f'|format(group.net_income) }}</span> ₽</td>
+                </tr>
+            {% else %}
+                <tr>
+                    <td colspan="8">Нет ферм с тарифом «На продажу RSS».</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card" style="margin-top: 16px;">
+    <h2>Фермы</h2>
+    <div class="table-responsive">
+        <table class="table">
+            <thead>
+            <tr>
+                <th>Ферма</th>
+                <th>Королевство</th>
+                <th>Сервер ПК</th>
+                <th>Еда</th>
+                <th>Дерево</th>
+                <th>Камень</th>
+                <th>Золото</th>
+                <th>Доход чистыми</th>
+                <th>Прирост за день</th>
+                <th>Обновлено</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for acc in accounts %}
+                <tr data-account-id="{{ acc.id }}"
+                    data-food="{{ acc.resources.food }}"
+                    data-wood="{{ acc.resources.wood }}"
+                    data-stone="{{ acc.resources.stone }}"
+                    data-gold="{{ acc.resources.gold }}">
+                    <td>{{ acc.name }}</td>
+                    <td>{{ acc.kingdom }}</td>
+                    <td>{{ acc.server_pc }}</td>
+                    <td>{{ acc.views.food|safe }}</td>
+                    <td>{{ acc.views.wood|safe }}</td>
+                    <td>{{ acc.views.stone|safe }}</td>
+                    <td>{{ acc.views.gold|safe }}</td>
+                    <td><span data-role="account-net">~ {{ '%.2f'|format(acc.net_income) }} ₽</span></td>
+                    <td>{{ acc.today_gain or '—' }}</td>
+                    <td>{{ acc.last_updated or '—' }}</td>
+                </tr>
+            {% else %}
+                <tr>
+                    <td colspan="10">Нет активных ферм с тарифом «На продажу RSS».</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    const saleDefaults = {{ default_prices|tojson }};
+
+    function readPrices() {
+        const priceInputs = document.querySelectorAll('[data-role="price-input"]');
+        const state = { fws100: saleDefaults.fws, gold100: saleDefaults.gold, tax: saleDefaults.tax };
+        priceInputs.forEach((input) => {
+            const key = input.dataset.key;
+            const val = parseFloat(input.value);
+            if (Number.isFinite(val) && val >= 0) {
+                if (key === 'fws') state.fws100 = val;
+                if (key === 'gold') state.gold100 = val;
+                if (key === 'tax') state.tax = val;
+            }
+        });
+        return state;
+    }
+
+    function calcIncome(resources, prices) {
+        const fwsPerM = (prices.fws100 || 0) / 100.0;
+        const goldPerM = (prices.gold100 || 0) / 100.0;
+        const gross = ((resources.food + resources.wood + resources.stone) / 1_000_000) * fwsPerM
+            + (resources.gold / 1_000_000) * goldPerM;
+        const taxMultiplier = Math.min(100, Math.max(0, prices.tax || 0)) / 100.0;
+        const net = gross * (1 - taxMultiplier);
+        return { gross, net };
+    }
+
+    function recalcIncome() {
+        const prices = readPrices();
+        const totalGrossEl = document.querySelector('[data-role="total-gross"]');
+        const totalNetEl = document.querySelector('[data-role="total-net"]');
+        const taxHint = document.querySelector('[data-role="tax-hint"]');
+
+        let overallGross = 0;
+        let overallNet = 0;
+
+        document.querySelectorAll('[data-account-id]').forEach((row) => {
+            const resources = {
+                food: Number(row.dataset.food) || 0,
+                wood: Number(row.dataset.wood) || 0,
+                stone: Number(row.dataset.stone) || 0,
+                gold: Number(row.dataset.gold) || 0,
+            };
+            const { net, gross } = calcIncome(resources, prices);
+            overallGross += gross;
+            overallNet += net;
+            const netCell = row.querySelector('[data-role="account-net"]');
+            if (netCell) {
+                netCell.textContent = `~ ${net.toFixed(2)} ₽`;
+            }
+        });
+
+        document.querySelectorAll('[data-group-row]').forEach((row) => {
+            const resources = {
+                food: Number(row.dataset.food) || 0,
+                wood: Number(row.dataset.wood) || 0,
+                stone: Number(row.dataset.stone) || 0,
+                gold: Number(row.dataset.gold) || 0,
+            };
+            const { net, gross } = calcIncome(resources, prices);
+            const grossCell = row.querySelector('[data-role="group-gross"]');
+            const netCell = row.querySelector('[data-role="group-net"]');
+            if (grossCell) grossCell.textContent = gross.toFixed(2);
+            if (netCell) netCell.textContent = net.toFixed(2);
+        });
+
+        if (totalGrossEl) totalGrossEl.textContent = `${overallGross.toFixed(2)} ₽`;
+        if (totalNetEl) totalNetEl.textContent = `${overallNet.toFixed(2)} ₽`;
+        if (taxHint) taxHint.textContent = `Налог ${prices.tax}%`;
+    }
+
+    document.querySelectorAll('[data-role="price-input"]').forEach((input) => {
+        input.addEventListener('input', recalcIncome);
+    });
+
+    recalcIncome();
+</script>
+{% endblock %}

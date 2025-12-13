@@ -62,7 +62,12 @@ from UsersDash.services.remote_api import (
     delete_template_payload,
 )
 from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
-from UsersDash.services.tariffs import TARIFF_PRICE_MAP, get_tariff_name_by_price
+from UsersDash.services.tariffs import (
+    RSS_FOR_SALE_TARIFF_PRICE,
+    TARIFF_PRICE_MAP,
+    get_tariff_name_by_price,
+    is_tariff_billable,
+)
 from UsersDash.services.info_message import (
     get_global_info_message,
     set_global_info_message_text,
@@ -84,6 +89,10 @@ def admin_required():
 
 
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+RSS_SALE_DEFAULT_PRICE_FWS_100 = 299
+RSS_SALE_DEFAULT_PRICE_GOLD_100 = 499
+RSS_SALE_DEFAULT_TAX_PERCENT = 32.0
 
 
 def _to_moscow_time(dt: datetime) -> datetime:
@@ -420,14 +429,16 @@ def _collect_incomplete_farms(
         password = fd.password if fd else None
         next_payment = acc.next_payment_at.strftime("%Y-%m-%d") if acc.next_payment_at else None
         tariff = acc.next_payment_amount
-        tariff_name = get_tariff_name_by_price(tariff)
-        is_own_farm_tariff = tariff_name == "Своя ферма"
+        is_tariff_assigned = tariff is not None
+        is_billable_tariff = (
+            is_tariff_billable(tariff) if is_tariff_assigned else True
+        )
 
         missing = {
             "email": not email,
             "password": not password,
-            "next_payment_date": False if is_own_farm_tariff else not next_payment,
-            "tariff": False if is_own_farm_tariff else tariff is None,
+            "next_payment_date": False if not is_billable_tariff else not next_payment,
+            "tariff": False if not is_billable_tariff else not is_tariff_assigned,
         }
 
         if not any(missing.values()):
@@ -448,6 +459,66 @@ def _collect_incomplete_farms(
         )
 
     return items
+
+
+def _safe_int(value: Any) -> int:
+    """Пытается привести значение к int, иначе возвращает 0."""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_positive_float(raw: str | None, default: float) -> float:
+    """Возвращает положительное число из строки или дефолтное значение."""
+
+    try:
+        parsed = float(raw)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _shorten_number(value: float | int) -> str:
+    """Форматирует числа в компактный вид (k/m/b)."""
+
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}b"
+    if abs_value >= 1_000_000:
+        return f"{value / 1_000_000:.0f}m"
+    if abs_value >= 1_000:
+        return f"{value / 1_000:.0f}k"
+    return str(int(value))
+
+
+def _calc_rss_income(
+    resources: dict[str, int],
+    price_fws_100: float,
+    price_gold_100: float,
+    tax_percent: float,
+) -> tuple[float, float]:
+    """
+    Считает грязный и чистый доход с учётом налога для набора ресурсов.
+    Возвращает (gross, net).
+    """
+
+    food = resources.get("food", 0)
+    wood = resources.get("wood", 0)
+    stone = resources.get("stone", 0)
+    gold = resources.get("gold", 0)
+
+    fws_price_per_million = (price_fws_100 or 0) / 100.0
+    gold_price_per_million = (price_gold_100 or 0) / 100.0
+
+    gross_income = (
+        ((food + wood + stone) / 1_000_000) * fws_price_per_million
+        + (gold / 1_000_000) * gold_price_per_million
+    )
+    tax_multiplier = max(0.0, min(100.0, tax_percent)) / 100.0
+    net_income = gross_income * (1 - tax_multiplier)
+    return gross_income, net_income
 
 
 # -------------------- Общий дашборд админа --------------------
@@ -594,6 +665,149 @@ def admin_dashboard():
             "days_in_month": days_in_month,
         },
         incomplete_accounts_total=len(incomplete_accounts),
+    )
+
+
+@admin_bp.route("/rss-sale", methods=["GET"])
+@login_required
+def rss_sale_page():
+    """
+    Сводка ресурсов по фермам с тарифом «На продажу RSS».
+    Показывает агрегированные ресурсы по королевствам и потенциальный доход.
+    """
+
+    admin_required()
+
+    price_fws_100 = _parse_positive_float(
+        request.args.get("price_fws_100"), RSS_SALE_DEFAULT_PRICE_FWS_100
+    )
+    price_gold_100 = _parse_positive_float(
+        request.args.get("price_gold_100"), RSS_SALE_DEFAULT_PRICE_GOLD_100
+    )
+    tax_percent = _parse_positive_float(
+        request.args.get("tax_percent"), RSS_SALE_DEFAULT_TAX_PERCENT
+    )
+
+    accounts = (
+        Account.query.options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter(
+            Account.next_payment_amount == RSS_FOR_SALE_TARIFF_PRICE,
+            Account.is_active.is_(True),
+        )
+        .order_by(Account.game_world.asc(), Account.name.asc())
+        .all()
+    )
+
+    farmdata_index = _build_farmdata_index(accounts)
+    resources_map = fetch_resources_for_accounts(accounts) if accounts else {}
+
+    overall_resources = {"food": 0, "wood": 0, "stone": 0, "gold": 0}
+    group_totals: dict[str, dict[str, Any]] = {}
+    accounts_payload: list[dict[str, Any]] = []
+
+    for acc in accounts:
+        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        kingdom_raw = acc.game_world or (fd.server if fd else None) or "Не указано"
+        kingdom = kingdom_raw.strip() if isinstance(kingdom_raw, str) else str(kingdom_raw)
+        if not kingdom:
+            kingdom = "Не указано"
+
+        res_info = resources_map.get(acc.id) or {}
+        res_raw = res_info.get("raw") or {}
+
+        resources = {
+            "food": _safe_int(res_raw.get("food_raw")),
+            "wood": _safe_int(res_raw.get("wood_raw")),
+            "stone": _safe_int(res_raw.get("stone_raw")),
+            "gold": _safe_int(res_raw.get("gold_raw")),
+        }
+
+        for key, value in resources.items():
+            overall_resources[key] += value
+
+        group_entry = group_totals.setdefault(
+            kingdom,
+            {
+                "count": 0,
+                "resources": {"food": 0, "wood": 0, "stone": 0, "gold": 0},
+            },
+        )
+        group_entry["count"] += 1
+        for key, value in resources.items():
+            group_entry["resources"][key] += value
+
+        gross_income, net_income = _calc_rss_income(
+            resources, price_fws_100, price_gold_100, tax_percent
+        )
+
+        accounts_payload.append(
+            {
+                "id": acc.id,
+                "name": acc.name,
+                "server_pc": acc.server.name if acc.server else "—",
+                "owner": acc.owner.username if acc.owner else "—",
+                "kingdom": kingdom,
+                "resources": resources,
+                "views": {
+                    "food": res_raw.get("food_view") or "—",
+                    "wood": res_raw.get("wood_view") or "—",
+                    "stone": res_raw.get("stone_view") or "—",
+                    "gold": res_raw.get("gold_view") or "—",
+                },
+                "today_gain": res_raw.get("today_gain") or res_info.get("today_gain"),
+                "last_updated": (
+                    res_info.get("last_updated_fmt")
+                    or res_info.get("last_updated")
+                    or res_raw.get("last_updated")
+                ),
+                "gross_income": gross_income,
+                "net_income": net_income,
+            }
+        )
+
+    overall_gross, overall_net = _calc_rss_income(
+        overall_resources, price_fws_100, price_gold_100, tax_percent
+    )
+
+    group_payload = []
+    for name, data in sorted(group_totals.items(), key=lambda item: item[0].lower()):
+        gross, net = _calc_rss_income(
+            data["resources"], price_fws_100, price_gold_100, tax_percent
+        )
+        group_payload.append(
+            {
+                "name": name,
+                "count": data["count"],
+                "resources": data["resources"],
+                "gross_income": gross,
+                "net_income": net,
+            }
+        )
+
+    totals = {
+        "resources": overall_resources,
+        "gross_income": overall_gross,
+        "net_income": overall_net,
+        "accounts": len(accounts_payload),
+    }
+
+    return render_template(
+        "admin/rss_for_sale.html",
+        accounts=accounts_payload,
+        groups=group_payload,
+        totals=totals,
+        price_fws_100=price_fws_100,
+        price_gold_100=price_gold_100,
+        tax_percent=tax_percent,
+        default_prices={
+            "fws": RSS_SALE_DEFAULT_PRICE_FWS_100,
+            "gold": RSS_SALE_DEFAULT_PRICE_GOLD_100,
+            "tax": RSS_SALE_DEFAULT_TAX_PERCENT,
+        },
+        shorten_number=_shorten_number,
     )
 
 
