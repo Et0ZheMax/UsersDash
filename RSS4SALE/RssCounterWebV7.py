@@ -70,6 +70,12 @@ USERDASH_DB = os.path.abspath(os.path.join(BASE_DIR, "..", "UsersDash", "data", 
 LOG_DIR = r"C:\Program Files (x86)\GnBots\logs"   # как в настройках
 RESOURCES_DB = os.path.join(BASE_DIR, "resources_web.db")
 LOGS_DB      = os.path.join(BASE_DIR, "logs_cache.db")
+CRASHED_JSON_PATH = r"C:\LDPlayer\ldChecker\crashed.json"
+LOCAL_CRASHED_JSON = os.path.join(BASE_DIR, "crashed.json")
+
+APP_START_TIME = datetime.now(timezone.utc)
+DAILY_BACKUP_THREAD = None
+BACKGROUND_FLAGS = {"daily_backup_scheduler": False}
 
 # ──────────── Ш А Б Л О Н 650 ────────────
 TEMPLATES = {
@@ -1033,7 +1039,10 @@ def _schedule_daily_backups() -> None:
                 backup_accounts_csv()
             except Exception as e:
                 print("[BACKUP] error:", e, flush=True)
-    threading.Thread(target=_worker, daemon=True).start()
+    global DAILY_BACKUP_THREAD
+    DAILY_BACKUP_THREAD = threading.Thread(target=_worker, daemon=True)
+    DAILY_BACKUP_THREAD.start()
+    BACKGROUND_FLAGS["daily_backup_scheduler"] = True
 
 # === BACKUP END ===
 
@@ -1128,6 +1137,147 @@ def transformLogLine(dt_part, line_str):
         short= dt_part
     rest= line_str[28:].strip()
     return f"{short} {rest}"
+
+# ───────────────────── диагностика и агрегирование ───────────────────────────
+def _safe_parse_dt(dt_str: str) -> datetime | None:
+    try:
+        return datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S.%f")
+    except Exception:
+        return None
+
+
+def _load_crashed_entries() -> list[str]:
+    """Возвращает список упавших эмуляторов из crashed.json (основной/локальный путь)."""
+    for path in (CRASHED_JSON_PATH, LOCAL_CRASHED_JSON):
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [str(x) for x in data]
+        except Exception:
+            app.logger.exception("Не удалось прочитать crashed.json: %s", path)
+    return []
+
+
+def _collect_problem_summary(window_hours: int = 24) -> dict:
+    """Собирает ошибки/варнинги из кэша логов за указанное окно."""
+    stats = {
+        "total": 0,
+        "by_keyword": {},
+        "examples": [],
+        "checked": 0,
+    }
+    if not os.path.exists(LOGS_DB):
+        return stats
+
+    keywords = {
+        "error": ["error", "ошибка", "exception", "traceback", "fail"],
+        "warning": ["warning", "warn", "предупр", "deprecated"],
+        "disconnect": ["disconnect", "connection lost", "timeout"],
+    }
+
+    cutoff = datetime.now() - timedelta(hours=window_hours)
+
+    try:
+        conn = sqlite3.connect(LOGS_DB)
+        c = conn.cursor()
+        rows = c.execute(
+            "SELECT acc_id, dt, raw_line FROM cached_logs ORDER BY id DESC LIMIT 5000"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        app.logger.exception("Не удалось прочитать cached_logs")
+        return stats
+
+    for acc_id, dt_str, line in rows:
+        stats["checked"] += 1
+        dt_val = _safe_parse_dt(dt_str)
+        if dt_val and dt_val < cutoff:
+            continue
+        lower = line.lower()
+        for key, patterns in keywords.items():
+            if any(p in lower for p in patterns):
+                stats["total"] += 1
+                stats["by_keyword"].setdefault(key, 0)
+                stats["by_keyword"][key] += 1
+                if len(stats["examples"]) < 20:
+                    stats["examples"].append(
+                        {
+                            "acc_id": acc_id,
+                            "dt": dt_str,
+                            "text": line[:200],
+                            "type": key,
+                        }
+                    )
+                break
+    return stats
+
+
+def _calculate_cycle_times(
+    *, window_hours: int, min_gap_minutes: int, max_gap_hours: int
+) -> list[dict]:
+    """Вычисляет интервалы между сессиями аккаунтов по cached_logs."""
+    if not os.path.exists(LOGS_DB):
+        return []
+
+    cutoff = datetime.now() - timedelta(hours=window_hours)
+    try:
+        conn = sqlite3.connect(LOGS_DB)
+        c = conn.cursor()
+        rows = c.execute(
+            "SELECT acc_id, dt FROM cached_logs ORDER BY id DESC LIMIT 5000"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        app.logger.exception("Не удалось прочитать данные для расчёта циклов")
+        return []
+
+    per_acc: dict[str, list[datetime]] = {}
+    for acc_id, dt_str in rows:
+        dt_val = _safe_parse_dt(dt_str)
+        if not dt_val or dt_val < cutoff:
+            continue
+        key = acc_id or "unknown"
+        per_acc.setdefault(key, []).append(dt_val)
+
+    cycles: list[dict] = []
+    for acc_id, points in per_acc.items():
+        if len(points) < 2:
+            continue
+        points.sort()
+        gaps: list[float] = []
+        for prev, curr in zip(points, points[1:]):
+            delta_min = (curr - prev).total_seconds() / 60
+            if delta_min < min_gap_minutes:
+                continue
+            if delta_min > max_gap_hours * 60:
+                continue
+            gaps.append(delta_min)
+
+        if gaps:
+            avg = sum(gaps) / len(gaps)
+            cycles.append(
+                {
+                    "acc_id": acc_id,
+                    "count": len(gaps),
+                    "avg_minutes": round(avg, 1),
+                    "min_minutes": round(min(gaps), 1),
+                    "max_minutes": round(max(gaps), 1),
+                    "last_cycle_minutes": round(gaps[-1], 1),
+                }
+            )
+
+    return cycles
+
+
+def _int_arg(name: str, default: int) -> int:
+    """Безопасно извлекает int-параметр из query string."""
+    try:
+        return int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
 
 ##############################
 # FIX
@@ -1290,6 +1440,102 @@ def api_screenshot():
     b64 = base64.b64encode(buf.getvalue()).decode()
     return jsonify({"data": f"data:image/png;base64,{b64}"})
 
+
+@app.route("/api/server/self_status")
+def api_self_status():
+    """Отдаёт базовое состояние сервера и фоновых задач."""
+    try:
+        now = datetime.now(timezone.utc)
+        uptime_seconds = (now - APP_START_TIME).total_seconds()
+        background = {
+            "daily_backup_scheduler": {
+                "started": BACKGROUND_FLAGS.get("daily_backup_scheduler", False),
+                "alive": bool(DAILY_BACKUP_THREAD and DAILY_BACKUP_THREAD.is_alive()),
+            },
+            "last_update_time": LAST_UPDATE_TIME.isoformat() if LAST_UPDATE_TIME else None,
+            "threads": len(threading.enumerate()),
+        }
+        health_checks = {
+            "logs_db_exists": os.path.exists(LOGS_DB),
+            "resources_db_exists": os.path.exists(RESOURCES_DB),
+            "profile_accessible": os.path.exists(PROFILE_PATH),
+        }
+        status = "ok" if all(health_checks.values()) else "degraded"
+        return jsonify(
+            {
+                "server": SERVER,
+                "start_time": APP_START_TIME.isoformat(),
+                "uptime_seconds": uptime_seconds,
+                "background": background,
+                "health": {"status": status, **health_checks},
+            }
+        )
+    except Exception as exc:
+        app.logger.exception("api_self_status failed")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/problems/summary")
+def api_problems_summary():
+    window_hours = _int_arg("window_hours", 24)
+    try:
+        crashed = _load_crashed_entries()
+        log_stats = _collect_problem_summary(window_hours)
+        return jsonify(
+            {
+                "window_hours": window_hours,
+                "crashed": {"count": len(crashed), "items": crashed},
+                "log_problems": log_stats,
+                "sources": {
+                    "logs_db": os.path.exists(LOGS_DB),
+                    "crashed_json": os.path.exists(CRASHED_JSON_PATH)
+                    or os.path.exists(LOCAL_CRASHED_JSON),
+                },
+            }
+        )
+    except Exception as exc:
+        app.logger.exception("api_problems_summary failed")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/cycle_time")
+def api_cycle_time():
+    window_hours = _int_arg("window_hours", 24)
+    min_gap_minutes = _int_arg("min_gap_minutes", 30)
+    max_gap_hours = _int_arg("max_gap_hours", 12)
+
+    try:
+        cycles = _calculate_cycle_times(
+            window_hours=window_hours,
+            min_gap_minutes=min_gap_minutes,
+            max_gap_hours=max_gap_hours,
+        )
+        total_cycles = sum(item["count"] for item in cycles)
+        overall = {
+            "total_cycles": total_cycles,
+            "accounts": len(cycles),
+            "avg_minutes": 0,
+            "min_minutes": None,
+            "max_minutes": None,
+        }
+        if total_cycles:
+            weighted = sum(item["avg_minutes"] * item["count"] for item in cycles)
+            overall["avg_minutes"] = round(weighted / total_cycles, 1)
+            overall["min_minutes"] = min(item["min_minutes"] for item in cycles)
+            overall["max_minutes"] = max(item["max_minutes"] for item in cycles)
+
+        return jsonify(
+            {
+                "window_hours": window_hours,
+                "min_gap_minutes": min_gap_minutes,
+                "max_gap_hours": max_gap_hours,
+                "overall": overall,
+                "cycles": sorted(cycles, key=lambda x: x.get("acc_id", "")),
+            }
+        )
+    except Exception as exc:
+        app.logger.exception("api_cycle_time failed")
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/manage")
@@ -1470,12 +1716,8 @@ def api_check_ld():
 
 @app.route("/api/crashedEmus")
 def api_crashed_emu():
-    path = r"C:\LDPlayer\ldChecker\crashed.json"
-    if not os.path.exists(path):
-        return jsonify([])
-    with open(path, "r", encoding="utf-8") as f:
-        arr = json.load(f)
-    return jsonify(arr)  # например ["leidian5.config", "leidian36.config"]
+    crashed = _load_crashed_entries()
+    return jsonify(crashed)  # например ["leidian5.config", "leidian36.config"]
 
 
 @app.route("/api/paths", methods=["GET"])

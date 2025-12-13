@@ -1270,6 +1270,21 @@ document.addEventListener("DOMContentLoaded", function () {
         totalSpan.textContent = visibleCount;
     }
 
+    function updateFarmdataVisibleTotal() {
+        const totalSpan = document.querySelector('[data-role="farmdata-total"]');
+        const rows = document.querySelectorAll('[data-role="admin-farmdata-table"] tbody tr[data-account-id]');
+
+        if (!totalSpan) {
+            return;
+        }
+
+        const visibleCount = Array.from(rows).filter(function (row) {
+            return row.style.display !== "none";
+        }).length;
+
+        totalSpan.textContent = visibleCount;
+    }
+
     function handleAdminFarmDataFieldChange(e) {
         const target = e.target;
         if (!target || target.tagName !== "INPUT") return;
