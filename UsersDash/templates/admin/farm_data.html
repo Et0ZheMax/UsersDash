@@ -603,7 +603,16 @@ document.addEventListener("DOMContentLoaded", function () {
     const TARIFF_PRICE_MAP = {{ tariff_price_map|tojson }};
     const PREMIUM_TARIFF_NAME = TARIFF_PRICE_MAP["1400"] || TARIFF_PRICE_MAP[1400] || "Премиум";
     const TARIFF_OPTIONS = [
-        { price: 0, name: TARIFF_PRICE_MAP["0"] || TARIFF_PRICE_MAP[0] || "Своя ферма" },
+        {
+            price: 0,
+            name: TARIFF_PRICE_MAP["0"] || TARIFF_PRICE_MAP[0] || "Своя ферма",
+            hidePrice: true
+        },
+        {
+            price: 50,
+            name: TARIFF_PRICE_MAP["50"] || TARIFF_PRICE_MAP[50] || "На продажу RSS",
+            hidePrice: true
+        },
         { price: 500, name: TARIFF_PRICE_MAP["500"] || TARIFF_PRICE_MAP[500] || "Только Фарм" },
         { price: 1000, name: TARIFF_PRICE_MAP["1000"] || TARIFF_PRICE_MAP[1000] || "Расширенный" },
         { price: 1400, name: PREMIUM_TARIFF_NAME }
@@ -782,6 +791,7 @@ document.addEventListener("DOMContentLoaded", function () {
             loaded += items.length;
             offset += items.length;
             setFarmdataLoaderState({ loaded, total, isDone: loaded >= total });
+            updateFarmdataVisibleTotal();
 
             if (!items.length || loaded >= total) {
                 break;
@@ -892,7 +902,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
             const priceSpan = document.createElement("span");
             priceSpan.className = "tariff-dropdown__option-price";
-            priceSpan.textContent = `${opt.price} ₽`;
+            priceSpan.textContent = opt.hidePrice ? "—" : `${opt.price} ₽`;
 
             const nameSpan = document.createElement("span");
             nameSpan.className = "tariff-dropdown__option-name";
@@ -1224,7 +1234,24 @@ document.addEventListener("DOMContentLoaded", function () {
             const text = tr.textContent.toLowerCase();
             tr.style.display = text.includes(query) ? "" : "none";
         });
+
+        updateFarmdataVisibleTotal();
     });
+
+    function updateFarmdataVisibleTotal() {
+        const totalSpan = document.querySelector('[data-role="farmdata-total"]');
+        const rows = document.querySelectorAll('[data-role="admin-farmdata-table"] tbody tr[data-account-id]');
+
+        if (!totalSpan) {
+            return;
+        }
+
+        const visibleCount = Array.from(rows).filter(function (row) {
+            return row.style.display !== "none";
+        }).length;
+
+        totalSpan.textContent = visibleCount;
+    }
 
     function handleAdminFarmDataFieldChange(e) {
         const target = e.target;
