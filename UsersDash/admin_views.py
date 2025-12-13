@@ -2258,6 +2258,7 @@ def admin_farm_data_save():
 
     warnings = []
     defaults_to_apply: list[tuple[Account, int]] = []
+    tariffs_without_defaults = {0, 50}
     defaults_results: list[dict[str, str]] = []
 
     for row in items:
@@ -2301,7 +2302,10 @@ def admin_farm_data_save():
             if parsed_tariff is not None:
                 previous_tariff = acc.next_payment_amount
                 acc.next_payment_amount = parsed_tariff
-                if parsed_tariff != previous_tariff:
+                if (
+                    parsed_tariff != previous_tariff
+                    and parsed_tariff not in tariffs_without_defaults
+                ):
                     defaults_to_apply.append((acc, parsed_tariff))
             else:
                 warnings.append(
