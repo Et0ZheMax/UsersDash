@@ -2395,13 +2395,33 @@ def api_refresh():
     return {"status":"ok","last_update": LAST_UPDATE_TIME.isoformat()}
 
 # ───── NEW: отдаём inactive15.json ─────
+def _refresh_inactive_if_stale(max_age_min: int = 70) -> Path:
+    """Обновляет inactive15.json, если он отсутствует или старше заданного порога."""
+    path = Path(__file__).with_name("inactive15.json")
+
+    now = time.time()
+    try:
+        mtime = path.stat().st_mtime if path.is_file() else 0
+    except OSError:
+        mtime = 0
+
+    if now - mtime > max_age_min * 60:
+        try:
+            inactive_monitor.check_inactive_accounts()
+        except Exception as e:  # если фон погиб — не падаем в API
+            print("[inactive15-refresh]", e, flush=True)
+
+    return path
+
+
 @app.route("/api/inactive15")
 def api_inactive15():
     """
     Возвращает [{"nickname":"Alex898","hours":17.4}, …]
     или [] если файл ещё не создан.
     """
-    path = Path(__file__).with_name("inactive15.json")
+    path = _refresh_inactive_if_stale()
+
     if not path.is_file():
         return jsonify([])
     try:
@@ -3328,7 +3348,7 @@ def _collect_gather_watch() -> list[dict[str, t.Any]]:
 def _load_inactive_watch() -> list[dict[str, t.Any]]:
     """Подмешиваем список неактивных аккаунтов (dayGain=0 > THRESH)."""
 
-    path = Path(__file__).with_name("inactive15.json")
+    path = _refresh_inactive_if_stale()
     data = _safe_json_load(path)
 
     if not isinstance(data, list):
