@@ -625,7 +625,11 @@ def admin_dashboard():
         if not srv_profit:
             continue
 
-        monthly_amount = acc.next_payment_amount or 0
+        monthly_amount = acc.next_payment_amount
+        if not is_tariff_billable(monthly_amount):
+            continue
+
+        monthly_amount = monthly_amount or 0
         if monthly_amount < 0:
             monthly_amount = 0
 
@@ -2258,6 +2262,7 @@ def admin_farm_data_save():
 
     warnings = []
     defaults_to_apply: list[tuple[Account, int]] = []
+    tariffs_without_defaults = {0, 50}
     defaults_results: list[dict[str, str]] = []
 
     for row in items:
@@ -2301,7 +2306,10 @@ def admin_farm_data_save():
             if parsed_tariff is not None:
                 previous_tariff = acc.next_payment_amount
                 acc.next_payment_amount = parsed_tariff
-                if parsed_tariff != previous_tariff:
+                if (
+                    parsed_tariff != previous_tariff
+                    and parsed_tariff not in tariffs_without_defaults
+                ):
                     defaults_to_apply.append((acc, parsed_tariff))
             else:
                 warnings.append(
