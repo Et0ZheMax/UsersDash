@@ -16,6 +16,7 @@ from datetime import datetime, timezone, date, timedelta
 from io import BytesIO
 from PIL import ImageGrab
 import base64
+import requests
 
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
@@ -58,6 +59,11 @@ PROFILE_PATH    = CONFIG["PROFILE_PATH"]
 SRC_VMS         = CONFIG["SRC_VMS"]
 DST_VMS         = CONFIG["DST_VMS"]
 GNBOTS_SHORTCUT = CONFIG["GNBOTS_SHORTCUT"]
+SERVER          = CONFIG.get("SERVER_NAME") or "RSS4SALE"
+USERSDASH_API_URL   = CONFIG.get("USERSDASH_API_URL", "")
+USERSDASH_API_TOKEN = CONFIG.get("USERSDASH_API_TOKEN", "")
+
+USERDASH_DB = os.path.abspath(os.path.join(BASE_DIR, "..", "UsersDash", "data", "app.db"))
 
 
 
@@ -257,17 +263,60 @@ def init_logs_db():
     conn.commit()
     conn.close()
 
+
+def init_accounts_db():
+    conn = sqlite3.connect(RESOURCES_DB)
+    c = conn.cursor()
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS account_meta(
+          id          TEXT PRIMARY KEY,
+          email       TEXT,
+          passwd      TEXT,
+          igg         TEXT,
+          pay_until   TEXT,
+          tariff_rub  INTEGER DEFAULT 0,
+          server      TEXT,
+          tg_tag      TEXT
+        )
+        """
+    )
+
+    existing_cols = {row[1] for row in c.execute("PRAGMA table_info(account_meta)").fetchall()}
+    if "pay_until" not in existing_cols:
+        c.execute("ALTER TABLE account_meta ADD COLUMN pay_until TEXT")
+    if "tariff_rub" not in existing_cols:
+        c.execute("ALTER TABLE account_meta ADD COLUMN tariff_rub INTEGER DEFAULT 0")
+    if "server" not in existing_cols:
+        c.execute("ALTER TABLE account_meta ADD COLUMN server TEXT")
+    if "tg_tag" not in existing_cols:
+        c.execute("ALTER TABLE account_meta ADD COLUMN tg_tag TEXT")
+
+    conn.commit()
+    conn.close()
+
 ##############################
 # Работа с профилями
 ##############################
 
-def load_profiles():
-    if not os.path.exists(PROFILE_PATH):
-        print(f"PROFILE not found: {PROFILE_PATH}")
-        return []
-    with open(PROFILE_PATH,"r",encoding="utf-8") as f:
-        data = json.load(f)
-    return [acc for acc in data if acc.get("Active")]
+def load_profiles(*, return_status: bool = False):
+    ok = True
+    profiles: list[dict] = []
+    try:
+        if not os.path.exists(PROFILE_PATH):
+            print(f"PROFILE not found: {PROFILE_PATH}")
+            ok = False
+        else:
+            with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+                profiles = json.load(f)
+    except Exception as exc:
+        ok = False
+        print(f"Ошибка чтения PROFILE ({PROFILE_PATH}): {exc}")
+
+    active = [acc for acc in profiles if acc.get("Active")]
+    if return_status:
+        return active, ok
+    return active
 
 # вверху, рядом с load_profiles()
 def load_active_names():
@@ -290,6 +339,415 @@ def ensure_active_in_db(active_accounts):
             (id, nickname, food, wood, stone, gold, gems, last_updated)
             VALUES(?, ?, 0,0,0,0,0, '1970-01-01T00:00:00')
         """,(acc["Id"], acc["Name"]))
+    conn.commit()
+    conn.close()
+
+
+def _normalize_date_str(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        dt = datetime.fromisoformat(str(value).strip())
+        return dt.date().isoformat()
+    except Exception:
+        try:
+            dt = datetime.strptime(str(value).split()[0], "%Y-%m-%d")
+            return dt.date().isoformat()
+        except Exception:
+            return ""
+
+
+def load_accounts_meta_full(ids: set[str] | None = None) -> list[dict]:
+    profile = []
+    if os.path.exists(PROFILE_PATH):
+        with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+            for a in json.load(f):
+                if not a.get("Active"):
+                    continue
+                pid = a.get("Id")
+                if pid is None:
+                    continue
+                if ids and str(pid) not in ids:
+                    continue
+
+                email = passwd = igg = ""
+                try:
+                    md = json.loads(a.get("MenuData", "{}"))
+                    cfg = md.get("Config", {})
+                    email  = cfg.get("Email", "") or ""
+                    passwd = cfg.get("Password", "") or ""
+                    igg    = cfg.get("Custom", "") or ""
+                except Exception:
+                    pass
+
+                profile.append(
+                    {
+                        "id": str(pid),
+                        "name": a.get("Name", ""),
+                        "email": email,
+                        "passwd": passwd,
+                        "igg": igg,
+                        "server": SERVER,
+                    }
+                )
+
+    conn = sqlite3.connect(RESOURCES_DB)
+    c = conn.cursor()
+    meta = {
+        str(r[0]): {
+            "email": r[1] or "",
+            "passwd": r[2] or "",
+            "igg": r[3] or "",
+            "pay_until": r[4] or "",
+            "tariff_rub": r[5] or 0,
+            "server": r[6] or "",
+            "tg_tag": r[7] or "",
+        }
+        for r in c.execute(
+            """
+                SELECT id, email, passwd, igg, pay_until, tariff_rub, server, tg_tag
+                FROM account_meta
+            """
+        )
+    }
+    conn.close()
+
+    out = []
+    for p in profile:
+        m = meta.get(p["id"], {})
+        merged = {
+            "id": p.get("id"),
+            "name": p.get("name", ""),
+            "email": p.get("email") or m.get("email", ""),
+            "passwd": p.get("passwd") or m.get("passwd", ""),
+            "igg": p.get("igg") or m.get("igg", ""),
+            "pay_until": _normalize_date_str(m.get("pay_until", "")),
+            "tariff_rub": m.get("tariff_rub", 0) or 0,
+            "server": p.get("server") or m.get("server") or SERVER,
+            "tg_tag": m.get("tg_tag", ""),
+        }
+        out.append(merged)
+
+    return out
+
+
+@app.route("/api/accounts_meta_full")
+def api_accounts_meta_full():
+    try:
+        ids = set(filter(None, request.args.get("ids", "").split(","))) or None
+        out = load_accounts_meta_full(ids)
+
+        return jsonify({"ok": True, "server": SERVER, "count": len(out), "items": out})
+    except Exception as exc:
+        app.logger.exception("api_accounts_meta_full failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+def _load_usersdash_from_db(server_name: str) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+    if not os.path.exists(USERDASH_DB):
+        errors.append(f"UsersDash DB не найден: {USERDASH_DB}")
+        return [], errors
+
+    conn = sqlite3.connect(USERDASH_DB)
+    c = conn.cursor()
+    srv_row = c.execute(
+        "SELECT id, name FROM servers WHERE name=? LIMIT 1",
+        (server_name,),
+    ).fetchone()
+
+    if not srv_row:
+        conn.close()
+        errors.append(f"Сервер '{server_name}' не найден в UsersDash")
+        return [], errors
+
+    srv_id = srv_row[0]
+    rows = c.execute(
+        """
+            SELECT a.id, a.name, a.internal_id, a.is_active,
+                   fd.email, fd.password, fd.igg_id, fd.server, fd.telegram_tag
+            FROM accounts a
+            LEFT JOIN farm_data fd
+              ON fd.user_id = a.owner_id AND fd.farm_name = a.name
+            WHERE a.server_id=? AND a.is_active IS NOT 0
+        """,
+        (srv_id,),
+    ).fetchall()
+    conn.close()
+
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "usersdash_id": r[0],
+                "name": r[1] or "",
+                "internal_id": str(r[2]) if r[2] is not None else "",
+                "is_active": bool(r[3]),
+                "email": r[4] or "",
+                "password": r[5] or "",
+                "igg_id": r[6] or "",
+                "server": r[7] or "",
+                "telegram": r[8] or "",
+            }
+        )
+
+    return items, errors
+
+
+def _load_usersdash_from_api(server_name: str) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+    api_url = (USERSDASH_API_URL or "").rstrip("/")
+
+    if not api_url:
+        return [], errors
+    if not USERSDASH_API_TOKEN:
+        errors.append("USERSDASH_API_TOKEN не задан")
+        return [], errors
+
+    full_url = api_url + "/api/farms/v1"
+    try:
+        resp = requests.get(
+            full_url,
+            params={"server": server_name, "token": USERSDASH_API_TOKEN},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        errors.append(f"Ошибка запроса UsersDash: {exc}")
+        return [], errors
+
+    if not isinstance(payload, dict):
+        errors.append("Некорректный ответ UsersDash")
+        return [], errors
+
+    if payload.get("ok") is not True:
+        errors.append(str(payload.get("error") or "UsersDash вернул ошибку"))
+        return [], errors
+
+    remote_server = str(payload.get("server") or "").strip()
+    if remote_server and server_name and remote_server != server_name:
+        errors.append(
+            f"UsersDash вернул данные для '{remote_server}', ожидали '{server_name}'"
+        )
+
+    items: list[dict] = []
+    for row in payload.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        if row.get("is_active") is False:
+            continue
+
+        items.append(
+            {
+                "usersdash_id": row.get("id") or row.get("usersdash_id"),
+                "name": row.get("name") or "",
+                "internal_id": str(row.get("internal_id") or ""),
+                "is_active": bool(row.get("is_active", True)),
+                "email": row.get("email") or row.get("login") or "",
+                "password": row.get("password") or "",
+                "igg_id": row.get("igg_id") or "",
+                "server": row.get("kingdom") or row.get("server") or remote_server,
+                "telegram": row.get("telegram_tag") or row.get("telegram") or "",
+            }
+        )
+
+    return items, errors
+
+
+def load_usersdash_accounts(server_name: str) -> tuple[list[dict], list[str]]:
+    errors: list[str] = []
+
+    api_items, api_errors = _load_usersdash_from_api(server_name)
+    errors.extend(api_errors)
+    if USERSDASH_API_URL:
+        if not api_errors:
+            return api_items, errors
+        if not os.path.exists(USERDASH_DB):
+            return api_items, errors
+
+    db_items, db_errors = _load_usersdash_from_db(server_name)
+    errors.extend(db_errors)
+    return db_items, errors
+
+
+@app.route("/api/usersdash_sync_preview")
+def api_usersdash_sync_preview():
+    try:
+        local_items = load_accounts_meta_full(None)
+        remote_items, errors = load_usersdash_accounts(SERVER)
+
+        remote_by_internal = {
+            r.get("internal_id"): r for r in remote_items if r.get("internal_id")
+        }
+        remote_by_name = {r.get("name"): r for r in remote_items if r.get("name")}
+
+        changes: list[dict] = []
+
+        field_map = [
+            ("email", "email", "email"),
+            ("password", "passwd", "password"),
+            ("igg_id", "igg", "igg_id"),
+            ("server", "server", "server"),
+            ("telegram", "tg_tag", "telegram"),
+        ]
+
+        for loc in local_items:
+            lid = str(loc.get("id") or "")
+            lname = loc.get("name") or ""
+
+            rem = None
+            if lid and lid in remote_by_internal:
+                rem = remote_by_internal[lid]
+            elif lname and lname in remote_by_name:
+                rem = remote_by_name[lname]
+
+            if not rem:
+                continue
+
+            for field, local_key, remote_key in field_map:
+                lv = str(loc.get(local_key, "") or "")
+                rv = str(rem.get(remote_key, "") or "")
+
+                if lv == rv:
+                    continue
+
+                changes.append(
+                    {
+                        "id": lid,
+                        "name": lname,
+                        "field": field,
+                        "local": lv,
+                        "remote": rv,
+                        "usersdash_id": rem.get("usersdash_id"),
+                    }
+                )
+
+        return jsonify({"ok": True, "changes": changes, "errors": errors})
+    except Exception as exc:
+        app.logger.exception("api_usersdash_sync_preview failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/usersdash_sync_apply", methods=["POST"])
+def api_usersdash_sync_apply():
+    try:
+        payload = request.get_json(silent=True) or {}
+        changes = payload.get("changes") or []
+        if not isinstance(changes, list) or not changes:
+            return jsonify({"ok": False, "error": "Нет изменений для применения"}), 400
+
+        updates: dict[str, dict] = {}
+        for ch in changes:
+            acc_id = str(ch.get("id") or ch.get("internal_id") or "").strip()
+            field = ch.get("field")
+            remote_val = ch.get("remote")
+            if not acc_id or not field:
+                continue
+
+            rec = updates.setdefault(acc_id, {"id": acc_id})
+
+            if field == "email":
+                rec["email"] = remote_val or ""
+            elif field == "password":
+                rec["passwd"] = remote_val or ""
+            elif field == "igg_id":
+                rec["igg"] = remote_val or ""
+            elif field == "server":
+                rec["server"] = remote_val or ""
+            elif field == "telegram":
+                rec["tg_tag"] = remote_val or ""
+
+        if not updates:
+            return jsonify({"ok": False, "error": "Нет валидных изменений"}), 400
+
+        conn = sqlite3.connect(RESOURCES_DB)
+        c = conn.cursor()
+
+        existing: dict[str, dict] = {}
+        placeholders = ",".join("?" for _ in updates)
+        if placeholders:
+            for row in c.execute(
+                f"SELECT id, email, passwd, igg, server, tg_tag "
+                f"FROM account_meta WHERE id IN ({placeholders})",
+                tuple(updates.keys()),
+            ):
+                existing[str(row[0])] = {
+                    "email": row[1] or "",
+                    "passwd": row[2] or "",
+                    "igg": row[3] or "",
+                    "server": row[4] or "",
+                    "tg_tag": row[5] or "",
+                }
+
+        for acc_id, data in updates.items():
+            current = existing.get(acc_id, {})
+            merged = {
+                "email": data.get("email", current.get("email", "")),
+                "passwd": data.get("passwd", current.get("passwd", "")),
+                "igg": data.get("igg", current.get("igg", "")),
+                "server": data.get("server", current.get("server", "")),
+                "tg_tag": data.get("tg_tag", current.get("tg_tag", "")),
+            }
+
+            c.execute(
+                """
+                INSERT INTO account_meta(id,email,passwd,igg,server,tg_tag)
+                VALUES(?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET
+                  email=excluded.email,
+                  passwd=excluded.passwd,
+                  igg=excluded.igg,
+                  server=excluded.server,
+                  tg_tag=excluded.tg_tag
+                """,
+                (
+                    acc_id,
+                    merged["email"],
+                    merged["passwd"],
+                    merged["igg"],
+                    merged["server"],
+                    merged["tg_tag"],
+                ),
+            )
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({"ok": True, "updated": len(updates)})
+    except Exception as exc:
+        app.logger.exception("api_usersdash_sync_apply failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+def sync_account_meta():
+    profiles, ok = load_profiles(return_status=True)
+    if not ok and not profiles:
+        print("PROFILE read failed — skip sync_account_meta")
+        return
+
+    active_ids = {str(p.get("Id")) for p in profiles if p.get("Id") is not None}
+
+    conn = sqlite3.connect(RESOURCES_DB)
+    c = conn.cursor()
+
+    if active_ids:
+        marks = ",".join("?" * len(active_ids))
+        c.execute(f"DELETE FROM account_meta WHERE id NOT IN ({marks})", tuple(active_ids))
+    else:
+        c.execute("DELETE FROM account_meta")
+
+    if active_ids:
+        placeholders = ",".join("(?, '', '', '', '', 0, '', '')" for _ in active_ids)
+        c.execute(
+            f"""
+            INSERT OR IGNORE INTO account_meta
+            (id,email,passwd,igg,pay_until,tariff_rub,server,tg_tag)
+            VALUES {placeholders}
+            """,
+            tuple(active_ids),
+        )
+
     conn.commit()
     conn.close()
 
@@ -411,7 +869,6 @@ def do_resources_update(acc_map):
 
 
 # ────────────────────────── настройки ──────────────────────────
-SERVER = "RSS"                                       # имя сервера
 BACKUP_CONFIG_SRC      = r"C:\LDPlayer\LDPlayer9\vms\config"
 BACKUP_CONFIG_DST_ROOT = r"C:\LD_backup\configs"
 BACKUP_ACCS_DST_ROOT   = r"C:\LD_backup\accs_data"
@@ -1425,6 +1882,7 @@ if __name__=="__main__":
     if not os.path.exists(RESOURCES_DB):
         print("Создаём базу ресурсов:", RESOURCES_DB)
     init_resources_db()
+    init_accounts_db()
 
     if not os.path.exists(LOGS_DB):
         print("Создаём базу логов:", LOGS_DB)
@@ -1432,8 +1890,12 @@ if __name__=="__main__":
 
 
 
-   
+
     parse_logs()
+    try:
+        sync_account_meta()
+    except Exception as exc:
+        print(f"sync_account_meta failed: {exc}")
     ensure_today_backups()      # ➟ создаст бэкапы, если их ещё нет за сегодня
     _schedule_daily_backups()   # ➟ запустит фоновый планировщик на полуночь
 

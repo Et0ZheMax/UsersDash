@@ -3,5 +3,8 @@
   "PROFILE_PATH": "C:\\Program Files (x86)\\GnBots\\profiles\\TIME_ONLY_RSS.json",
   "SRC_VMS": "C:\\Users\\Administrator\\Documents\\config",
   "DST_VMS": "C:\\LDPlayer\\LDPlayer9\\vms",
-  "GNBOTS_SHORTCUT": "C:\\Users\\Administrator\\Desktop\\GnBots.lnk"
+  "GNBOTS_SHORTCUT": "C:\\Users\\Administrator\\Desktop\\GnBots.lnk",
+  "SERVER_NAME": "RSS4SALE",
+  "USERSDASH_API_URL": "",
+  "USERSDASH_API_TOKEN": ""
 }
