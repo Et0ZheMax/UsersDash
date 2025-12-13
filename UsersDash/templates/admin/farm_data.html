@@ -962,7 +962,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const selectedPrice = getTariffSelection(cell);
         label.classList.remove("tariff-label--premium");
 
-        if (!normalized && !input.value) {
+        if (!normalized && !input.value && !selectedPrice) {
             label.textContent = "Тариф не назначен";
             setTariffSelection(cell, "");
             updateTariffDropdownState(cell, "");
