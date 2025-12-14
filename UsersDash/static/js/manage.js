@@ -1373,7 +1373,7 @@
             const url = replaceStepTemplate(state.toggleUrlTemplate, accountId, stepIdx);
             const resp = await fetch(url, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ is_active: desiredState }),
             });
             const data = await resp.json().catch(() => ({}));
@@ -1408,7 +1408,7 @@
             const url = replaceTemplate(state.accountToggleUrlTemplate, accountId);
             const resp = await fetch(url, {
                 method: "POST",
-                headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ is_active: desiredState }),
             });
             const data = await resp.json().catch(() => ({}));
@@ -1624,7 +1624,6 @@
         setTemplateControlsLoading(true);
         try {
             const resp = await fetch(`/manage/account/${accountId}/templates`, {
-                headers: { "x-skip-loader": "1" },
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) {
@@ -1664,7 +1663,6 @@
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    "x-skip-loader": "1",
                 },
                 body: JSON.stringify({ template: templateName }),
             });
@@ -1729,7 +1727,7 @@
             const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
             const resp = await fetch(url, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json", "x-skip-loader": "1" },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(requestBody),
             });
             const data = await resp.json().catch(() => ({}));
@@ -1855,7 +1853,7 @@
 
         try {
             const url = replaceTemplate(state.detailsUrlTemplate, accountId);
-            const resp = await fetch(url, { headers: { "x-skip-loader": "1" } });
+            const resp = await fetch(url);
             let data = {};
             try { data = await resp.json(); } catch (_) { data = {}; }
 
