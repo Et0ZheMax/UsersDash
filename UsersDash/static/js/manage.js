@@ -174,6 +174,8 @@
         applyDefaultsUrlTemplate: "",
         selectedStepIndex: null,
         scheduleDrafts: {},
+        templatesCache: {},
+        templatesLoading: false,
     }, window.manageInitialState || {});
 
     function applyScriptLabels(newLabels) {
@@ -203,6 +205,9 @@
     const defaultsModal = document.querySelector('[data-role="defaults-modal"]');
     const defaultsConfirmBtn = document.querySelector('[data-role="defaults-confirm"]');
     const defaultsModalClosers = Array.from(document.querySelectorAll('[data-role="defaults-modal-close"]'));
+    const templateControls = document.querySelector('[data-role="template-controls"]');
+    const templateSelect = document.querySelector('[data-role="template-select"]');
+    const templateApplyBtn = document.querySelector('[data-role="template-apply"]');
     const mobileNavTitle = document.querySelector('[data-role="mobile-title"]');
     const mobileNavSubtitle = document.querySelector('[data-role="mobile-subtitle"]');
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
@@ -362,6 +367,14 @@
         });
 
         return result;
+    }
+
+    function normalizeConfigValues(cfg) {
+        if (!cfg || typeof cfg !== "object") {
+            return {};
+        }
+
+        return prepareConfigPayload(cfg, cfg);
     }
 
     function resolveScheduleEditorUrl(stepIdx) {
@@ -1445,7 +1458,19 @@
                 result[key] = input.value;
             }
         });
-        return prepareConfigPayload(result, cfg);
+
+        const normalizedOriginal = normalizeConfigValues(cfg);
+        const normalizedPayload = prepareConfigPayload(result, cfg);
+        const diff = {};
+
+        Object.entries(normalizedPayload).forEach(([key, value]) => {
+            const hasOriginal = Object.prototype.hasOwnProperty.call(normalizedOriginal, key);
+            if (!hasOriginal || normalizedOriginal[key] !== value) {
+                diff[key] = value;
+            }
+        });
+
+        return diff;
     }
 
     function collectScheduleRules(rootEl, originalRules, options = {}) {
@@ -1537,6 +1562,133 @@
                 btn.textContent = originalText || "По умолчанию";
             }
             updateDefaultsButtonState();
+        }
+    }
+
+    function setTemplateControlsVisibility(accountId) {
+        if (!isAdminManage || !templateControls) return;
+        templateControls.hidden = !accountId;
+    }
+
+    function setTemplateControlsLoading(isLoading) {
+        if (!isAdminManage || !templateControls) return;
+        state.templatesLoading = Boolean(isLoading);
+        templateControls.classList.toggle("is-loading", state.templatesLoading);
+        if (templateSelect) {
+            templateSelect.disabled = state.templatesLoading
+                || !templateSelect.options
+                || !templateSelect.options.length;
+        }
+        if (templateApplyBtn) {
+            const hasValue = templateSelect && templateSelect.value;
+            const hasOptions = templateSelect && templateSelect.options.length > 1;
+            templateApplyBtn.disabled = state.templatesLoading || !hasValue || !hasOptions;
+        }
+    }
+
+    function renderTemplateOptions(templates) {
+        if (!isAdminManage || !templateSelect) return;
+        const items = Array.isArray(templates) ? templates : [];
+        templateSelect.innerHTML = "";
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = items.length ? "Выберите шаблон" : "Шаблоны не найдены";
+        placeholder.selected = true;
+        templateSelect.appendChild(placeholder);
+
+        items.forEach((name) => {
+            const option = document.createElement("option");
+            option.value = name;
+            option.textContent = name;
+            templateSelect.appendChild(option);
+        });
+
+        if (templateApplyBtn) {
+            const hasOptions = templateSelect.options.length > 1;
+            templateApplyBtn.disabled = !hasOptions || state.templatesLoading;
+        }
+    }
+
+    async function loadTemplatesForAccount(accountId) {
+        if (!isAdminManage || !accountId || !templateControls) return;
+        setTemplateControlsVisibility(accountId);
+        renderTemplateOptions([]);
+
+        if (state.templatesCache && state.templatesCache[accountId]) {
+            renderTemplateOptions(state.templatesCache[accountId]);
+            setTemplateControlsLoading(false);
+            return;
+        }
+
+        setTemplateControlsLoading(true);
+        try {
+            const resp = await fetch(`/manage/account/${accountId}/templates`, {
+                headers: { "x-skip-loader": "1" },
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось загрузить шаблоны");
+            }
+
+            const templates = Array.isArray(data.templates) ? data.templates : [];
+            if (!state.templatesCache) state.templatesCache = {};
+            state.templatesCache[accountId] = templates;
+            renderTemplateOptions(templates);
+        } catch (err) {
+            console.error(err);
+            showMiniToast(err.message || "Не удалось загрузить список шаблонов", "error");
+            renderTemplateOptions([]);
+        } finally {
+            setTemplateControlsLoading(false);
+        }
+    }
+
+    async function applyTemplateForCurrentAccount() {
+        if (!isAdminManage || !state.selectedAccountId) return;
+        const templateName = (templateSelect && templateSelect.value ? templateSelect.value : "").trim();
+        if (!templateName) {
+            alert("Выберите шаблон для применения.");
+            return;
+        }
+
+        const originalText = templateApplyBtn ? templateApplyBtn.textContent : "";
+        if (templateApplyBtn) {
+            templateApplyBtn.disabled = true;
+            templateApplyBtn.textContent = "Применяем...";
+        }
+
+        setTemplateControlsLoading(true);
+        try {
+            const resp = await fetch(`/manage/account/${state.selectedAccountId}/apply-template`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1",
+                },
+                body: JSON.stringify({ template: templateName }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || data.message || "Не удалось применить шаблон");
+            }
+
+            showMiniToast(data.message || "Шаблон применён", "success");
+            await loadSteps(state.selectedAccountId, {
+                name: state.selectedAccountName,
+                server: state.selectedServerName,
+            });
+        } catch (err) {
+            console.error(err);
+            alert(err && err.message ? err.message : "Не удалось применить шаблон");
+        } finally {
+            setTemplateControlsLoading(false);
+            if (templateApplyBtn) {
+                templateApplyBtn.textContent = originalText || "Применить";
+                const hasValue = templateSelect && templateSelect.value;
+                const hasOptions = templateSelect && templateSelect.options.length > 1;
+                templateApplyBtn.disabled = !hasValue || !hasOptions;
+            }
         }
     }
 
@@ -1696,6 +1848,10 @@
         highlightAccount(accountId);
         renderEmptyState("Загружаем настройки...");
         updateDefaultsButtonState();
+        if (isAdminManage) {
+            setTemplateControlsVisibility(accountId);
+            setTemplateControlsLoading(true);
+        }
 
         try {
             const url = replaceTemplate(state.detailsUrlTemplate, accountId);
@@ -1749,6 +1905,9 @@
             };
 
             updateDefaultsButtonState();
+            if (isAdminManage) {
+                loadTemplatesForAccount(accountId).catch((err) => console.error(err));
+            }
 
             const startOnMobile = isMobile();
             const firstStepIdx = (viewSteps && viewSteps.length) ? viewSteps[0].raw_index : null;
@@ -1769,6 +1928,9 @@
             renderEmptyState(err.message, state.debugInfo);
         } finally {
             state.isLoading = false;
+            if (isAdminManage) {
+                setTemplateControlsLoading(false);
+            }
         }
     }
 
@@ -1973,6 +2135,16 @@
             });
         }
 
+        if (templateSelect && templateApplyBtn) {
+            templateSelect.addEventListener('change', () => {
+                const hasOptions = templateSelect.options.length > 1;
+                templateApplyBtn.disabled = state.templatesLoading
+                    || !templateSelect.value
+                    || !hasOptions;
+            });
+            templateApplyBtn.addEventListener('click', applyTemplateForCurrentAccount);
+        }
+
         if (defaultsModal) {
             defaultsModal.addEventListener('click', (event) => {
                 if (event.target === defaultsModal) {
@@ -1993,6 +2165,12 @@
         syncAccountsUi();
 
         updateDefaultsButtonState();
+        if (isAdminManage) {
+            setTemplateControlsVisibility(state.selectedAccountId);
+            if (state.selectedAccountId) {
+                loadTemplatesForAccount(state.selectedAccountId).catch((err) => console.error(err));
+            }
+        }
 
         state.visibilityMap = normalizeVisibilityMap(state.visibilityMap || state.visibility_map || {});
 
