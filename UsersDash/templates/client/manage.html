@@ -107,65 +107,6 @@
     </div>
 </div>
 
-<div id="globalLoader">
-    <div class="box">
-        <div class="txt">Загружаем настройки…</div>
-    </div>
-</div>
-
-<script>
-    (function () {
-        let loaderEl = null;
-        let active = 0;
-        let showTimer = null;
-        const SHOW_DELAY_MS = 120;
-
-        function el() {
-            return loaderEl || (loaderEl = document.getElementById('globalLoader'));
-        }
-
-        function reallyShow() {
-            const e = el();
-            if (e && e.classList) e.classList.add('show');
-        }
-
-        function show() {
-            active += 1;
-            if (active === 1) {
-                clearTimeout(showTimer);
-                showTimer = setTimeout(reallyShow, SHOW_DELAY_MS);
-            }
-        }
-
-        function hide() {
-            active = Math.max(0, active - 1);
-            if (active === 0) {
-                clearTimeout(showTimer);
-                const e = el();
-                if (e && e.classList) e.classList.remove('show');
-            }
-        }
-
-        window.EZFLoader = { show, hide };
-
-        const _fetch = window.fetch ? window.fetch.bind(window) : null;
-        if (_fetch) {
-            window.fetch = async function (input, init = {}) {
-                const headers = new Headers(init.headers || {});
-                const skip = headers.get('x-skip-loader') === '1';
-                if (!skip) show();
-                try {
-                    init.headers = headers;
-                    const res = await _fetch(input, init);
-                    return res;
-                } finally {
-                    if (!skip) hide();
-                }
-            };
-        }
-    })();
-    </script>
-
 {% if steps_error %}
     <div class="manage-error">{{ steps_error }}</div>
 {% endif %}

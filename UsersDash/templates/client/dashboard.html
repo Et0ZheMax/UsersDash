@@ -175,7 +175,7 @@
                     </td>
 
                     <td class="actions-cell">
-                        <a href="{{ url_for('client.manage_page', account_id=acc.id) }}" class="action-pill">
+                        <a href="{{ url_for('client.manage_page', account_id=acc.id) }}" class="action-pill" data-role="account-settings-link">
                             <span class="btn-icon-symbol">⚙</span>
                             <span class="btn-text">Настройки</span>
                         </a>
@@ -196,4 +196,24 @@
 {% else %}
     <p>У вас пока нет привязанных ферм. Обратитесь к администратору.</p>
 {% endif %}
+
+<script>
+    (function () {
+        const links = document.querySelectorAll('[data-role="account-settings-link"]');
+
+        if (!links || links.length === 0) return;
+
+        links.forEach((link) => {
+            link.addEventListener('click', (evt) => {
+                if (evt.metaKey || evt.ctrlKey || evt.shiftKey || evt.altKey || evt.button !== 0) {
+                    return;
+                }
+                const loader = window.EZFLoader;
+                if (loader && typeof loader.show === 'function') {
+                    loader.show();
+                }
+            });
+        });
+    })();
+</script>
 {% endblock %}
