@@ -48,6 +48,18 @@ def get_tariff_name_by_price(price: int | str | None) -> str | None:
     return tariff.get("name") if tariff else None
 
 
+def get_account_tariff_price(account: Account) -> int | None:
+    """Возвращает выбранный тариф для аккаунта, отдавая приоритет явному плану."""
+
+    if not account:
+        return None
+
+    if getattr(account, "next_payment_tariff", None) is not None:
+        return account.next_payment_tariff
+
+    return getattr(account, "next_payment_amount", None)
+
+
 def is_tariff_billable(price: int | str | None) -> bool:
     """Возвращает True, если тариф учитывается в денежных метриках."""
 
@@ -71,7 +83,7 @@ def summarize_tariffs(
     """
     counts: dict[str, int] = {}
     for acc in accounts:
-        price = getattr(acc, "next_payment_amount", None)
+        price = get_account_tariff_price(acc)
         tariff_name = get_tariff_name_by_price(price)
         if not tariff_name:
             continue

@@ -677,9 +677,18 @@ document.addEventListener("DOMContentLoaded", function () {
         const tariffStr = tariffVal !== null && tariffVal !== undefined && tariffVal !== ""
             ? String(tariffVal)
             : "";
-        const hideTariffPrice = tariffStr && HIDE_PRICE_TARIFFS.has(tariffStr);
+        const tariffPlanVal = item.tariff_plan !== null && item.tariff_plan !== undefined
+            ? item.tariff_plan
+            : "";
+        const tariffPlanStr = tariffPlanVal !== null && tariffPlanVal !== undefined && tariffPlanVal !== ""
+            ? String(tariffPlanVal)
+            : "";
+        const selectedTariffStr = tariffPlanStr || tariffStr;
+        const hideTariffPrice = selectedTariffStr && HIDE_PRICE_TARIFFS.has(selectedTariffStr);
         const tariffInputValue = hideTariffPrice ? "" : tariffVal;
-        const tariffCellAttrs = tariffStr ? ` data-selected-tariff-price="${escapeHtml(tariffStr)}"` : "";
+        const tariffCellAttrs = selectedTariffStr
+            ? ` data-selected-tariff-price="${escapeHtml(selectedTariffStr)}"`
+            : "";
 
         tr.innerHTML = `
             <td>
@@ -1075,6 +1084,8 @@ document.addEventListener("DOMContentLoaded", function () {
                 formatWarnings.push(`«Тариф» — ${farmLabel}`);
             }
 
+            const tariffPlanResult = normalizeTariffInput(selectedTariff);
+            
             items.push({
                 account_id: accountId,
                 email: val('input[name="email"]'),
@@ -1087,7 +1098,10 @@ document.addEventListener("DOMContentLoaded", function () {
                     : nextPaymentInput,
                 tariff: tariffResult.isValid
                     ? tariffResult.normalized
-                    : tariffInput
+                    : tariffInput,
+                tariff_plan: tariffPlanResult.isValid
+                    ? tariffPlanResult.normalized
+                    : selectedTariff
             });
         });
 

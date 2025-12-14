@@ -37,6 +37,7 @@ from UsersDash.services.default_settings import (
     has_defaults_for_tariff,
 )
 from UsersDash.services.tariffs import (
+    get_account_tariff_price,
     get_tariff_name_by_price,
     is_tariff_billable,
     summarize_tariffs,
@@ -630,9 +631,14 @@ def manage_page():
     debug_info = None
     visibility_map = {}
     script_labels_map: dict[str, str] = {}
+    selected_tariff_plan = (
+        get_account_tariff_price(selected_account) if selected_account else None
+    )
     selected_tariff_price = selected_account.next_payment_amount if selected_account else None
-    selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
-    selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
+    selected_tariff_name = get_tariff_name_by_price(selected_tariff_plan)
+    selected_has_defaults = (
+        has_defaults_for_tariff(selected_tariff_plan) if selected_account else False
+    )
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(raw_settings, return_debug=True)
@@ -776,6 +782,9 @@ def manage_account_details(account_id: int):
         script_labels_map=script_labels_map,
     )
 
+    tariff_plan_price = get_account_tariff_price(account)
+    tariff_price = account.next_payment_amount
+
     return jsonify(
         {
             "ok": True,
@@ -783,9 +792,10 @@ def manage_account_details(account_id: int):
                 "id": account.id,
                 "name": account.name,
                 "server": account.server.name if account.server else None,
-                "tariff_price": account.next_payment_amount,
-                "tariff_name": get_tariff_name_by_price(account.next_payment_amount),
-                "has_default_settings": has_defaults_for_tariff(account.next_payment_amount),
+                "tariff_price": tariff_price,
+                "tariff_plan_price": tariff_plan_price,
+                "tariff_name": get_tariff_name_by_price(tariff_plan_price),
+                "has_default_settings": has_defaults_for_tariff(tariff_plan_price),
             },
             "steps": steps,
             "raw_steps": raw_steps,
@@ -918,7 +928,7 @@ def manage_apply_defaults(account_id: int):
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
-    tariff_price = account.next_payment_amount
+    tariff_price = get_account_tariff_price(account)
     tariff_name = get_tariff_name_by_price(tariff_price)
 
     if not tariff_price or not has_defaults_for_tariff(tariff_price):

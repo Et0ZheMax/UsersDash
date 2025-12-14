@@ -1181,9 +1181,14 @@
 
         const tariffBadge = document.createElement("div");
         tariffBadge.className = "config-tariff";
-        if (state.selectedAccountTariffName) {
+        const hasTariffName = !!state.selectedAccountTariffName;
+        const hasTariffPrice = state.selectedAccountTariffPrice !== null && state.selectedAccountTariffPrice !== undefined;
+
+        if (hasTariffName && hasTariffPrice) {
+            tariffBadge.textContent = `Тариф: ${state.selectedAccountTariffName} (${state.selectedAccountTariffPrice} ₽)`;
+        } else if (hasTariffName) {
             tariffBadge.textContent = `Тариф: ${state.selectedAccountTariffName}`;
-        } else if (state.selectedAccountTariffPrice !== null && state.selectedAccountTariffPrice !== undefined) {
+        } else if (hasTariffPrice) {
             tariffBadge.textContent = `Тариф: ${state.selectedAccountTariffPrice} ₽`;
         }
 
@@ -1724,9 +1729,12 @@
             state.selectedAccountId = accountId;
             state.selectedAccountName = account.name || state.selectedAccountName || meta.name || "";
             state.selectedServerName = account.server || state.selectedServerName || meta.server || "";
-            state.selectedAccountTariffPrice = (typeof account.tariff_price === "number" || typeof account.tariff_price === "string")
+            const tariffPriceValue = (typeof account.tariff_price === "number" || typeof account.tariff_price === "string")
                 ? account.tariff_price
-                : null;
+                : (typeof account.tariff_plan_price === "number" || typeof account.tariff_plan_price === "string")
+                    ? account.tariff_plan_price
+                    : null;
+            state.selectedAccountTariffPrice = tariffPriceValue;
             state.selectedAccountTariffName = account.tariff_name || "";
             state.selectedAccountHasDefaults = !!account.has_default_settings;
             state.steps = viewSteps || [];

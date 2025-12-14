@@ -19,7 +19,7 @@ from UsersDash.services.remote_api import (
     fetch_templates_list,
     update_account_step_settings,
 )
-from UsersDash.services.tariffs import get_tariff_name_by_price
+from UsersDash.services.tariffs import get_account_tariff_price, get_tariff_name_by_price
 
 # Маппинг цены тарифа -> файл с дефолтной конфигурацией
 DEFAULT_CONFIG_FILES: dict[int, str] = {
@@ -237,7 +237,7 @@ def has_defaults_for_tariff(price: int | str | None) -> bool:
 
 
 def apply_defaults_for_account(account: Account, *, tariff_price: int | str | None = None) -> tuple[bool, str]:
-    price = tariff_price if tariff_price is not None else getattr(account, "next_payment_amount", None)
+    price = tariff_price if tariff_price is not None else get_account_tariff_price(account)
 
     server = getattr(account, "server", None)
     available_templates: set[str] = set()

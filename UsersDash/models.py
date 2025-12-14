@@ -93,6 +93,7 @@ class Account(db.Model):
     # Дата и сумма ближайшей оплаты по этой ферме
     next_payment_at = db.Column(db.DateTime, nullable=True)          # дата следующей оплаты
     next_payment_amount = db.Column(db.Integer, nullable=True)       # сумма в рублях
+    next_payment_tariff = db.Column(db.Integer, nullable=True)       # выбранный тариф (фиксируется даже при ручной цене)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

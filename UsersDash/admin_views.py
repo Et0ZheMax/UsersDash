@@ -65,6 +65,7 @@ from UsersDash.services.default_settings import apply_defaults_for_account, has_
 from UsersDash.services.tariffs import (
     RSS_FOR_SALE_TARIFF_PRICE,
     TARIFF_PRICE_MAP,
+    get_account_tariff_price,
     get_tariff_name_by_price,
     is_tariff_billable,
 )
@@ -428,10 +429,10 @@ def _collect_incomplete_farms(
         email = fd.email if fd else None
         password = fd.password if fd else None
         next_payment = acc.next_payment_at.strftime("%Y-%m-%d") if acc.next_payment_at else None
-        tariff = acc.next_payment_amount
-        is_tariff_assigned = tariff is not None
+        tariff_plan = get_account_tariff_price(acc)
+        is_tariff_assigned = tariff_plan is not None
         is_billable_tariff = (
-            is_tariff_billable(tariff) if is_tariff_assigned else True
+            is_tariff_billable(tariff_plan) if is_tariff_assigned else True
         )
 
         missing = {
@@ -453,7 +454,7 @@ def _collect_incomplete_farms(
                 "email": email,
                 "password": password,
                 "next_payment_at": next_payment,
-                "tariff": tariff,
+                "tariff": tariff_plan,
                 "missing": missing,
             }
         )
@@ -1283,9 +1284,14 @@ def manage():
     debug_info = None
     visibility_map = {}
     script_labels_map: dict[str, str] = {}
+    selected_tariff_plan = (
+        get_account_tariff_price(selected_account) if selected_account else None
+    )
     selected_tariff_price = selected_account.next_payment_amount if selected_account else None
-    selected_tariff_name = get_tariff_name_by_price(selected_tariff_price)
-    selected_has_defaults = has_defaults_for_tariff(selected_tariff_price) if selected_account else False
+    selected_tariff_name = get_tariff_name_by_price(selected_tariff_plan)
+    selected_has_defaults = (
+        has_defaults_for_tariff(selected_tariff_plan) if selected_account else False
+    )
     if selected_account:
         raw_settings = fetch_account_settings(selected_account)
         raw_steps, menu_data, debug_info = _extract_steps_and_menu(
@@ -2140,6 +2146,9 @@ def admin_farm_data_chunk():
                 if acc.next_payment_at
                 else None,
                 "tariff": acc.next_payment_amount,
+                "tariff_plan": acc.next_payment_tariff
+                if acc.next_payment_tariff is not None
+                else acc.next_payment_amount,
                 "manage_url": url_for("admin.manage", account_id=acc.id),
             }
         )
@@ -2300,6 +2309,7 @@ def admin_farm_data_save():
         else:
             acc.next_payment_at = None
 
+        parsed_tariff = None
         tariff_raw = row.get("tariff")
         if tariff_raw is None or str(tariff_raw).strip() == "":
             acc.next_payment_amount = None
@@ -2318,6 +2328,22 @@ def admin_farm_data_save():
                 warnings.append(
                     f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
                 )
+
+        parsed_tariff_plan = None
+        if "tariff_plan" in row:
+            tariff_plan_raw = row.get("tariff_plan")
+            if tariff_plan_raw is None or str(tariff_plan_raw).strip() == "":
+                acc.next_payment_tariff = None
+            else:
+                parsed_tariff_plan = parse_tariff(tariff_plan_raw)
+                if parsed_tariff_plan is not None:
+                    acc.next_payment_tariff = parsed_tariff_plan
+                else:
+                    warnings.append(
+                        f"{acc.name}: некорректное значение выбранного тарифа '{tariff_plan_raw}'"
+                    )
+        elif parsed_tariff is not None and acc.next_payment_tariff is None:
+            acc.next_payment_tariff = parsed_tariff
 
     try:
         db.session.commit()
@@ -2556,11 +2582,14 @@ def admin_farm_data_sync_apply():
             elif field == "tariff":
                 if remote_val:
                     try:
-                        acc.next_payment_amount = int(remote_val)
+                        parsed_remote_tariff = int(remote_val)
+                        acc.next_payment_amount = parsed_remote_tariff
+                        acc.next_payment_tariff = parsed_remote_tariff
                     except ValueError:
                         pass
                 else:
                     acc.next_payment_amount = None
+                    acc.next_payment_tariff = None
 
         db.session.commit()
     except Exception as exc:
@@ -2802,9 +2831,12 @@ def admin_farm_data_pull_apply():
             tariff_raw = row.get("tariff")
             if tariff_raw in ("", None):
                 acc.next_payment_amount = None
+                acc.next_payment_tariff = None
             else:
                 try:
-                    acc.next_payment_amount = int(tariff_raw)
+                    parsed_tariff = int(tariff_raw)
+                    acc.next_payment_amount = parsed_tariff
+                    acc.next_payment_tariff = parsed_tariff
                 except (TypeError, ValueError):
                     warnings.append(
                         f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
