@@ -29,12 +29,15 @@ from UsersDash.services.remote_api import (
     update_account_step_settings,
     update_account_active,
     fetch_watch_summary,
+    fetch_templates_list,
+    apply_template_for_account,
 )
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
 from UsersDash.services.default_settings import (
     apply_defaults_for_account,
     has_defaults_for_tariff,
+    _extract_template_names,
 )
 from UsersDash.services.tariffs import (
     get_account_tariff_price,
@@ -907,6 +910,63 @@ def manage_update_step(account_id: int, step_idx: int):
     ) as audit_ctx:
         ok, msg = update_account_step_settings(account, step_idx, update_payload)
         audit_ctx["result"] = "ok" if ok else "failed"
+
+    status = 200 if ok else 500
+    return jsonify({"ok": ok, "message": msg}), status
+
+
+@client_bp.route("/manage/account/<int:account_id>/templates", methods=["GET"])
+@login_required
+def manage_list_templates(account_id: int):
+    if getattr(current_user, "role", None) != "admin":
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    account = Account.query.options(joinedload(Account.server)).filter_by(id=account_id).first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+    if not account.server:
+        return jsonify({"ok": False, "error": "account server is empty"}), 400
+
+    payload, err = fetch_templates_list(account.server)
+    if err:
+        return jsonify({"ok": False, "error": err}), 502
+
+    templates = sorted(_extract_template_names(payload)) if payload else []
+    return jsonify({"ok": True, "templates": templates})
+
+
+@client_bp.route("/manage/account/<int:account_id>/apply-template", methods=["POST"])
+@login_required
+def manage_apply_template(account_id: int):
+    if getattr(current_user, "role", None) != "admin":
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+
+    account = Account.query.options(joinedload(Account.server), joinedload(Account.owner)).filter_by(
+        id=account_id,
+    ).first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+    if not account.server:
+        return jsonify({"ok": False, "error": "account server is empty"}), 400
+
+    payload = request.get_json(silent=True) or {}
+    template_name = str(payload.get("template") or "").strip()
+    if not template_name:
+        return jsonify({"ok": False, "error": "template is required"}), 400
+
+    with settings_audit_context(
+        account.owner,
+        current_user,
+        "apply_template",
+        {
+            "account": account,
+            "field": "apply_template",
+            "new_value": {"template": template_name},
+        },
+    ) as audit_ctx:
+        ok, msg = apply_template_for_account(account, template_name)
+        audit_ctx["result"] = "ok" if ok else "failed"
+        audit_ctx["message"] = msg
 
     status = 200 if ok else 500
     return jsonify({"ok": ok, "message": msg}), status
