@@ -2261,6 +2261,8 @@ def admin_farm_data_save():
         return int(cleaned) if cleaned.isdigit() else None
 
     warnings = []
+    # Временно отключаем применение шаблонов при смене тарифа на странице /admin/farm-data
+    apply_tariff_defaults = False
     defaults_to_apply: list[tuple[Account, int]] = []
     tariffs_without_defaults = {0, 50}
     defaults_results: list[dict[str, str]] = []
@@ -2307,7 +2309,8 @@ def admin_farm_data_save():
                 previous_tariff = acc.next_payment_amount
                 acc.next_payment_amount = parsed_tariff
                 if (
-                    parsed_tariff != previous_tariff
+                    apply_tariff_defaults
+                    and parsed_tariff != previous_tariff
                     and parsed_tariff not in tariffs_without_defaults
                 ):
                     defaults_to_apply.append((acc, parsed_tariff))
@@ -2323,25 +2326,26 @@ def admin_farm_data_save():
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
 
-    for acc, tariff_price in defaults_to_apply:
-        tariff_label = get_tariff_name_by_price(tariff_price) or str(tariff_price)
-        ok, msg = apply_defaults_for_account(acc, tariff_price=tariff_price)
-        defaults_results.append(
-            {
-                "account": acc.name,
-                "tariff": tariff_label,
-                "ok": ok,
-                "message": msg,
-            }
-        )
-        if not ok:
-            warnings.append(
-                f"{acc.name}: не удалось применить настройки по умолчанию ({msg})"
+    if apply_tariff_defaults:
+        for acc, tariff_price in defaults_to_apply:
+            tariff_label = get_tariff_name_by_price(tariff_price) or str(tariff_price)
+            ok, msg = apply_defaults_for_account(acc, tariff_price=tariff_price)
+            defaults_results.append(
+                {
+                    "account": acc.name,
+                    "tariff": tariff_label,
+                    "ok": ok,
+                    "message": msg,
+                }
             )
-        else:
-            print(
-                f"[defaults] applied {tariff_label} for {acc.name}: {msg}".strip()
-            )
+            if not ok:
+                warnings.append(
+                    f"{acc.name}: не удалось применить настройки по умолчанию ({msg})"
+                )
+            else:
+                print(
+                    f"[defaults] applied {tariff_label} for {acc.name}: {msg}".strip()
+                )
 
     return jsonify({"ok": True, "warnings": warnings, "defaults_results": defaults_results})
 
