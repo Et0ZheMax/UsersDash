@@ -35,12 +35,63 @@ if sys.platform == "win32" and not is_admin():
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
     sys.exit(0)
 
+
+def _ensure_utf8_stdio() -> None:
+    """
+    Переконфигурируем stdout/stderr в UTF-8 с заменой, чтобы не падать на cp1252/cp866.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if not stream:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            try:
+                fd = stream.fileno()
+                setattr(
+                    sys,
+                    name,
+                    open(fd, mode=stream.mode, encoding="utf-8", errors="replace", buffering=1),
+                )
+            except Exception:
+                pass
+
+
+_ensure_utf8_stdio()
+
 # ─────────────────────────────────────────────────────────────
 # Пути/конфиги (оставил ваши дефолты)
 # ─────────────────────────────────────────────────────────────
-config_folder = r'C:\LDPlayer\LDPlayer9\vms\config'
-profile_file  = r'C:/Program Files/GnBots/profiles/FRESH_NOX.json'
-crashed_file  = r'C:\LDPlayer\ldChecker\crashed.json'  # для UI (цвет кнопок)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+DEFAULT_CONFIG_FOLDER = r'C:\LDPlayer\LDPlayer9\vms\config'
+DEFAULT_PROFILE_FILE = r'C:/Program Files/GnBots/profiles/FRESH_NOX.json'
+crashed_file = r'C:\LDPlayer\ldChecker\crashed.json'  # для UI (цвет кнопок)
+
+
+def _load_rss_config(path: str) -> Dict[str, str]:
+    """Читает config.json из rsscounter и возвращает словарь (или пустой)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        print(f"[INFO] config.json не найден по пути {path}, беру дефолты.")
+    except Exception as err:
+        print(f"[WARN] Не удалось прочитать config.json: {err}")
+    return {}
+
+
+rss_config = _load_rss_config(CONFIG_PATH)
+config_folder_from_cfg = rss_config.get("DST_VMS")
+config_folder = os.getenv("LDCHECK_CONFIG_FOLDER")
+if not config_folder and config_folder_from_cfg:
+    config_folder = os.path.join(config_folder_from_cfg, "config")
+config_folder = config_folder or DEFAULT_CONFIG_FOLDER
+
+profile_file = os.getenv("LDCHECK_PROFILE_FILE") or rss_config.get("PROFILE_PATH")
+profile_file = profile_file or DEFAULT_PROFILE_FILE
 
 # Telegram токены (можно через ENV TG_TOKEN / TG_CHAT)
 telegram_token = os.getenv('TG_TOKEN', '7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc')
@@ -144,6 +195,7 @@ def make_fix_url(server_name: str) -> Optional[str]:
 
 def health_check(verbose: bool=False) -> None:
     problems = []
+    warnings = []
     if not os.path.isdir(config_folder):
         problems.append(f"CONFIG_FOLDER not found: {config_folder}")
     if not os.path.isfile(profile_file):
@@ -155,13 +207,17 @@ def health_check(verbose: bool=False) -> None:
 
     srv = resolve_server_name()
     if not make_fix_url(srv):
-        problems.append(f"Server URL not resolved for '{srv}'")
+        warnings.append(f"Server URL not resolved for '{srv}' (будет использоваться заглушка FIX)")
 
     if problems:
         print("[HEALTH-CHECK FAIL]")
         for p in problems:
             print(" -", p)
         sys.exit(1)
+    if warnings:
+        print("[HEALTH-CHECK WARN]")
+        for w in warnings:
+            print(" -", w)
     if verbose:
         print(f"[HEALTH-OK] server={srv} fix_url={make_fix_url(srv)}")
         print(f"[HEALTH-OK] config={config_folder}")
@@ -230,8 +286,9 @@ async def check_all_configs_and_notify():
         return
 
     server_name = resolve_server_name()
-    msg_prefix  = server_name
-    fix_url     = make_fix_url(server_name) or "FIX"
+    msg_prefix = server_name
+    icon_prefix = server_name or "LD"
+    fix_url = make_fix_url(server_name) or "FIX"
 
     # 1) Сканируем конфиги
     crashed_files, crashed_names = collect_crashed(inst2name, active_inst_ids)
@@ -244,7 +301,7 @@ async def check_all_configs_and_notify():
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"F99🚨{msg_prefix}: Слетевший эмулятор — {human_name} ({file_name})"
+                text=f"{icon_prefix}🚨{msg_prefix}: Слетевший эмулятор — {human_name} ({file_name})"
             )
         except TelegramError as err:
             print(f"[TG error] {err}")
@@ -255,7 +312,7 @@ async def check_all_configs_and_notify():
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"F99❗{msg_prefix}: слетевшие — {summary}\n🔧 FIX: {fix_url}"
+                text=f"{icon_prefix}❗{msg_prefix}: слетевшие — {summary}\n🔧 FIX: {fix_url}"
             )
         except TelegramError as err:
             print(f"[TG error] {err}")
@@ -273,7 +330,10 @@ async def check_all_configs_and_notify():
             try:
                 await bot.send_message(
                     chat_id=chat_id,
-                    text=f"F99🤖{msg_prefix}: AUTO-FIX (config-only) для {len(acc_ids)} — {', '.join(sorted(set(crashed_names)))}"
+                    text=(
+                        f"{icon_prefix}🤖{msg_prefix}: AUTO-FIX (config-only) для "
+                        f"{len(acc_ids)} — {', '.join(sorted(set(crashed_names)))}"
+                    )
                 )
             except TelegramError:
                 pass
