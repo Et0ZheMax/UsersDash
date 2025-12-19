@@ -195,6 +195,7 @@ def make_fix_url(server_name: str) -> Optional[str]:
 
 def health_check(verbose: bool=False) -> None:
     problems = []
+    warnings = []
     if not os.path.isdir(config_folder):
         problems.append(f"CONFIG_FOLDER not found: {config_folder}")
     if not os.path.isfile(profile_file):
@@ -206,13 +207,17 @@ def health_check(verbose: bool=False) -> None:
 
     srv = resolve_server_name()
     if not make_fix_url(srv):
-        problems.append(f"Server URL not resolved for '{srv}'")
+        warnings.append(f"Server URL not resolved for '{srv}' (будет использоваться заглушка FIX)")
 
     if problems:
         print("[HEALTH-CHECK FAIL]")
         for p in problems:
             print(" -", p)
         sys.exit(1)
+    if warnings:
+        print("[HEALTH-CHECK WARN]")
+        for w in warnings:
+            print(" -", w)
     if verbose:
         print(f"[HEALTH-OK] server={srv} fix_url={make_fix_url(srv)}")
         print(f"[HEALTH-OK] config={config_folder}")
