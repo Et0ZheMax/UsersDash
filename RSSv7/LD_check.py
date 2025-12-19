@@ -35,6 +35,31 @@ if sys.platform == "win32" and not is_admin():
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
     sys.exit(0)
 
+
+def _ensure_utf8_stdio() -> None:
+    """
+    Переконфигурируем stdout/stderr в UTF-8 с заменой, чтобы не падать на cp1252/cp866.
+    """
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        if not stream:
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            try:
+                fd = stream.fileno()
+                setattr(
+                    sys,
+                    name,
+                    open(fd, mode=stream.mode, encoding="utf-8", errors="replace", buffering=1),
+                )
+            except Exception:
+                pass
+
+
+_ensure_utf8_stdio()
+
 # ─────────────────────────────────────────────────────────────
 # Пути/конфиги (оставил ваши дефолты)
 # ─────────────────────────────────────────────────────────────
