@@ -4305,6 +4305,7 @@ def _run_ld_check():
         env["LDCHECK_PROFILE_FILE"] = PROFILE_PATH
     if SERVER_NAME:
         env["SERVER_NAME"] = SERVER_NAME
+    env.setdefault("PYTHONIOENCODING", "utf-8")
 
     try:
         proc = subprocess.Popen(
@@ -4312,6 +4313,8 @@ def _run_ld_check():
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=env,
         )
         for line in proc.stdout or []:
