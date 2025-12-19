@@ -104,7 +104,7 @@ API_BASE = os.getenv("DASH_API", "http://127.0.0.1:5001").rstrip("/")
 SERVERS: Dict[str, str] = {
     "208": "https://hotly-large-coral.cloudpub.ru/",
     "F99": "https://tastelessly-quickened-chub.cloudpub.ru/",
-    "DELL": "https://creakily-big-spaniel.cloudpub.ru/",
+    "R9": "https://creakily-big-spaniel.cloudpub.ru/",
     "RSS":  "https://fiendishly-awake-stickleback.cloudpub.ru/",
 }
 FIX_PAGE = "fix"                                  # страница фикса
