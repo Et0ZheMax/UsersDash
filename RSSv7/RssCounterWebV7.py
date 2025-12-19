@@ -4293,31 +4293,45 @@ def api_replace_configs():
     return jsonify({"logs": logs})
 
 
-@app.route("/api/check_ld", methods=["POST"])
-def api_check_ld():
-    # полный путь до скрипта
+def _run_ld_check():
+    """Запускает LD_check.py, подставляя пути и имя сервера из config.json."""
     script_path = os.path.join(BASE_DIR, "LD_check.py")
     logs = []
-
     if not os.path.isfile(script_path):
-        return jsonify({"logs": [f"LD_check.py не найден по пути {script_path}"]}), 404
+        return [f"LD_check.py не найден по пути {script_path}"], 404
+
+    env = os.environ.copy()
+    if PROFILE_PATH:
+        env["LDCHECK_PROFILE_FILE"] = PROFILE_PATH
+    if SERVER_NAME:
+        env["SERVER_NAME"] = SERVER_NAME
 
     try:
-        # запускаем скрипт по абсолютному пути
         proc = subprocess.Popen(
             ["python", script_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True
+            text=True,
+            env=env,
         )
-        # читаем построчно
-        for line in proc.stdout:
+        for line in proc.stdout or []:
             logs.append(line.rstrip())
         proc.wait()
     except Exception as e:
         logs.append(f"Error running LD_check.py: {e}")
+    return logs, 200
 
-    return jsonify({"logs": logs})
+
+@app.route("/api/check_ld", methods=["POST"])
+def api_check_ld():
+    logs, code = _run_ld_check()
+    return jsonify({"logs": logs}), code
+
+
+@app.route("/ldcheck", methods=["GET", "POST"])
+def ldcheck():
+    logs, code = _run_ld_check()
+    return jsonify({"logs": logs}), code
 
 
 @app.route("/api/crashedEmus")
