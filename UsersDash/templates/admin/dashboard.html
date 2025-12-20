@@ -3,6 +3,13 @@
 {% block title %}Админ-дэшборд{% endblock %}
 
 {% block content %}
+<style>
+    /* Прячем глобальный лоадер на главной админке, чтобы он не перекрывал управление. */
+    #globalLoader,
+    #globalLoader.show {
+        display: none !important;
+    }
+</style>
 <h1>Админ-панель</h1>
 
 <div class="admin-top-grid">
