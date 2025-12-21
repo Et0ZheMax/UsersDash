@@ -343,7 +343,7 @@ def _notify_server_down(server: Server, error: str | None) -> None:
 
     reason = error or "нет ответа от rssv7counter.py"
     message = (
-        f"[server-state] {server.name}: нет ответа от RSSv7. "
+        f"📵[server-state] {server.name}: нет ответа от RSSv7. "
         f"Детали: {reason}. Скрипт self_status недоступен (rssv7counter.py)."
     )
     send_notification(message)
@@ -3094,3 +3094,4 @@ def settings_log_diff(log_id: int):
         "new_value": _format_diff_value(new_parsed),
         "changes": changes,
     })
+
