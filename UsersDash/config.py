@@ -4,6 +4,8 @@
 import os
 from pathlib import Path
 
+from UsersDash.telegram_settings import load_telegram_settings
+
 
 class Config:
     """
@@ -24,3 +26,6 @@ class Config:
     SECRET_KEY = os.environ.get("MULTIDASH_SECRET_KEY", "change-me-please")
 
     # Доп. настройки можно добавить сюда (например, DEBUG из переменных окружения)
+
+    # Настройки Telegram для уведомлений
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS = load_telegram_settings()
