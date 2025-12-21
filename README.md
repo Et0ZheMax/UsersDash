@@ -43,6 +43,14 @@
 5. При первом старте создаётся база `UsersDash/data/app.db` и пользователь admin/admin
    (смените пароль в админке или через `reset_admin_password.py`).
 
+### Настройка Telegram-уведомлений
+
+- Создайте файл `UsersDash/telegram_settings.json` по образцу
+  `UsersDash/telegram_settings.example.json` и укажите токен бота и список `chat_ids`.
+- Файл игнорируется Git и загружается автоматически через конфиг приложения.
+- Вместо файла можно использовать переменные окружения `TELEGRAM_BOT_TOKEN` и
+  `TELEGRAM_CHAT_IDS` (список через запятую).
+
 ### Отдельные утилиты RssCounter
 
 - Все конфигурации для RSSv7 и RSS4SALE лежат в соответствующих `config.json` и читаются из каталога,

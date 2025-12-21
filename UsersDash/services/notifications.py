@@ -53,7 +53,8 @@ def send_notification(message: str) -> None:
 
     Поддерживаются:
     - Slack вебхуки (SLACK_WEBHOOK_URLS в конфиге или env);
-    - Telegram бот (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_IDS в конфиге или env).
+    - Telegram бот (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_IDS в конфиге, env или файле
+      telegram_settings.json).
     Ошибки при отправке логируются и не прерывают выполнение.
     """
 
