@@ -94,6 +94,7 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 RSS_SALE_DEFAULT_PRICE_FWS_100 = 299
 RSS_SALE_DEFAULT_PRICE_GOLD_100 = 499
 RSS_SALE_DEFAULT_TAX_PERCENT = 32.0
+_SERVER_STATE_ALERTS: dict[str, bool] = {}
 
 
 def _to_moscow_time(dt: datetime) -> datetime:
@@ -329,6 +330,37 @@ def _build_server_link(server: Server) -> str | None:
     return raw_link
 
 
+def _get_server_alert_key(server: Server) -> str:
+    """Возвращает ключ для кеша статусов сервера (id или имя)."""
+
+    if server.id is not None:
+        return f"id:{server.id}"
+    return f"name:{server.name or '?'}"
+
+
+def _notify_server_down(server: Server, error: str | None) -> None:
+    """Отправляет алерт о недоступности self_status на сервере."""
+
+    reason = error or "нет ответа от rssv7counter.py"
+    message = (
+        f"[server-state] {server.name}: нет ответа от RSSv7. "
+        f"Детали: {reason}. Скрипт self_status недоступен (rssv7counter.py)."
+    )
+    send_notification(message)
+
+
+def _handle_server_state_alert(server: Server, state: dict[str, Any]) -> None:
+    """Логика отправки алерта при первом появлении ошибки self_status."""
+
+    key = _get_server_alert_key(server)
+    has_error = bool(state.get("error"))
+    prev_error = _SERVER_STATE_ALERTS.get(key, False)
+    _SERVER_STATE_ALERTS[key] = has_error
+
+    if has_error and not prev_error:
+        _notify_server_down(server, state.get("error"))
+
+
 def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
     """Подтягивает self_status со всех активных серверов."""
 
@@ -357,18 +389,24 @@ def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
     if not active_servers:
         return []
 
-    states: list[tuple[int, dict[str, Any]]] = []
+    states: list[tuple[int, Server, dict[str, Any]]] = []
     max_workers = min(8, len(active_servers))
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_map = {
-            executor.submit(_build_server_state, srv): idx for idx, srv in active_servers
+            executor.submit(_build_server_state, srv): (idx, srv)
+            for idx, srv in active_servers
         }
 
         for future in as_completed(future_map):
-            states.append((future_map[future], future.result()))
+            idx, srv = future_map[future]
+            states.append((idx, srv, future.result()))
 
-    return [state for _, state in sorted(states, key=lambda pair: pair[0])]
+    sorted_states = sorted(states, key=lambda pair: pair[0])
+    for _, srv, state in sorted_states:
+        _handle_server_state_alert(srv, state)
+
+    return [state for _, _, state in sorted_states]
 
 
 def _collect_watch_cards(servers: list[Server]) -> list[dict[str, Any]]:
