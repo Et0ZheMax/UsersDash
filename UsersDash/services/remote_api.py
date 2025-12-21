@@ -27,6 +27,46 @@ HEALTH_TIMEOUT = 5
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
+def _format_http_error(resp: requests.Response) -> str:
+    """Формирует человекочитаемое описание HTTP-ошибки без HTML-шума."""
+
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            message = data.get("error") or data.get("message") or data.get("detail")
+            if message:
+                return f"HTTP {resp.status_code}: {message}"
+            return f"HTTP {resp.status_code}: {json.dumps(data, ensure_ascii=False)}"
+        if isinstance(data, list):
+            return f"HTTP {resp.status_code}: {json.dumps(data, ensure_ascii=False)}"
+        if isinstance(data, str):
+            return f"HTTP {resp.status_code}: {data}"
+    except ValueError:
+        # Не JSON — продолжаем разбирать текстовый ответ
+        pass
+
+    text = (resp.text or "").strip()
+    content_type = (resp.headers.get("Content-Type") or "").lower()
+    looks_like_html = "text/html" in content_type or "<html" in text.lower() or "<!doctype" in text.lower()
+
+    if looks_like_html:
+        # html-ответ от прокси — возвращаем короткий статус без вёрстки
+        title_match = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        title = title_match.group(1).strip() if title_match else ""
+        short_reason = title or resp.reason or "Ошибка на стороне сервера"
+        return f"HTTP {resp.status_code}: {short_reason}"
+
+    if text:
+        # Срежем теги/переводы строк, чтобы не выводить целую HTML-страницу ошибки.
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 280:
+            text = text[:277] + "..."
+        return f"HTTP {resp.status_code}: {text or resp.reason}"
+
+    return f"HTTP {resp.status_code}: {resp.reason}"
+
+
 def _get_effective_api_base(server) -> Optional[str]:
     """
     Возвращает "правильный" base URL для API конкретного сервера.
@@ -507,11 +547,7 @@ def update_account_step_settings(account, step_idx: int, payload: Dict[str, Any]
         if 200 <= resp.status_code < 300:
             return True, "OK"
 
-        try:
-            body = resp.json()
-        except Exception:
-            body = resp.text
-        return False, f"HTTP {resp.status_code}: {body}"
+        return False, _format_http_error(resp)
     except Exception as exc:
         print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
         return False, str(exc)
@@ -551,12 +587,7 @@ def update_account_active(account, is_active: bool) -> Tuple[bool, str]:
     if 200 <= resp.status_code < 300:
         return True, "OK"
 
-    try:
-        body = resp.json()
-    except Exception:
-        body = resp.text
-
-    return False, f"HTTP {resp.status_code}: {body}"
+    return False, _format_http_error(resp)
 
 
 def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
@@ -601,11 +632,7 @@ def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
 
         return False, message
 
-    try:
-        err_body = resp.json()
-    except Exception:
-        err_body = resp.text
-    return False, f"HTTP {resp.status_code}: {err_body}"
+    return False, _format_http_error(resp)
 
 
 def _request_template_api(
@@ -627,11 +654,7 @@ def _request_template_api(
         except Exception:
             return {}, None
 
-    try:
-        body = resp.json()
-    except Exception:
-        body = resp.text
-    return None, f"HTTP {resp.status_code}: {body}"
+    return None, _format_http_error(resp)
 
 
 def fetch_templates_list(server: Server) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
