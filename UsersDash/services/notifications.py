@@ -8,6 +8,8 @@ from typing import Iterable, Sequence
 import requests
 from flask import current_app
 
+from UsersDash.telegram_settings import load_telegram_settings
+
 DEFAULT_TIMEOUT = 10
 
 
@@ -24,12 +26,18 @@ def _iter_slack_hooks(config: dict) -> Iterable[str]:
 
 def _iter_telegram_chats(config: dict) -> Iterable[tuple[str, str]]:
     token = config.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token:
-        return []
-
     raw_chat_ids: Sequence[str] | str | None = config.get("TELEGRAM_CHAT_IDS") or os.environ.get(
         "TELEGRAM_CHAT_IDS"
     )
+
+    if not token or not raw_chat_ids:
+        file_token, file_chat_ids = load_telegram_settings()
+        token = token or file_token
+        raw_chat_ids = raw_chat_ids or file_chat_ids
+
+    if not token or not raw_chat_ids:
+        return []
+
     if isinstance(raw_chat_ids, str):
         chat_ids = [cid.strip() for cid in raw_chat_ids.split(",") if cid.strip()]
     elif isinstance(raw_chat_ids, (list, tuple)):
@@ -79,6 +87,11 @@ def send_notification(message: str) -> None:
                 timeout=DEFAULT_TIMEOUT,
             )
             delivered = delivered or resp.ok
+            if not resp.ok:
+                _log_fallback(
+                    f"Не удалось отправить Telegram-уведомление в чат {chat_id}: "
+                    f"{resp.status_code} {resp.text}"
+                )
         except Exception as exc:  # pragma: no cover - защита от падений
             _log_fallback(f"Не удалось отправить Telegram-уведомление: {exc}")
 
