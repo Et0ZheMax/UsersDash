@@ -57,6 +57,17 @@ def _format_http_error(resp: requests.Response) -> str:
         return f"HTTP {resp.status_code}: {short_reason}"
 
     if text:
+        # Если текст очень длинный или статус 5xx, оставим только первую осмысленную строку.
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if first_line:
+            first_line = re.sub(r"<[^>]+>", " ", first_line)
+            first_line = re.sub(r"\s+", " ", first_line).strip()
+        if first_line and (resp.status_code >= 500 or len(text) > 200):
+            short = first_line
+            if len(short) > 180:
+                short = short[:177] + "..."
+            return f"HTTP {resp.status_code}: {short or resp.reason}"
+
         # Срежем теги/переводы строк, чтобы не выводить целую HTML-страницу ошибки.
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
