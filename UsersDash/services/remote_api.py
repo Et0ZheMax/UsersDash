@@ -46,7 +46,28 @@ def _format_http_error(resp: requests.Response) -> str:
         pass
 
     text = (resp.text or "").strip()
+    content_type = (resp.headers.get("Content-Type") or "").lower()
+    looks_like_html = "text/html" in content_type or "<html" in text.lower() or "<!doctype" in text.lower()
+
+    if looks_like_html:
+        # html-ответ от прокси — возвращаем короткий статус без вёрстки
+        title_match = re.search(r"<title>(.*?)</title>", text, re.IGNORECASE | re.DOTALL)
+        title = title_match.group(1).strip() if title_match else ""
+        short_reason = title or resp.reason or "Ошибка на стороне сервера"
+        return f"HTTP {resp.status_code}: {short_reason}"
+
     if text:
+        # Если текст очень длинный или статус 5xx, оставим только первую осмысленную строку.
+        first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+        if first_line:
+            first_line = re.sub(r"<[^>]+>", " ", first_line)
+            first_line = re.sub(r"\s+", " ", first_line).strip()
+        if first_line and (resp.status_code >= 500 or len(text) > 200):
+            short = first_line
+            if len(short) > 180:
+                short = short[:177] + "..."
+            return f"HTTP {resp.status_code}: {short or resp.reason}"
+
         # Срежем теги/переводы строк, чтобы не выводить целую HTML-страницу ошибки.
         text = re.sub(r"<[^>]+>", " ", text)
         text = re.sub(r"\s+", " ", text).strip()
