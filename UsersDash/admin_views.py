@@ -94,7 +94,8 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 RSS_SALE_DEFAULT_PRICE_FWS_100 = 299
 RSS_SALE_DEFAULT_PRICE_GOLD_100 = 499
 RSS_SALE_DEFAULT_TAX_PERCENT = 32.0
-_SERVER_STATE_ALERTS: dict[str, bool] = {}
+SERVER_STATE_ALERT_INTERVAL = timedelta(minutes=20)
+_SERVER_STATE_ALERTS: dict[str, dict[str, Any]] = {}
 
 
 def _to_moscow_time(dt: datetime) -> datetime:
@@ -350,15 +351,33 @@ def _notify_server_down(server: Server, error: str | None) -> None:
 
 
 def _handle_server_state_alert(server: Server, state: dict[str, Any]) -> None:
-    """Логика отправки алерта при первом появлении ошибки self_status."""
+    """Отправляет алерт при первом и повторных падениях self_status с интервалом."""
 
     key = _get_server_alert_key(server)
     has_error = bool(state.get("error"))
-    prev_error = _SERVER_STATE_ALERTS.get(key, False)
-    _SERVER_STATE_ALERTS[key] = has_error
+    cache_entry = _SERVER_STATE_ALERTS.get(key, {})
+    prev_error = bool(cache_entry.get("has_error"))
+    last_notified = cache_entry.get("notified_at")
 
-    if has_error and not prev_error:
-        _notify_server_down(server, state.get("error"))
+    if has_error:
+        now = datetime.now(timezone.utc)
+        should_notify = not prev_error
+
+        if prev_error and isinstance(last_notified, datetime):
+            should_notify = now - last_notified >= SERVER_STATE_ALERT_INTERVAL
+
+        if should_notify:
+            _notify_server_down(server, state.get("error"))
+            last_notified = now
+
+        _SERVER_STATE_ALERTS[key] = {
+            "has_error": True,
+            "notified_at": last_notified,
+        }
+        return
+
+    if prev_error or key in _SERVER_STATE_ALERTS:
+        _SERVER_STATE_ALERTS[key] = {"has_error": False, "notified_at": None}
 
 
 def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
