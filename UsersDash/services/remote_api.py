@@ -870,6 +870,36 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
     return payload, ""
 
 
+def _format_hms(total_seconds: int) -> str:
+    """Возвращает строку HH:MM:SS без отрицательных значений."""
+
+    safe_seconds = max(int(total_seconds), 0)
+    hours = safe_seconds // 3600
+    minutes = (safe_seconds % 3600) // 60
+    seconds = safe_seconds % 60
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _normalize_self_status_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Приводит self_status разных сборок (RSSv7, RSS4SALE) к общему виду."""
+
+    normalized = dict(data)
+
+    background = (
+        normalized.get("background") if isinstance(normalized.get("background"), dict) else {}
+    )
+
+    if "checked_at" not in normalized:
+        checked_raw = (
+            background.get("last_update_time")
+            or normalized.get("generated_at")
+        )
+        if checked_raw:
+            normalized["checked_at"] = checked_raw
+
+    return normalized
+
+
 def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
     """
     Запрашивает self_status у RssCounter (/api/server/self_status).
@@ -889,7 +919,7 @@ def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
     if not isinstance(data, dict):
         return None, f"Некорректный ответ от {url}"
 
-    return data, ""
+    return _normalize_self_status_payload(data), ""
 
 
 def fetch_server_cycle_time(
@@ -919,5 +949,16 @@ def fetch_server_cycle_time(
         return None, f"Нет ответа от {url}"
     if not isinstance(data, dict):
         return None, f"Некорректный ответ от {url}"
+
+    if "avg_cycle_hms" not in data:
+        overall = data.get("overall") if isinstance(data.get("overall"), dict) else {}
+        avg_minutes = (
+            overall.get("avg_minutes") if isinstance(overall.get("avg_minutes"), (int, float)) else None
+        )
+        if avg_minutes is not None:
+            try:
+                data["avg_cycle_hms"] = _format_hms(int(avg_minutes * 60))
+            except Exception:
+                pass
 
     return data, ""
