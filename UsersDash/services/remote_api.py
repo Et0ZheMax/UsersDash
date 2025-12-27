@@ -888,23 +888,14 @@ def _normalize_self_status_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     background = (
         normalized.get("background") if isinstance(normalized.get("background"), dict) else {}
     )
-    health = normalized.get("health") if isinstance(normalized.get("health"), dict) else {}
 
     if "checked_at" not in normalized:
         checked_raw = (
             background.get("last_update_time")
             or normalized.get("generated_at")
-            or normalized.get("start_time")
         )
         if checked_raw:
             normalized["checked_at"] = checked_raw
-
-    health_status = (health.get("status") or "").lower()
-    health_ok = health_status in {"ok", "healthy", "success"} or health_status == ""
-
-    normalized.setdefault("pingOk", health_ok)
-    normalized.setdefault("gnOk", normalized.get("pingOk"))
-    normalized.setdefault("dnOk", normalized.get("gnOk"))
 
     return normalized
 
