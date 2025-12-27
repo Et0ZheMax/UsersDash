@@ -182,7 +182,7 @@ def detect_server_name_fallback() -> str:
     for key in SERVERS.keys():
         if key in host:
             return key
-    return "DELL"
+    return "UNKNOWN srv"
 
 def resolve_server_name() -> str:
     return ENV_SERVER_NAME or detect_server_name_fallback()
@@ -367,4 +367,5 @@ async def check_all_configs_and_notify():
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     asyncio.run(check_all_configs_and_notify())
+
 
