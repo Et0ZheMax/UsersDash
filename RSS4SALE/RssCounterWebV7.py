@@ -470,12 +470,14 @@ def _load_usersdash_from_db(server_name: str) -> tuple[list[dict], list[str]]:
     srv_id = srv_row[0]
     rows = c.execute(
         """
-            SELECT a.id, a.name, a.internal_id, a.is_active,
-                   fd.email, fd.password, fd.igg_id, fd.server, fd.telegram_tag
+            SELECT a.id, a.name, a.internal_id, a.is_active, a.blocked_for_payment,
+                   fd.email, fd.login, fd.password, fd.igg_id, fd.server, fd.telegram_tag
             FROM accounts a
             LEFT JOIN farm_data fd
               ON fd.user_id = a.owner_id AND fd.farm_name = a.name
-            WHERE a.server_id=? AND a.is_active IS NOT 0
+            WHERE a.server_id=?
+              AND a.is_active IS NOT 0
+              AND (a.blocked_for_payment IS NULL OR a.blocked_for_payment = 0)
         """,
         (srv_id,),
     ).fetchall()
@@ -483,17 +485,18 @@ def _load_usersdash_from_db(server_name: str) -> tuple[list[dict], list[str]]:
 
     items = []
     for r in rows:
+        email = r[5] or r[6] or ""
         items.append(
             {
                 "usersdash_id": r[0],
                 "name": r[1] or "",
                 "internal_id": str(r[2]) if r[2] is not None else "",
                 "is_active": bool(r[3]),
-                "email": r[4] or "",
-                "password": r[5] or "",
-                "igg_id": r[6] or "",
-                "server": r[7] or "",
-                "telegram": r[8] or "",
+                "email": email,
+                "password": r[7] or "",
+                "igg_id": r[8] or "",
+                "server": r[9] or "",
+                "telegram": r[10] or "",
             }
         )
 
@@ -541,7 +544,7 @@ def _load_usersdash_from_api(server_name: str) -> tuple[list[dict], list[str]]:
     for row in payload.get("items") or []:
         if not isinstance(row, dict):
             continue
-        if row.get("is_active") is False:
+        if row.get("is_active") is False or row.get("active") is False:
             continue
 
         items.append(
