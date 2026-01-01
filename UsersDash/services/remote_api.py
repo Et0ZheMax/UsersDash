@@ -16,7 +16,7 @@ import requests
 from markupsafe import Markup, escape
 from requests import RequestException, Timeout
 
-from UsersDash.models import Server
+from UsersDash.models import Server, db
 
 log = logging.getLogger(__name__)
 
@@ -388,8 +388,7 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
         by_server.setdefault(acc.server_id, []).append(acc)
 
     result: Dict[int, Dict[str, Any]] = {}
-
-    from UsersDash.models import Server  # локальный импорт, чтобы избежать циклов
+    reactivated_accounts: List[Any] = []
 
     for server_id, acc_list in by_server.items():
         server = Server.query.get(server_id)
@@ -426,6 +425,18 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
                 "last_updated_fmt": last_fmt,
                 "remote_id": remote_id,
             }
+            if not getattr(acc, "is_active", True) and not getattr(acc, "blocked_for_payment", False):
+                reactivated_accounts.append(acc)
+
+    if reactivated_accounts:
+        try:
+            # Если ферма отдаёт ресурсы, считаем её активной и синхронизируем флаг.
+            for acc in reactivated_accounts:
+                acc.is_active = True
+            db.session.commit()
+        except Exception as exc:
+            log.warning("Не удалось обновить статус активных ферм: %s", exc)
+            db.session.rollback()
 
     return result
 
@@ -923,9 +934,24 @@ def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
     data = _safe_get_json(
         url, timeout=HEALTH_TIMEOUT, source=f"self_status {server.name}"
     )
-    if data is None:
-        return None, f"Нет ответа от {url}"
-    if not isinstance(data, dict):
+    if data is None or not isinstance(data, dict):
+        ping_ok, ping_err = ping_server(server)
+        if ping_ok:
+            return (
+                _normalize_self_status_payload(
+                    {
+                        "checked_at": None,
+                        "pingOk": True,
+                        "gnOk": True,
+                        "dnOk": True,
+                    }
+                ),
+                "",
+            )
+
+        if data is None:
+            return None, ping_err or f"Нет ответа от {url}"
+
         return None, f"Некорректный ответ от {url}"
 
     return _normalize_self_status_payload(data), ""
