@@ -1444,37 +1444,78 @@ def api_screenshot():
     return jsonify({"data": f"data:image/png;base64,{b64}"})
 
 
+def _count_processes(names: tuple[str, ...]) -> int:
+    """Считает процессы по точным именам."""
+    count = 0
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'] and proc.info['name'].lower() in names:
+                count += 1
+        except Exception:
+            continue
+    return count
+
+
+def _build_self_status_payload():
+    """Собирает базовое состояние сервера и фоновых задач."""
+    now = datetime.now(timezone.utc)
+    uptime_seconds = (now - APP_START_TIME).total_seconds()
+    background = {
+        "daily_backup_scheduler": {
+            "started": BACKGROUND_FLAGS.get("daily_backup_scheduler", False),
+            "alive": bool(DAILY_BACKUP_THREAD and DAILY_BACKUP_THREAD.is_alive()),
+        },
+        "last_update_time": LAST_UPDATE_TIME.isoformat() if LAST_UPDATE_TIME else None,
+        "threads": len(threading.enumerate()),
+    }
+    health_checks = {
+        "logs_db_exists": os.path.exists(LOGS_DB),
+        "resources_db_exists": os.path.exists(RESOURCES_DB),
+        "profile_accessible": os.path.exists(PROFILE_PATH),
+    }
+    status = "ok" if all(health_checks.values()) else "degraded"
+
+    gn_ok = is_process_running("GnBots.exe")
+    dn_names = ("dnplayer.exe", "ld9boxheadless.exe")
+    dn_count = _count_processes(dn_names)
+    dn_ok = dn_count > 0
+
+    return {
+        "server": SERVER,
+        "start_time": APP_START_TIME.isoformat(),
+        "generated_at": now.isoformat(),
+        "uptime_seconds": uptime_seconds,
+        "background": background,
+        "health": {"status": status, **health_checks},
+        "pingOk": True,
+        "gnOk": gn_ok,
+        "dnOk": dn_ok,
+        "dnCount": dn_count,
+    }
+
+
 @app.route("/api/server/self_status")
 def api_self_status():
     """Отдаёт базовое состояние сервера и фоновых задач."""
     try:
-        now = datetime.now(timezone.utc)
-        uptime_seconds = (now - APP_START_TIME).total_seconds()
-        background = {
-            "daily_backup_scheduler": {
-                "started": BACKGROUND_FLAGS.get("daily_backup_scheduler", False),
-                "alive": bool(DAILY_BACKUP_THREAD and DAILY_BACKUP_THREAD.is_alive()),
-            },
-            "last_update_time": LAST_UPDATE_TIME.isoformat() if LAST_UPDATE_TIME else None,
-            "threads": len(threading.enumerate()),
-        }
-        health_checks = {
-            "logs_db_exists": os.path.exists(LOGS_DB),
-            "resources_db_exists": os.path.exists(RESOURCES_DB),
-            "profile_accessible": os.path.exists(PROFILE_PATH),
-        }
-        status = "ok" if all(health_checks.values()) else "degraded"
-        return jsonify(
-            {
-                "server": SERVER,
-                "start_time": APP_START_TIME.isoformat(),
-                "uptime_seconds": uptime_seconds,
-                "background": background,
-                "health": {"status": status, **health_checks},
-            }
-        )
+        return jsonify(_build_self_status_payload())
     except Exception as exc:
         app.logger.exception("api_self_status failed")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/serverStatus")
+def api_server_status():
+    """Совместимость со старым endpoint-ом serverStatus."""
+    try:
+        payload = _build_self_status_payload()
+        server_info = {"name": SERVER}
+        host_url = request.host_url.rstrip("/")
+        if host_url:
+            server_info["url"] = host_url
+        return jsonify({"servers": [server_info], "status": {SERVER: payload}})
+    except Exception as exc:
+        app.logger.exception("api_server_status failed")
         return jsonify({"error": str(exc)}), 500
 
 

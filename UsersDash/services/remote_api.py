@@ -88,6 +88,14 @@ def _get_effective_api_base(server) -> Optional[str]:
     На выходе хотим строку вида "http://host:5000/api".
     """
 
+    def _looks_like_local(value: str) -> bool:
+        lower = value.lower()
+        if lower.startswith(("localhost", "127.", "0.0.0.0")):
+            return True
+        if lower.startswith(("10.", "192.168.", "172.")):
+            return True
+        return False
+
     raw = (
         getattr(server, "api_base_url", None)
         or getattr(server, "host", None)
@@ -103,7 +111,8 @@ def _get_effective_api_base(server) -> Optional[str]:
 
     # Если строка не начинается с http, добавим http://
     if not base.startswith("http://") and not base.startswith("https://"):
-        base = "http://" + base
+        scheme = "http" if _looks_like_local(base) else "https"
+        base = f"{scheme}://" + base
 
     # Если админ уже указал .../api — оставляем как есть
     if base.endswith("/api"):
