@@ -78,7 +78,7 @@ class Account(db.Model):
     owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
 
     # GUID из /api/resources (поле id) — можем не заполнять, тогда маппим по имени
-    internal_id = db.Column(db.String(128), nullable=True)
+    internal_id = db.Column(db.String(128), nullable=True, unique=True, index=True)
 
     # Активна ли ферма
     is_active = db.Column(db.Boolean, default=True, nullable=False)
@@ -123,6 +123,10 @@ class Account(db.Model):
         back_populates="account",
         lazy="dynamic",
         cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint("owner_id", "name", name="uq_accounts_owner_name"),
     )
 
     def __repr__(self) -> str:
@@ -206,6 +210,10 @@ class FarmData(db.Model):
     owner = db.relationship(
         "User",
         backref=db.backref("farm_data_entries", lazy="dynamic"),
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "farm_name", name="uq_farm_data_user_farm"),
     )
 
     def __repr__(self) -> str:
