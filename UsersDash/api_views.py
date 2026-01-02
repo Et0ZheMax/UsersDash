@@ -18,6 +18,49 @@ api_bp = Blueprint("api", __name__)
 # ----------------- Вспомогательная авторизация серверов -----------------
 
 
+def _merge_farmdata_for_move(
+    old_owner_id: int | None,
+    old_name: str | None,
+    new_owner_id: int,
+    new_name: str,
+) -> None:
+    """
+    Переносит/объединяет FarmData при смене владельца или имени фермы.
+    - Если данных не было — создаёт запись для нового владельца/имени.
+    - Если были, но у нового владельца пусто — переносит полностью.
+    - Если у нового владельца уже были данные, то заполняет пустые поля
+      значениями из старой записи.
+    """
+
+    if not old_owner_id or not old_name:
+        target_fd = FarmData.query.filter_by(
+            user_id=new_owner_id, farm_name=new_name
+        ).first()
+        if not target_fd:
+            target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+            db.session.add(target_fd)
+        return
+
+    old_fd = FarmData.query.filter_by(user_id=old_owner_id, farm_name=old_name).first()
+    target_fd = FarmData.query.filter_by(
+        user_id=new_owner_id, farm_name=new_name
+    ).first()
+
+    if old_fd and not target_fd:
+        old_fd.user_id = new_owner_id
+        old_fd.farm_name = new_name
+        target_fd = old_fd
+    elif old_fd and target_fd and old_fd is not target_fd:
+        for field in ["email", "login", "password", "igg_id", "server", "telegram_tag"]:
+            current_val = getattr(target_fd, field)
+            if not current_val:
+                setattr(target_fd, field, getattr(old_fd, field))
+
+    if not target_fd:
+        target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+        db.session.add(target_fd)
+
+
 def _get_server_from_request() -> Server:
     """
     Достаём из запроса:
@@ -178,22 +221,34 @@ def save_farms_v1():
                 # Нечем сопоставлять
                 continue
 
-            # Ищем аккаунт в рамках этого сервера:
-            query = Account.query.filter_by(server_id=srv.id)
-
             if internal_id:
                 # Пытаемся по internal_id (GUID или instanceId)
-                acc = query.filter_by(internal_id=internal_id).first()
+                acc = Account.query.filter_by(internal_id=internal_id).first()
             else:
                 acc = None
 
             if not acc and name:
                 # Фоллбек по имени, если internal_id ещё не забит
-                acc = query.filter_by(name=name).first()
+                acc = Account.query.filter_by(name=name).first()
 
             if not acc:
                 # Не нашли соответствие — можно логировать, но не падаем
                 continue
+
+            if acc.server_id != srv.id:
+                acc.server_id = srv.id
+
+            if name and acc.name != name:
+                _merge_farmdata_for_move(
+                    acc.owner_id,
+                    acc.name,
+                    acc.owner_id,
+                    name,
+                )
+                acc.name = name
+
+            if internal_id and acc.internal_id != internal_id:
+                acc.internal_id = internal_id
 
             owner_id = acc.owner_id
             farm_name = acc.name

@@ -2815,6 +2815,9 @@ def admin_farm_data_pull_apply():
             acc_id = row.get("account_id")
             acc: Account | None = None
             is_new = bool(row.get("is_new"))
+            internal_id = (row.get("internal_id") or "").strip()
+            farm_name = (row.get("farm_name") or "").strip()
+            owner_name = (row.get("owner_name") or "").strip()
 
             if acc_id is not None:
                 try:
@@ -2825,6 +2828,19 @@ def admin_farm_data_pull_apply():
                 if acc_id_int is not None:
                     acc = Account.query.filter_by(id=acc_id_int).first()
 
+            if acc is None and internal_id:
+                acc = Account.query.filter_by(internal_id=internal_id).first()
+
+            if acc is None and farm_name:
+                if owner_name:
+                    owner_user = User.query.filter_by(username=owner_name).first()
+                    if owner_user:
+                        acc = Account.query.filter_by(
+                            name=farm_name, owner_id=owner_user.id
+                        ).first()
+                if acc is None:
+                    acc = Account.query.filter_by(name=farm_name).first()
+
             # Уже существующие аккаунты не перезаписываем в рамках pull-apply
             if acc is not None and not is_new:
                 warnings.append(
@@ -2833,32 +2849,50 @@ def admin_farm_data_pull_apply():
                 continue
 
             # Если не нашли аккаунт — создаём новый на указанном сервере
+            srv_id = row.get("server_id")
+            try:
+                srv_id_int = int(srv_id)
+            except (TypeError, ValueError):
+                srv_id_int = None
+
+            if not farm_name or srv_id_int is None:
+                warnings.append("Пропущена строка без сервера или имени фермы")
+                continue
+
+            server_obj = Server.query.filter_by(id=srv_id_int).first()
+            if not server_obj:
+                warnings.append(f"Сервер id={srv_id_int} не найден — строка пропущена")
+                continue
+
             if acc is None:
-                srv_id = row.get("server_id")
-                try:
-                    srv_id_int = int(srv_id)
-                except (TypeError, ValueError):
-                    srv_id_int = None
-
-                farm_name = (row.get("farm_name") or "").strip()
-                if not farm_name or srv_id_int is None:
-                    warnings.append("Пропущена строка без сервера или имени фермы")
-                    continue
-
-                server_obj = Server.query.filter_by(id=srv_id_int).first()
-                if not server_obj:
-                    warnings.append(f"Сервер id={srv_id_int} не найден — строка пропущена")
-                    continue
-
                 owner_user = _get_or_create_client_for_farm(farm_name)
                 acc = Account(
                     name=farm_name,
                     server_id=server_obj.id,
                     owner_id=owner_user.id,
-                    internal_id=(row.get("internal_id") or "").strip() or None,
+                    internal_id=internal_id or None,
                     is_active=True,
                 )
                 db.session.add(acc)
+            else:
+                if acc.server_id != server_obj.id:
+                    old_server = acc.server.name if acc.server else f"id={acc.server_id}"
+                    warnings.append(
+                        f"{acc.name}: перенос с сервера {old_server} на {server_obj.name}"
+                    )
+                    acc.server_id = server_obj.id
+
+                if farm_name and acc.name != farm_name:
+                    _merge_farmdata_for_move(
+                        acc.owner_id,
+                        acc.name,
+                        acc.owner_id,
+                        farm_name,
+                    )
+                    acc.name = farm_name
+
+                if internal_id and acc.internal_id != internal_id:
+                    acc.internal_id = internal_id
 
             fd = FarmData.query.filter_by(
                 user_id=acc.owner_id,
