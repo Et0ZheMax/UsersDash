@@ -47,8 +47,10 @@ from UsersDash.services.db_backup import backup_database
 from UsersDash.services import client_config_visibility
 from UsersDash.services.audit import settings_audit_context
 from UsersDash.services.remote_api import (
+    _resolve_remote_account,
     fetch_account_settings,
     fetch_resources_for_accounts,
+    fetch_resources_for_server,
     fetch_rssv7_accounts_meta,
     fetch_template_payload,
     fetch_template_schema,
@@ -97,6 +99,8 @@ RSS_SALE_DEFAULT_PRICE_GOLD_100 = 499
 RSS_SALE_DEFAULT_TAX_PERCENT = 32.0
 SERVER_STATE_ALERT_INTERVAL = timedelta(minutes=20)
 _SERVER_STATE_ALERTS: dict[str, dict[str, Any]] = {}
+PAYMENT_BLOCK_ALERT_INTERVAL = timedelta(hours=2)
+_PAYMENT_BLOCK_ALERTS: dict[str, dict[str, Any]] = {}
 
 
 def _to_moscow_time(dt: datetime) -> datetime:
@@ -482,6 +486,136 @@ def _handle_server_state_alert(server: Server, state: dict[str, Any]) -> None:
 
     if prev_error or key in _SERVER_STATE_ALERTS:
         _SERVER_STATE_ALERTS[key] = {"has_error": False, "notified_at": None}
+
+
+def _payment_block_alert_key(server: Server, account: Account) -> str:
+    """Возвращает ключ кеша для конфликтов оплаты (сервер + аккаунт)."""
+
+    server_key = server.id if server.id is not None else server.name or "?"
+    account_key = account.id if account.id is not None else account.name or "?"
+    return f"{server_key}:{account_key}"
+
+
+def _build_payment_block_conflicts(
+    servers: list[Server],
+) -> list[dict[str, Any]]:
+    """Ищет активные на сервере фермы, заблокированные за неуплату в UsersDash."""
+
+    active_servers = [srv for srv in servers if srv.is_active]
+    if not active_servers:
+        return []
+
+    server_map = {srv.id: srv for srv in active_servers if srv.id is not None}
+    server_ids = list(server_map.keys())
+    if not server_ids:
+        return []
+
+    blocked_accounts = (
+        Account.query
+        .options(joinedload(Account.owner), joinedload(Account.server))
+        .filter(Account.blocked_for_payment.is_(True))
+        .filter(Account.server_id.in_(server_ids))
+        .all()
+    )
+    if not blocked_accounts:
+        return []
+
+    accounts_by_server: dict[int, list[Account]] = {}
+    for acc in blocked_accounts:
+        if acc.server_id is None:
+            continue
+        accounts_by_server.setdefault(acc.server_id, []).append(acc)
+
+    conflicts: list[dict[str, Any]] = []
+    for server_id, acc_list in accounts_by_server.items():
+        server = server_map.get(server_id)
+        if not server:
+            continue
+
+        server_resources = fetch_resources_for_server(server)
+        if not server_resources:
+            continue
+
+        for acc in acc_list:
+            remote_id, res = _resolve_remote_account(acc, server_resources)
+            if not res:
+                continue
+
+            conflicts.append(
+                {
+                    "server": server,
+                    "account": acc,
+                    "remote_id": remote_id,
+                }
+            )
+
+    return conflicts
+
+
+def _notify_payment_block_conflicts(conflicts: list[dict[str, Any]]) -> None:
+    """Шлёт уведомления о конфликтах с оплатой и синхронизирует кеш."""
+
+    now = datetime.now(timezone.utc)
+    active_keys: set[str] = set()
+    notify_map: dict[str, list[dict[str, Any]]] = {}
+
+    for item in conflicts:
+        server = item["server"]
+        account = item["account"]
+        key = _payment_block_alert_key(server, account)
+        active_keys.add(key)
+
+        entry = _PAYMENT_BLOCK_ALERTS.get(key) or {}
+        last_notified = entry.get("notified_at")
+        should_notify = last_notified is None
+
+        if isinstance(last_notified, datetime):
+            should_notify = now - last_notified >= PAYMENT_BLOCK_ALERT_INTERVAL
+
+        if should_notify:
+            notify_map.setdefault(server.name or "—", []).append(item)
+
+    for server_name, items in notify_map.items():
+        lines = [
+            f"⚠️[payment-block] На сервере {server_name} активны фермы,",
+            "которые отключены за неуплату в UsersDash:",
+        ]
+
+        notified_keys: list[str] = []
+        for item in items:
+            account = item["account"]
+            owner_name = account.owner.username if account.owner else "—"
+            internal_id = account.internal_id or "—"
+            lines.append(
+                f"- {account.name} (клиент {owner_name}, internal_id {internal_id})"
+            )
+            notified_keys.append(_payment_block_alert_key(item["server"], account))
+
+        lines.append("Нужно выключить их в боте и синхронизировать статусы.")
+        send_notification("\n".join(lines))
+
+        for key in notified_keys:
+            _PAYMENT_BLOCK_ALERTS[key] = {
+                "notified_at": now,
+                "active": True,
+            }
+
+    for key in active_keys:
+        if key in _PAYMENT_BLOCK_ALERTS:
+            _PAYMENT_BLOCK_ALERTS[key]["active"] = True
+        else:
+            _PAYMENT_BLOCK_ALERTS[key] = {"notified_at": None, "active": True}
+
+    stale_keys = [key for key in _PAYMENT_BLOCK_ALERTS.keys() if key not in active_keys]
+    for key in stale_keys:
+        _PAYMENT_BLOCK_ALERTS.pop(key, None)
+
+
+def _scan_payment_block_conflicts(servers: list[Server]) -> None:
+    """Сканирует конфликты активных ферм и оповещает, если нужно."""
+
+    conflicts = _build_payment_block_conflicts(servers)
+    _notify_payment_block_conflicts(conflicts)
 
 
 def _collect_server_states(servers: list[Server]) -> list[dict[str, Any]]:
@@ -1033,6 +1167,7 @@ def api_server_states():
 
     servers = Server.query.order_by(Server.name.asc()).all()
     server_states = _collect_server_states(servers)
+    _scan_payment_block_conflicts(servers)
 
     return jsonify({
         "items": server_states,
