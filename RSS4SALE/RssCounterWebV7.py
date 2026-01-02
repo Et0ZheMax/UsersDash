@@ -1444,6 +1444,18 @@ def api_screenshot():
     return jsonify({"data": f"data:image/png;base64,{b64}"})
 
 
+def _count_processes(names: tuple[str, ...]) -> int:
+    """Считает процессы по точным именам."""
+    count = 0
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'] and proc.info['name'].lower() in names:
+                count += 1
+        except Exception:
+            continue
+    return count
+
+
 def _build_self_status_payload():
     """Собирает базовое состояние сервера и фоновых задач."""
     now = datetime.now(timezone.utc)
@@ -1462,12 +1474,23 @@ def _build_self_status_payload():
         "profile_accessible": os.path.exists(PROFILE_PATH),
     }
     status = "ok" if all(health_checks.values()) else "degraded"
+
+    gn_ok = is_process_running("GnBots.exe")
+    dn_names = ("dnplayer.exe", "ld9boxheadless.exe")
+    dn_count = _count_processes(dn_names)
+    dn_ok = dn_count > 0
+
     return {
         "server": SERVER,
         "start_time": APP_START_TIME.isoformat(),
+        "generated_at": now.isoformat(),
         "uptime_seconds": uptime_seconds,
         "background": background,
         "health": {"status": status, **health_checks},
+        "pingOk": True,
+        "gnOk": gn_ok,
+        "dnOk": dn_ok,
+        "dnCount": dn_count,
     }
 
 
