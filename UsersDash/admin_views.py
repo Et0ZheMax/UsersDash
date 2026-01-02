@@ -30,6 +30,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
+from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 
 from UsersDash.models import (
@@ -200,6 +201,109 @@ def _merge_farmdata_for_move(
     if not target_fd:
         target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
         db.session.add(target_fd)
+
+
+def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
+    existing = FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+    if existing:
+        return existing
+
+    if db.session.bind and db.session.bind.dialect.name == "sqlite":
+        now = datetime.utcnow()
+        db.session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO farm_data
+                    (user_id, farm_name, created_at, updated_at)
+                VALUES
+                    (:user_id, :farm_name, :created_at, :updated_at)
+                """
+            ),
+            {
+                "user_id": user_id,
+                "farm_name": farm_name,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        return FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+
+    farm_data = FarmData(user_id=user_id, farm_name=farm_name)
+    db.session.add(farm_data)
+    return farm_data
+
+
+def _get_or_create_account_for_import(
+    *,
+    farm_name: str,
+    server_id: int,
+    owner_id: int,
+    internal_id: str | None,
+) -> Account:
+    acc = None
+    if internal_id:
+        acc = Account.query.filter_by(internal_id=internal_id).first()
+    if not acc:
+        acc = Account.query.filter_by(owner_id=owner_id, name=farm_name).first()
+    if acc:
+        return acc
+
+    if db.session.bind and db.session.bind.dialect.name == "sqlite":
+        now = datetime.utcnow()
+        db.session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO accounts
+                    (
+                        name,
+                        server_id,
+                        owner_id,
+                        internal_id,
+                        is_active,
+                        blocked_for_payment,
+                        created_at,
+                        updated_at
+                    )
+                VALUES
+                    (
+                        :name,
+                        :server_id,
+                        :owner_id,
+                        :internal_id,
+                        :is_active,
+                        :blocked_for_payment,
+                        :created_at,
+                        :updated_at
+                    )
+                """
+            ),
+            {
+                "name": farm_name,
+                "server_id": server_id,
+                "owner_id": owner_id,
+                "internal_id": internal_id,
+                "is_active": 1,
+                "blocked_for_payment": 0,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        acc = None
+        if internal_id:
+            acc = Account.query.filter_by(internal_id=internal_id).first()
+        if not acc:
+            acc = Account.query.filter_by(owner_id=owner_id, name=farm_name).first()
+        return acc
+
+    acc = Account(
+        name=farm_name,
+        server_id=server_id,
+        owner_id=owner_id,
+        internal_id=internal_id or None,
+        is_active=True,
+    )
+    db.session.add(acc)
+    return acc
 
 
 def _format_checked_at(raw_value: str | None) -> str | None:
@@ -2866,14 +2970,17 @@ def admin_farm_data_pull_apply():
 
             if acc is None:
                 owner_user = _get_or_create_client_for_farm(farm_name)
-                acc = Account(
-                    name=farm_name,
+                acc = _get_or_create_account_for_import(
+                    farm_name=farm_name,
                     server_id=server_obj.id,
                     owner_id=owner_user.id,
                     internal_id=internal_id or None,
-                    is_active=True,
                 )
-                db.session.add(acc)
+                if acc is None:
+                    warnings.append(
+                        f"{farm_name}: не удалось создать или найти аккаунт после конфликта уникальности"
+                    )
+                    continue
             else:
                 if acc.server_id != server_obj.id:
                     old_server = acc.server.name if acc.server else f"id={acc.server_id}"
@@ -2894,13 +3001,7 @@ def admin_farm_data_pull_apply():
                 if internal_id and acc.internal_id != internal_id:
                     acc.internal_id = internal_id
 
-            fd = FarmData.query.filter_by(
-                user_id=acc.owner_id,
-                farm_name=acc.name
-            ).first()
-            if not fd:
-                fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
-                db.session.add(fd)
+            fd = _get_or_create_farmdata_entry(acc.owner_id, acc.name)
 
             fd.email = (row.get("email") or "").strip() or None
             fd.password = (row.get("password") or "").strip() or None

@@ -76,6 +76,8 @@
 - Все данные по умолчанию находятся в каталоге `UsersDash/data`; при переносе окружения скопируйте его
   вместе с бэкапами из `UsersDash/data/backups`.
 - Миграционные скрипты `migrate_*.py` запускаются вручную: `python UsersDash/migrate_add_account_columns.py` и т.д.
+- Скрипт `UsersDash/migrate_add_unique_constraints.py` очищает дубликаты и добавляет уникальные индексы для
+  Account/FarmData перед включением ограничений.
 - Для резервных копий используется сервис `UsersDash/services/db_backup.py`, бэкапы создаются ежедневно
   фоновым потоком.
 
