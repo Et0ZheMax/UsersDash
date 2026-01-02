@@ -845,6 +845,74 @@ def _format_problem_summary(item: Dict[str, Any]) -> str:
     return " + ".join(parts)
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Приводит значение к int, если возможно."""
+
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_rss4sale_summary(
+    data: Dict[str, Any], server_name: str
+) -> Dict[str, Any]:
+    """Приводит ответ /api/problems/summary из RSS4SALE к формату UsersDash."""
+
+    accounts: list[dict[str, Any]] = []
+
+    log_problems = data.get("log_problems") if isinstance(data.get("log_problems"), dict) else {}
+    by_keyword = (
+        log_problems.get("by_keyword") if isinstance(log_problems.get("by_keyword"), dict) else {}
+    )
+
+    errors_count = _safe_int(by_keyword.get("error"))
+    warnings_count = _safe_int(by_keyword.get("warning"))
+    total_count = _safe_int(log_problems.get("total"))
+
+    summary_parts: list[str] = []
+    if errors_count:
+        summary_parts.append(f"Ошибок: {errors_count}")
+    if warnings_count:
+        summary_parts.append(f"Предупреждений: {warnings_count}")
+    if total_count and total_count != errors_count + warnings_count:
+        summary_parts.append(f"Всего: {total_count}")
+
+    if summary_parts:
+        accounts.append(
+            {
+                "nickname": "Логи",
+                "summary": ", ".join(summary_parts),
+                "total": total_count or errors_count + warnings_count,
+                "kind": "log_problems",
+            }
+        )
+
+    crashed = data.get("crashed") if isinstance(data.get("crashed"), dict) else {}
+    crashed_count = _safe_int(crashed.get("count"))
+
+    if crashed_count:
+        accounts.append(
+            {
+                "nickname": "Краши",
+                "summary": f"Крашей: {crashed_count}",
+                "total": crashed_count,
+                "kind": "crashed",
+            }
+        )
+
+    generated_at = data.get("generated_at")
+    if not generated_at and accounts:
+        generated_at = datetime.now(timezone.utc).isoformat()
+
+    return {
+        "server": data.get("server") or server_name,
+        "generated_at": generated_at,
+        "generated_at_fmt": _fmt_generated_at(generated_at),
+        "accounts": accounts,
+    }
+
+
 def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
     """
     Подтягивает сводку проблем с конкретного сервера (LD_problems → /api/problems/summary).
@@ -861,6 +929,11 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
     )
     if data is None:
         return None, f"Нет ответа от {url}"
+
+    if isinstance(data, dict) and "accounts" not in data and (
+        "log_problems" in data or "crashed" in data
+    ):
+        return _normalize_rss4sale_summary(data, getattr(server, "name", "")), ""
 
     accounts = []
     for item in data.get("accounts") or []:
