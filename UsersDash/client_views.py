@@ -7,6 +7,7 @@
 
 import json
 import re
+from datetime import datetime
 from flask import (
     Blueprint,
     render_template,
@@ -18,6 +19,7 @@ from flask import (
     g,
 )
 from flask_login import login_required, current_user
+from sqlalchemy import text
 from sqlalchemy.orm import joinedload
 from typing import Any
 from UsersDash.models import Account, FarmData, db
@@ -53,6 +55,36 @@ def _normalize_guid(raw: Any) -> str:
     """Унифицирует GUID/ID: нижний регистр и только цифро-буквы."""
 
     return re.sub(r"[^0-9a-z]", "", str(raw or "").lower())
+
+
+def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
+    existing = FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+    if existing:
+        return existing
+
+    if db.session.bind and db.session.bind.dialect.name == "sqlite":
+        now = datetime.utcnow()
+        db.session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO farm_data
+                    (user_id, farm_name, created_at, updated_at)
+                VALUES
+                    (:user_id, :farm_name, :created_at, :updated_at)
+                """
+            ),
+            {
+                "user_id": user_id,
+                "farm_name": farm_name,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        return FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+
+    farm_data = FarmData(user_id=user_id, farm_name=farm_name)
+    db.session.add(farm_data)
+    return farm_data
 
 
 @client_bp.before_app_request
@@ -1292,11 +1324,7 @@ def farm_data_save():
                 if not any([email, password_val, igg_id, server_val, telegram_tag_val]):
                     continue
 
-                fd = FarmData(
-                    user_id=current_user.id,
-                    farm_name=farm_name,
-                )
-                db.session.add(fd)
+                fd = _get_or_create_farmdata_entry(current_user.id, farm_name)
                 fd_by_key[key] = fd
 
             # Обновляем поля

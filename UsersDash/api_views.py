@@ -8,6 +8,7 @@
 from datetime import datetime
 
 from flask import Blueprint, request, jsonify
+from sqlalchemy import text
 from werkzeug.exceptions import BadRequest
 
 from UsersDash.models import db, Server, Account, FarmData, User
@@ -84,6 +85,36 @@ def _get_server_from_request() -> Server:
         raise BadRequest("Invalid token.")
 
     return srv
+
+
+def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
+    existing = FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+    if existing:
+        return existing
+
+    if db.session.bind and db.session.bind.dialect.name == "sqlite":
+        now = datetime.utcnow()
+        db.session.execute(
+            text(
+                """
+                INSERT OR IGNORE INTO farm_data
+                    (user_id, farm_name, created_at, updated_at)
+                VALUES
+                    (:user_id, :farm_name, :created_at, :updated_at)
+                """
+            ),
+            {
+                "user_id": user_id,
+                "farm_name": farm_name,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        return FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+
+    farm_data = FarmData(user_id=user_id, farm_name=farm_name)
+    db.session.add(farm_data)
+    return farm_data
 
 
 # ------------------------ GET /api/farms/v1 ------------------------------
@@ -263,18 +294,9 @@ def save_farms_v1():
             tariff_raw = row.get("tariff")
 
             # upsert FarmData
-            fd = (
-                FarmData.query
-                .filter_by(user_id=owner_id, farm_name=farm_name)
-                .first()
-            )
-
-            if not fd and any([email, login_val, password_val, igg_id, kingdom]):
-                fd = FarmData(
-                    user_id=owner_id,
-                    farm_name=farm_name,
-                )
-                db.session.add(fd)
+            fd = FarmData.query.filter_by(user_id=owner_id, farm_name=farm_name).first()
+            if not fd and any([email, login_val, password_val, igg_id, kingdom, telegram_tag]):
+                fd = _get_or_create_farmdata_entry(owner_id, farm_name)
 
             if fd:
                 fd.email = email or None
