@@ -34,6 +34,7 @@
             </select>
             <button class="btn btn-outline" type="button" data-role="template-apply" disabled>Применить</button>
         </div>
+        <button class="btn btn-outline" type="button" data-role="copy-settings-open">Копировать настройки</button>
     </div>
 
     <div class="manage-modern__mobile-nav" data-role="mobile-nav">
@@ -96,6 +97,53 @@
     </div>
 </div>
 
+<div class="modal copy-settings-modal" data-role="copy-settings-modal" hidden>
+    <div class="modal-backdrop" data-role="copy-settings-close"></div>
+    <div class="modal-dialog copy-settings-modal__dialog">
+        <div class="modal-header">
+            <div>
+                <div class="copy-settings-modal__title">Копирование настроек</div>
+                <div class="copy-settings-modal__subtitle">Перенесите manage-настройки из другой фермы.</div>
+            </div>
+            <button class="modal-close-btn" type="button" data-role="copy-settings-close" aria-label="Закрыть">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="copy-settings-modal__grid">
+                <div class="copy-settings-modal__section">
+                    <div class="copy-settings-modal__label">Целевая ферма</div>
+                    <div class="copy-settings-modal__target" data-role="copy-target">—</div>
+                </div>
+                <div class="copy-settings-modal__section">
+                    <label class="copy-settings-modal__label" for="copy-source-select">Источник настроек</label>
+                    <select class="form-input copy-settings-modal__select" id="copy-source-select" data-role="copy-source-select">
+                        <option value="">Выберите ферму</option>
+                    </select>
+                    <div class="copy-settings-modal__meta" data-role="copy-source-meta"></div>
+                </div>
+            </div>
+            <div class="copy-settings-modal__divider"></div>
+            <div class="copy-settings-modal__note">
+                <div class="copy-settings-modal__note-title">Что будет скопировано</div>
+                <ul class="copy-settings-modal__list">
+                    <li>Состояния шагов (включён/выключен).</li>
+                    <li>Настройки Config и расписание ScheduleRules.</li>
+                    <li>Шаги, которых нет в целевой ферме, будут пропущены.</li>
+                </ul>
+            </div>
+            <label class="config-checkbox copy-settings-modal__confirm">
+                <input class="config-checkbox__input" type="checkbox" data-role="copy-confirm">
+                <span class="config-checkbox__box"></span>
+                <span class="config-checkbox__label">Подтверждаю, что текущие настройки фермы будут перезаписаны.</span>
+            </label>
+            <div class="copy-settings-modal__status" data-role="copy-status"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline" type="button" data-role="copy-settings-close">Отмена</button>
+            <button class="btn btn-primary" type="button" data-role="copy-settings-confirm" disabled>Копировать</button>
+        </div>
+    </div>
+</div>
+
 {% if steps_error %}
     <div class="manage-error">{{ steps_error }}</div>
 {% endif %}
@@ -106,6 +154,7 @@
     {% set update_url = url_for('client.manage_update_step', account_id=0, step_idx=0) %}
     {% set account_toggle_url = url_for('client.manage_toggle_account_active', account_id=0) %}
     {% set apply_defaults_url = url_for('client.manage_apply_defaults', account_id=0) %}
+    {% set copy_settings_url = url_for('admin.copy_account_settings', account_id=0) %}
 
     window.manageIsAdmin = true;
     window.manageInitialState = {
@@ -127,11 +176,24 @@
         updateUrlTemplate: {{ update_url.replace('0', '__ACCOUNT__', 1).replace('0', '__STEP__', 1)|tojson }},
         accountToggleUrlTemplate: {{ account_toggle_url.replace('0', '__ACCOUNT__', 1)|tojson }},
         applyDefaultsUrlTemplate: {{ apply_defaults_url.replace('0', '__ACCOUNT__', 1)|tojson }},
+        copySettingsUrlTemplate: {{ copy_settings_url.replace('0', '__ACCOUNT__', 1)|tojson }},
     };
 
     function goBack() {
         window.location.href = {{ url_for('admin.admin_dashboard')|tojson }};
     }
+
+    window.manageAdminAccounts = [
+        {% for acc in accounts %}
+        {
+            id: {{ acc.id }},
+            name: {{ acc.name|tojson }},
+            server: {{ (acc.server.name if acc.server else 'N/A')|tojson }},
+            owner: {{ (acc.owner.username if acc.owner else '—')|tojson }},
+            is_active: {{ 1 if acc.is_active else 0 }},
+        }{% if not loop.last %},{% endif %}
+        {% endfor %}
+    ];
 </script>
 <script src="{{ url_for('static', filename='js/manage.js') }}"></script>
 {% endblock %}
