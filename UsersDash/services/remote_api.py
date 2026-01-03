@@ -683,57 +683,68 @@ def copy_manage_settings_for_accounts(
     return False, _format_http_error(resp)
 
 
-def _extract_steps_from_settings(raw_settings: Any) -> list | None:
-    if isinstance(raw_settings, dict):
-        steps = raw_settings.get("Data") or raw_settings.get("data")
-    elif isinstance(raw_settings, list):
-        steps = raw_settings
-    else:
-        steps = None
+def update_account_settings_full(
+    account,
+    payload: Dict[str, Any],
+) -> Tuple[bool, str]:
+    """Перезаписывает настройки аккаунта целиком через API."""
+    server = getattr(account, "server", None)
+    if not server:
+        return False, "server is not set for account"
 
-    return steps if isinstance(steps, list) else None
+    base = _get_effective_api_base(server)
+    if not base:
+        return False, "api_base_url is empty"
+
+    server_resources = fetch_resources_for_server(server)
+    remote_id, _ = _resolve_remote_account(account, server_resources)
+    if not remote_id:
+        fallback_remote = getattr(account, "internal_id", None) or getattr(account, "name", None)
+        if fallback_remote:
+            remote_id = str(fallback_remote)
+
+    if not remote_id:
+        return False, "unable to resolve remote_id for account"
+
+    url = f"{base}/manage/account/{remote_id}/settings"
+
+    try:
+        resp = requests.put(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except Exception as exc:
+        print(f"[remote_api] ERROR: PUT {url} failed: {exc}")
+        return False, str(exc)
+
+    if 200 <= resp.status_code < 300:
+        return True, "OK"
+
+    return False, _format_http_error(resp)
 
 
 def copy_manage_settings_cross_server(
     source_account,
     target_accounts: list,
 ) -> Tuple[bool, str]:
-    """Копирует manage-настройки между серверами через пошаговое обновление."""
+    """Копирует manage-настройки между серверами 1-в-1."""
     if not target_accounts:
         return False, "target_accounts is empty"
 
     source_settings = fetch_account_settings(source_account)
-    source_steps = _extract_steps_from_settings(source_settings)
-    if not source_steps:
+    if not isinstance(source_settings, dict):
         return False, "unable to load source settings"
 
+    payload: dict[str, Any] = {}
+    if isinstance(source_settings.get("Data"), list):
+        payload["Data"] = source_settings.get("Data")
+    else:
+        return False, "source settings has no Data"
+
+    if isinstance(source_settings.get("MenuData"), dict):
+        payload["MenuData"] = source_settings.get("MenuData")
+
     for target_account in target_accounts:
-        target_settings = fetch_account_settings(target_account)
-        target_steps = _extract_steps_from_settings(target_settings)
-        if target_steps is None:
-            return False, "unable to load target settings"
-
-        if len(target_steps) != len(source_steps):
-            return False, f"step count mismatch for account {getattr(target_account, 'id', '?')}"
-
-        for idx, source_step in enumerate(source_steps):
-            if not isinstance(source_step, dict):
-                continue
-
-            payload: dict[str, Any] = {}
-            if "IsActive" in source_step:
-                payload["IsActive"] = bool(source_step.get("IsActive"))
-            if isinstance(source_step.get("Config"), dict):
-                payload["Config"] = source_step.get("Config")
-            if isinstance(source_step.get("ScheduleRules"), list):
-                payload["ScheduleRules"] = source_step.get("ScheduleRules")
-
-            if not payload:
-                continue
-
-            ok, msg = update_account_step_settings(target_account, idx, payload)
-            if not ok:
-                return False, msg
+        ok, msg = update_account_settings_full(target_account, payload)
+        if not ok:
+            return False, msg
 
     return True, "OK"
 
