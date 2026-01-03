@@ -8,6 +8,7 @@ import csv
 import io
 import json
 import difflib
+import copy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from calendar import monthrange
@@ -62,6 +63,7 @@ from UsersDash.services.remote_api import (
     rename_template_payload,
     save_template_payload,
     update_account_active,
+    update_account_step_settings,
     delete_template_payload,
 )
 from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
@@ -1620,6 +1622,125 @@ def manage():
         selected_tariff_price=selected_tariff_price,
         selected_tariff_name=selected_tariff_name,
         selected_has_defaults=selected_has_defaults,
+    )
+
+
+@admin_bp.route("/manage/account/<int:account_id>/copy-settings", methods=["POST"])
+@login_required
+def copy_account_settings(account_id: int):
+    """Копирует manage-настройки из одного аккаунта в другой."""
+
+    admin_required()
+
+    payload = request.get_json(silent=True) or {}
+    source_id = payload.get("source_account_id")
+    if source_id is None:
+        return jsonify({"ok": False, "error": "source_account_id is required"}), 400
+
+    try:
+        source_id = int(source_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "source_account_id must be int"}), 400
+
+    if source_id == account_id:
+        return jsonify({"ok": False, "error": "source and target accounts must differ"}), 400
+
+    accounts_query = Account.query.options(joinedload(Account.server), joinedload(Account.owner))
+    target_account = accounts_query.filter_by(id=account_id).first()
+    source_account = accounts_query.filter_by(id=source_id).first()
+
+    if not target_account or not source_account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    from UsersDash.client_views import _extract_steps_and_menu
+
+    source_settings = fetch_account_settings(source_account)
+    target_settings = fetch_account_settings(target_account)
+    source_steps, _ = _extract_steps_and_menu(source_settings) if source_settings else ([], {})
+    target_steps, _ = _extract_steps_and_menu(target_settings) if target_settings else ([], {})
+
+    if not source_steps:
+        return jsonify({"ok": False, "error": "source settings are empty"}), 502
+    if not target_steps:
+        return jsonify({"ok": False, "error": "target settings are empty"}), 502
+
+    warnings: list[str] = []
+    if len(source_steps) != len(target_steps):
+        warnings.append(
+            f"Количество шагов отличается: источник {len(source_steps)}, цель {len(target_steps)}. "
+            "Будут обработаны только совпадающие шаги."
+        )
+    if source_account.server_id != target_account.server_id:
+        warnings.append(
+            "Аккаунты находятся на разных серверах. Проверьте корректность совпадения сценариев."
+        )
+
+    limit = min(len(source_steps), len(target_steps))
+    copied_steps = 0
+    failed_steps: list[dict[str, str | int]] = []
+
+    with settings_audit_context(
+        target_account.owner,
+        current_user,
+        "settings_copy",
+        {
+            "account": target_account,
+            "field": "bulk_copy",
+            "source_account_id": source_account.id,
+            "source_account_name": source_account.name,
+        },
+    ) as audit_ctx:
+        for idx in range(limit):
+            step = source_steps[idx]
+            if not isinstance(step, dict):
+                continue
+            update_payload: dict[str, Any] = {}
+            if "IsActive" in step:
+                update_payload["IsActive"] = bool(step.get("IsActive"))
+            if isinstance(step.get("Config"), dict):
+                update_payload["Config"] = copy.deepcopy(step.get("Config"))
+            if isinstance(step.get("ScheduleRules"), list):
+                update_payload["ScheduleRules"] = copy.deepcopy(step.get("ScheduleRules"))
+
+            if not update_payload:
+                continue
+
+            ok, msg = update_account_step_settings(target_account, idx, update_payload)
+            if not ok:
+                failed_steps.append({"step_idx": idx, "message": msg})
+                break
+
+            copied_steps += 1
+
+        audit_ctx["new_value"] = {
+            "source_account_id": source_account.id,
+            "target_account_id": target_account.id,
+            "copied_steps": copied_steps,
+            "failed_steps": failed_steps,
+            "warnings": warnings,
+        }
+        audit_ctx["result"] = "ok" if not failed_steps else "failed"
+
+    if failed_steps:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "failed to copy settings",
+                    "failed_steps": failed_steps,
+                    "copied_steps": copied_steps,
+                    "warnings": warnings,
+                }
+            ),
+            502,
+        )
+
+    return jsonify(
+        {
+            "ok": True,
+            "copied_steps": copied_steps,
+            "warnings": warnings,
+        }
     )
 
 

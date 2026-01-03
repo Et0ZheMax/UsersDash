@@ -172,6 +172,7 @@
         updateUrlTemplate: "",
         accountToggleUrlTemplate: "",
         applyDefaultsUrlTemplate: "",
+        copySettingsUrlTemplate: "",
         selectedStepIndex: null,
         scheduleDrafts: {},
         templatesCache: {},
@@ -191,6 +192,7 @@
     state.updateUrlTemplate = state.updateUrlTemplate || "/manage/account/__ACCOUNT__/settings/__STEP__";
     state.accountToggleUrlTemplate = state.accountToggleUrlTemplate || "/manage/account/__ACCOUNT__/toggle-active";
     state.applyDefaultsUrlTemplate = state.applyDefaultsUrlTemplate || "/manage/account/__ACCOUNT__/apply-defaults";
+    state.copySettingsUrlTemplate = state.copySettingsUrlTemplate || "/manage/account/__ACCOUNT__/copy-settings";
 
     const accountsRoot = document.querySelector('[data-role="manage-accounts"]');
     const stepsRoot = document.querySelector('[data-role="manage-steps"]');
@@ -208,6 +210,16 @@
     const templateControls = document.querySelector('[data-role="template-controls"]');
     const templateSelect = document.querySelector('[data-role="template-select"]');
     const templateApplyBtn = document.querySelector('[data-role="template-apply"]');
+    const copyOpenBtn = document.querySelector('[data-role="copy-settings-open"]');
+    const copyModal = document.querySelector('[data-role="copy-settings-modal"]');
+    const copyCloseBtns = Array.from(document.querySelectorAll('[data-role="copy-settings-close"]'));
+    const copySourceSelect = document.querySelector('[data-role="copy-source-select"]');
+    const copyTargetLabel = document.querySelector('[data-role="copy-target"]');
+    const copySourceMeta = document.querySelector('[data-role="copy-source-meta"]');
+    const copyConfirmInput = document.querySelector('[data-role="copy-confirm"]');
+    const copyStatus = document.querySelector('[data-role="copy-status"]');
+    const copyConfirmBtn = document.querySelector('[data-role="copy-settings-confirm"]');
+    const adminAccounts = Array.isArray(window.manageAdminAccounts) ? window.manageAdminAccounts : [];
     const mobileNavTitle = document.querySelector('[data-role="mobile-title"]');
     const mobileNavSubtitle = document.querySelector('[data-role="mobile-subtitle"]');
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
@@ -1022,6 +1034,8 @@
         }
 
         updateDefaultsButtonState();
+        updateCopyTargetLabel();
+        updateCopyOpenState();
     }
 
     function updateDefaultsButtonState() {
@@ -1061,6 +1075,164 @@
                 defaultsModal.hidden = true;
             }
         }, 160);
+    }
+
+    function setCopyStatus(message = "", status = "") {
+        if (!copyStatus) return;
+        copyStatus.textContent = message;
+        copyStatus.classList.remove("is-error", "is-success", "is-warning");
+        if (status) {
+            copyStatus.classList.add(`is-${status}`);
+        }
+    }
+
+    function formatAccountLabel(account) {
+        const name = account && account.name ? account.name : "—";
+        const server = account && account.server ? account.server : "N/A";
+        const owner = account && account.owner ? account.owner : "—";
+        return `${name} · ${server} · ${owner}`;
+    }
+
+    function updateCopyTargetLabel() {
+        if (!copyTargetLabel) return;
+        if (!state.selectedAccountId) {
+            copyTargetLabel.textContent = "—";
+            return;
+        }
+        copyTargetLabel.textContent = formatAccountLabel({
+            name: state.selectedAccountName,
+            server: state.selectedServerName,
+            owner: "",
+        });
+    }
+
+    function updateCopyOpenState() {
+        if (!copyOpenBtn) return;
+        copyOpenBtn.disabled = !state.selectedAccountId;
+    }
+
+    function updateCopySourceMeta() {
+        if (!copySourceMeta || !copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        const account = adminAccounts.find((acc) => Number(acc.id) === sourceId);
+        if (!account) {
+            copySourceMeta.textContent = "";
+            return;
+        }
+        const status = account.is_active ? "активна" : "неактивна";
+        copySourceMeta.textContent = `${account.server || "N/A"} · ${account.owner || "—"} · ${status}`;
+    }
+
+    function updateCopyConfirmState() {
+        if (!copyConfirmBtn || !copySourceSelect || !copyConfirmInput) return;
+        const hasSource = Boolean(copySourceSelect.value);
+        const confirmed = Boolean(copyConfirmInput.checked);
+        const hasTarget = Boolean(state.selectedAccountId);
+        copyConfirmBtn.disabled = !(hasSource && confirmed && hasTarget);
+    }
+
+    function renderCopyOptions() {
+        if (!copySourceSelect) return;
+        const targetId = Number(state.selectedAccountId);
+        const accounts = adminAccounts.filter((acc) => Number(acc.id) !== targetId);
+        copySourceSelect.innerHTML = "";
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = accounts.length ? "Выберите ферму" : "Нет доступных ферм";
+        placeholder.selected = true;
+        copySourceSelect.appendChild(placeholder);
+
+        accounts.forEach((acc) => {
+            const option = document.createElement("option");
+            option.value = String(acc.id);
+            option.textContent = formatAccountLabel(acc);
+            copySourceSelect.appendChild(option);
+        });
+    }
+
+    function openCopyModal() {
+        if (!copyModal) return;
+        renderCopyOptions();
+        updateCopyTargetLabel();
+        updateCopySourceMeta();
+        setCopyStatus("");
+        if (copyConfirmInput) copyConfirmInput.checked = false;
+        updateCopyConfirmState();
+
+        copyModal.hidden = false;
+        requestAnimationFrame(() => copyModal.classList.add("is-open"));
+        document.body.classList.add("has-modal");
+    }
+
+    function closeCopyModal() {
+        if (!copyModal) return;
+        copyModal.classList.remove("is-open");
+        document.body.classList.remove("has-modal");
+        setTimeout(() => {
+            if (!copyModal.classList.contains("is-open")) {
+                copyModal.hidden = true;
+            }
+        }, 160);
+    }
+
+    async function applyCopySettings() {
+        if (!state.selectedAccountId || !copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        if (!sourceId) {
+            setCopyStatus("Выберите аккаунт-источник.", "error");
+            return;
+        }
+        if (sourceId === Number(state.selectedAccountId)) {
+            setCopyStatus("Источник и целевая ферма совпадают.", "error");
+            return;
+        }
+
+        const originalText = copyConfirmBtn ? copyConfirmBtn.textContent : "";
+        if (copyConfirmBtn) {
+            copyConfirmBtn.disabled = true;
+            copyConfirmBtn.textContent = "Копируем...";
+        }
+        setCopyStatus("");
+
+        try {
+            const url = replaceTemplate(state.copySettingsUrlTemplate, state.selectedAccountId);
+            const resp = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ source_account_id: sourceId }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось копировать настройки");
+            }
+
+            const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+            const copied = typeof data.copied_steps === "number" ? data.copied_steps : 0;
+            const baseMessage = `Скопировано шагов: ${copied}.`;
+            if (warnings.length) {
+                setCopyStatus(`${baseMessage} ${warnings.join(" ")}`, "warning");
+            } else {
+                setCopyStatus("Настройки успешно скопированы.", "success");
+            }
+
+            await loadSteps(state.selectedAccountId, {
+                name: state.selectedAccountName,
+                server: state.selectedServerName,
+            });
+            if (!warnings.length) {
+                setTimeout(closeCopyModal, 200);
+                showMiniToast("Настройки скопированы", "success");
+            }
+        } catch (err) {
+            console.error(err);
+            setCopyStatus(err.message || "Не удалось копировать настройки", "error");
+        } finally {
+            if (copyConfirmBtn) {
+                copyConfirmBtn.textContent = originalText || "Копировать";
+            }
+            updateCopyConfirmState();
+        }
     }
 
 
@@ -2143,6 +2315,32 @@
             templateApplyBtn.addEventListener('click', applyTemplateForCurrentAccount);
         }
 
+        if (copyOpenBtn) {
+            copyOpenBtn.addEventListener('click', openCopyModal);
+        }
+        copyCloseBtns.forEach((btn) => {
+            btn.addEventListener('click', closeCopyModal);
+        });
+        if (copySourceSelect) {
+            copySourceSelect.addEventListener('change', () => {
+                updateCopySourceMeta();
+                updateCopyConfirmState();
+            });
+        }
+        if (copyConfirmInput) {
+            copyConfirmInput.addEventListener('change', updateCopyConfirmState);
+        }
+        if (copyConfirmBtn) {
+            copyConfirmBtn.addEventListener('click', applyCopySettings);
+        }
+        if (copyModal) {
+            copyModal.addEventListener('click', (event) => {
+                if (event.target === copyModal) {
+                    closeCopyModal();
+                }
+            });
+        }
+
         if (defaultsModal) {
             defaultsModal.addEventListener('click', (event) => {
                 if (event.target === defaultsModal) {
@@ -2154,6 +2352,7 @@
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 closeDefaultsConfirm();
+                closeCopyModal();
             }
         });
 
@@ -2163,6 +2362,7 @@
         syncAccountsUi();
 
         updateDefaultsButtonState();
+        updateCopyOpenState();
         if (isAdminManage) {
             setTemplateControlsVisibility(state.selectedAccountId);
             if (state.selectedAccountId) {
