@@ -621,6 +621,68 @@ def update_account_active(account, is_active: bool) -> Tuple[bool, str]:
     return False, _format_http_error(resp)
 
 
+def copy_manage_settings_for_accounts(
+    source_account,
+    target_accounts: list,
+) -> Tuple[bool, str]:
+    """Копирует manage-настройки source_account во все target_accounts через API."""
+    if not target_accounts:
+        return False, "target_accounts is empty"
+
+    server = getattr(source_account, "server", None)
+    if not server:
+        return False, "server is not set for source account"
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return False, "api_base_url is empty"
+
+    server_resources = fetch_resources_for_server(server)
+    source_remote_id, _ = _resolve_remote_account(source_account, server_resources)
+    if not source_remote_id:
+        fallback_remote = getattr(source_account, "internal_id", None) or getattr(source_account, "name", None)
+        if fallback_remote:
+            source_remote_id = str(fallback_remote)
+
+    if not source_remote_id:
+        return False, "unable to resolve remote_id for source account"
+
+    target_remote_ids: list[str] = []
+    for acc in target_accounts:
+        if getattr(acc, "server_id", None) != getattr(source_account, "server_id", None):
+            return False, "target account is on another server"
+        remote_id, _ = _resolve_remote_account(acc, server_resources)
+        if not remote_id:
+            fallback_remote = getattr(acc, "internal_id", None) or getattr(acc, "name", None)
+            if fallback_remote:
+                remote_id = str(fallback_remote)
+        if not remote_id:
+            return False, f"unable to resolve remote_id for account {getattr(acc, 'id', '?')}"
+        target_remote_ids.append(str(remote_id))
+
+    url = f"{base}/manage/copy_settings"
+    payload = {"source_id": str(source_remote_id), "dest_ids": target_remote_ids}
+
+    try:
+        resp = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except Exception as exc:
+        print(f"[remote_api] ERROR: POST {url} failed: {exc}")
+        return False, str(exc)
+
+    if 200 <= resp.status_code < 300:
+        try:
+            body = resp.json() or {}
+        except Exception:
+            body = {}
+
+        status = body.get("status") or body.get("ok")
+        if status == "ok" or status is True:
+            return True, "OK"
+        return False, body.get("message") or body.get("error") or "copy failed"
+
+    return False, _format_http_error(resp)
+
+
 def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
     """
     Применяет manage-шаблон к аккаунту через

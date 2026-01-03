@@ -172,6 +172,7 @@
         updateUrlTemplate: "",
         accountToggleUrlTemplate: "",
         applyDefaultsUrlTemplate: "",
+        copySettingsUrlTemplate: "",
         selectedStepIndex: null,
         scheduleDrafts: {},
         templatesCache: {},
@@ -191,6 +192,7 @@
     state.updateUrlTemplate = state.updateUrlTemplate || "/manage/account/__ACCOUNT__/settings/__STEP__";
     state.accountToggleUrlTemplate = state.accountToggleUrlTemplate || "/manage/account/__ACCOUNT__/toggle-active";
     state.applyDefaultsUrlTemplate = state.applyDefaultsUrlTemplate || "/manage/account/__ACCOUNT__/apply-defaults";
+    state.copySettingsUrlTemplate = state.copySettingsUrlTemplate || "/manage/account/__ACCOUNT__/copy-settings";
 
     const accountsRoot = document.querySelector('[data-role="manage-accounts"]');
     const stepsRoot = document.querySelector('[data-role="manage-steps"]');
@@ -208,6 +210,18 @@
     const templateControls = document.querySelector('[data-role="template-controls"]');
     const templateSelect = document.querySelector('[data-role="template-select"]');
     const templateApplyBtn = document.querySelector('[data-role="template-apply"]');
+    const copyOpenBtn = document.querySelector('[data-role="copy-settings-open"]');
+    const copyModal = document.querySelector('[data-role="copy-settings-modal"]');
+    const copyCloseBtns = Array.from(document.querySelectorAll('[data-role="copy-settings-close"]'));
+    const copySourceSelect = document.querySelector('[data-role="copy-source-select"]');
+    const copyTargetsWrap = document.querySelector('[data-role="copy-targets"]');
+    const copyTargetsAll = document.querySelector('[data-role="copy-targets-all"]');
+    const copyTargetsHint = document.querySelector('[data-role="copy-targets-hint"]');
+    const copySourceMeta = document.querySelector('[data-role="copy-source-meta"]');
+    const copyConfirmInput = document.querySelector('[data-role="copy-confirm"]');
+    const copyStatus = document.querySelector('[data-role="copy-status"]');
+    const copyConfirmBtn = document.querySelector('[data-role="copy-settings-confirm"]');
+    const adminAccounts = Array.isArray(window.manageAdminAccounts) ? window.manageAdminAccounts : [];
     const mobileNavTitle = document.querySelector('[data-role="mobile-title"]');
     const mobileNavSubtitle = document.querySelector('[data-role="mobile-subtitle"]');
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
@@ -1022,6 +1036,7 @@
         }
 
         updateDefaultsButtonState();
+        updateCopyOpenState();
     }
 
     function updateDefaultsButtonState() {
@@ -1061,6 +1076,217 @@
                 defaultsModal.hidden = true;
             }
         }, 160);
+    }
+
+    function setCopyStatus(message = "", status = "") {
+        if (!copyStatus) return;
+        copyStatus.textContent = message;
+        copyStatus.classList.remove("is-error", "is-success", "is-warning");
+        if (status) {
+            copyStatus.classList.add(`is-${status}`);
+        }
+    }
+
+    function getAccountById(accountId) {
+        return adminAccounts.find((acc) => Number(acc.id) === Number(accountId));
+    }
+
+    function formatAccountLabel(account) {
+        const name = account && account.name ? account.name : "—";
+        const server = account && account.server ? account.server : "N/A";
+        const owner = account && account.owner ? account.owner : "—";
+        return `${name} · ${server} · ${owner}`;
+    }
+
+    function updateCopyOpenState() {
+        if (!copyOpenBtn) return;
+        copyOpenBtn.disabled = adminAccounts.length < 2;
+    }
+
+    function renderSourceOptions() {
+        if (!copySourceSelect) return;
+        const accounts = adminAccounts.slice().sort((a, b) => {
+            return (a.name || "").localeCompare((b.name || ""), "ru");
+        });
+        copySourceSelect.innerHTML = "";
+
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = accounts.length ? "Выберите ферму" : "Нет доступных ферм";
+        placeholder.selected = true;
+        copySourceSelect.appendChild(placeholder);
+
+        accounts.forEach((acc) => {
+            const option = document.createElement("option");
+            option.value = String(acc.id);
+            option.textContent = formatAccountLabel(acc);
+            copySourceSelect.appendChild(option);
+        });
+
+        if (state.selectedAccountId) {
+            copySourceSelect.value = String(state.selectedAccountId);
+        }
+    }
+
+    function updateCopySourceMeta() {
+        if (!copySourceMeta || !copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        const account = getAccountById(sourceId);
+        if (!account) {
+            copySourceMeta.textContent = "";
+            return;
+        }
+        const status = account.is_active ? "активна" : "неактивна";
+        copySourceMeta.textContent = `${account.server || "N/A"} · ${account.owner || "—"} · ${status}`;
+    }
+
+    function renderTargetOptions() {
+        if (!copyTargetsWrap || !copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        const sourceAccount = getAccountById(sourceId);
+        const sourceServerId = sourceAccount ? sourceAccount.server_id : null;
+        const targets = adminAccounts
+            .filter((acc) => Number(acc.id) !== sourceId)
+            .filter((acc) => sourceServerId === null || acc.server_id === sourceServerId)
+            .sort((a, b) => (a.name || "").localeCompare((b.name || ""), "ru"));
+
+        copyTargetsWrap.innerHTML = "";
+        targets.forEach((acc) => {
+            const label = document.createElement("label");
+            label.className = "copy-settings-modal__target-item";
+            label.innerHTML = `
+                <input type="checkbox" value="${acc.id}">
+                <span>${formatAccountLabel(acc)}</span>
+            `;
+            copyTargetsWrap.appendChild(label);
+        });
+
+        if (copyTargetsHint) {
+            if (!sourceAccount) {
+                copyTargetsHint.textContent = "Выберите источник, чтобы увидеть доступные цели.";
+            } else if (!targets.length) {
+                copyTargetsHint.textContent = "На этом сервере нет других ферм для копирования.";
+            } else {
+                copyTargetsHint.textContent = "";
+            }
+        }
+
+        if (copyTargetsAll) {
+            copyTargetsAll.checked = false;
+            copyTargetsAll.disabled = !targets.length;
+        }
+    }
+
+    function collectSelectedTargetIds() {
+        if (!copyTargetsWrap) return [];
+        return Array.from(copyTargetsWrap.querySelectorAll("input[type='checkbox']:checked"))
+            .map((el) => Number(el.value))
+            .filter((id) => !Number.isNaN(id));
+    }
+
+    function updateTargetsAllState() {
+        if (!copyTargetsAll || !copyTargetsWrap) return;
+        const boxes = Array.from(copyTargetsWrap.querySelectorAll("input[type='checkbox']"));
+        if (!boxes.length) {
+            copyTargetsAll.checked = false;
+            copyTargetsAll.disabled = true;
+            return;
+        }
+        const checked = boxes.filter((el) => el.checked).length;
+        copyTargetsAll.checked = checked > 0 && checked === boxes.length;
+        copyTargetsAll.disabled = false;
+    }
+
+    function toggleTargetsAll() {
+        if (!copyTargetsAll || !copyTargetsWrap) return;
+        const boxes = Array.from(copyTargetsWrap.querySelectorAll("input[type='checkbox']"));
+        boxes.forEach((el) => {
+            el.checked = copyTargetsAll.checked;
+        });
+        updateCopyConfirmState();
+    }
+
+    function updateCopyConfirmState() {
+        if (!copyConfirmBtn || !copySourceSelect || !copyConfirmInput) return;
+        const hasSource = Boolean(copySourceSelect.value);
+        const confirmed = Boolean(copyConfirmInput.checked);
+        const selectedTargets = collectSelectedTargetIds();
+        copyConfirmBtn.disabled = !(hasSource && confirmed && selectedTargets.length);
+    }
+
+    function openCopyModal() {
+        if (!copyModal) return;
+        renderSourceOptions();
+        updateCopySourceMeta();
+        renderTargetOptions();
+        updateTargetsAllState();
+        setCopyStatus("");
+        if (copyConfirmInput) copyConfirmInput.checked = false;
+        updateCopyConfirmState();
+
+        copyModal.hidden = false;
+        requestAnimationFrame(() => copyModal.classList.add("is-open"));
+        document.body.classList.add("has-modal");
+    }
+
+    function closeCopyModal() {
+        if (!copyModal) return;
+        copyModal.classList.remove("is-open");
+        document.body.classList.remove("has-modal");
+        setTimeout(() => {
+            if (!copyModal.classList.contains("is-open")) {
+                copyModal.hidden = true;
+            }
+        }, 160);
+    }
+
+    async function applyCopySettings() {
+        if (!copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        const targetIds = collectSelectedTargetIds();
+        if (!sourceId) {
+            setCopyStatus("Выберите аккаунт-источник.", "error");
+            return;
+        }
+        if (!targetIds.length) {
+            setCopyStatus("Выберите хотя бы одну целевую ферму.", "error");
+            return;
+        }
+
+        const originalText = copyConfirmBtn ? copyConfirmBtn.textContent : "";
+        if (copyConfirmBtn) {
+            copyConfirmBtn.disabled = true;
+            copyConfirmBtn.textContent = "Копируем...";
+        }
+        setCopyStatus("");
+
+        try {
+            const url = state.copySettingsUrlTemplate;
+            const resp = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    source_account_id: sourceId,
+                    target_account_ids: targetIds,
+                }),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось копировать настройки");
+            }
+
+            const copiedCount = typeof data.copied_accounts === "number" ? data.copied_accounts : 0;
+            setCopyStatus(`Настройки скопированы для ${copiedCount} фермы(м).`, "success");
+            showMiniToast("Настройки скопированы", "success");
+        } catch (err) {
+            console.error(err);
+            setCopyStatus(err.message || "Не удалось копировать настройки", "error");
+        } finally {
+            if (copyConfirmBtn) {
+                copyConfirmBtn.textContent = originalText || "Копировать";
+            }
+            updateCopyConfirmState();
+        }
     }
 
 
@@ -2143,6 +2369,43 @@
             templateApplyBtn.addEventListener('click', applyTemplateForCurrentAccount);
         }
 
+        if (copyOpenBtn) {
+            copyOpenBtn.addEventListener('click', openCopyModal);
+        }
+        copyCloseBtns.forEach((btn) => {
+            btn.addEventListener('click', closeCopyModal);
+        });
+        if (copySourceSelect) {
+            copySourceSelect.addEventListener('change', () => {
+                updateCopySourceMeta();
+                renderTargetOptions();
+                updateTargetsAllState();
+                updateCopyConfirmState();
+            });
+        }
+        if (copyTargetsWrap) {
+            copyTargetsWrap.addEventListener('change', () => {
+                updateTargetsAllState();
+                updateCopyConfirmState();
+            });
+        }
+        if (copyTargetsAll) {
+            copyTargetsAll.addEventListener('change', toggleTargetsAll);
+        }
+        if (copyConfirmInput) {
+            copyConfirmInput.addEventListener('change', updateCopyConfirmState);
+        }
+        if (copyConfirmBtn) {
+            copyConfirmBtn.addEventListener('click', applyCopySettings);
+        }
+        if (copyModal) {
+            copyModal.addEventListener('click', (event) => {
+                if (event.target === copyModal) {
+                    closeCopyModal();
+                }
+            });
+        }
+
         if (defaultsModal) {
             defaultsModal.addEventListener('click', (event) => {
                 if (event.target === defaultsModal) {
@@ -2154,6 +2417,7 @@
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 closeDefaultsConfirm();
+                closeCopyModal();
             }
         });
 
@@ -2163,6 +2427,7 @@
         syncAccountsUi();
 
         updateDefaultsButtonState();
+        updateCopyOpenState();
         if (isAdminManage) {
             setTemplateControlsVisibility(state.selectedAccountId);
             if (state.selectedAccountId) {

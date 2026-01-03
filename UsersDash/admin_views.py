@@ -45,7 +45,7 @@ from UsersDash.models import (
 from UsersDash.config import Config
 from UsersDash.services.db_backup import backup_database
 from UsersDash.services import client_config_visibility
-from UsersDash.services.audit import settings_audit_context
+from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.remote_api import (
     _resolve_remote_account,
     fetch_account_settings,
@@ -62,6 +62,7 @@ from UsersDash.services.remote_api import (
     rename_template_payload,
     save_template_payload,
     update_account_active,
+    copy_manage_settings_for_accounts,
     delete_template_payload,
 )
 from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
@@ -1621,6 +1622,83 @@ def manage():
         selected_tariff_name=selected_tariff_name,
         selected_has_defaults=selected_has_defaults,
     )
+
+
+@admin_bp.route("/manage/copy-settings", methods=["POST"])
+@admin_bp.route("/manage/account/<int:account_id>/copy-settings", methods=["POST"])
+@login_required
+def copy_account_settings(account_id: int | None = None):
+    """Копирует manage-настройки между аккаунтами одной машины."""
+
+    admin_required()
+
+    payload = request.get_json(silent=True) or {}
+    source_id = payload.get("source_account_id") or account_id
+    target_ids = payload.get("target_account_ids") or []
+
+    if source_id is None:
+        return jsonify({"ok": False, "error": "source_account_id is required"}), 400
+
+    try:
+        source_id = int(source_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "source_account_id must be int"}), 400
+
+    if isinstance(target_ids, str):
+        target_ids = [target_ids]
+    if not isinstance(target_ids, list):
+        return jsonify({"ok": False, "error": "target_account_ids must be list"}), 400
+
+    parsed_targets: list[int] = []
+    for item in target_ids:
+        try:
+            parsed_targets.append(int(item))
+        except (TypeError, ValueError):
+            return jsonify({"ok": False, "error": "target_account_ids must contain ints"}), 400
+
+    parsed_targets = [t for t in parsed_targets if t != source_id]
+    parsed_targets = sorted(set(parsed_targets))
+    if not parsed_targets:
+        return jsonify({"ok": False, "error": "target_account_ids is empty"}), 400
+
+    accounts_query = Account.query.options(joinedload(Account.server), joinedload(Account.owner))
+    source_account = accounts_query.filter_by(id=source_id).first()
+    if not source_account:
+        return jsonify({"ok": False, "error": "source account not found"}), 404
+
+    target_accounts = accounts_query.filter(Account.id.in_(parsed_targets)).all()
+    target_ids_found = {acc.id for acc in target_accounts}
+    missing_targets = [acc_id for acc_id in parsed_targets if acc_id not in target_ids_found]
+    if missing_targets:
+        return jsonify({"ok": False, "error": "target account not found"}), 404
+
+    different_server = any(acc.server_id != source_account.server_id for acc in target_accounts)
+    if different_server:
+        return jsonify({"ok": False, "error": "targets must be on the same server"}), 400
+
+    ok, msg = copy_manage_settings_for_accounts(source_account, target_accounts)
+
+    for target_account in target_accounts:
+        log_settings_action(
+            target_account.owner,
+            current_user,
+            "settings_copy",
+            {
+                "account": target_account,
+                "field": "bulk_copy",
+                "source_account_id": source_account.id,
+                "source_account_name": source_account.name,
+                "target_account_id": target_account.id,
+                "target_account_name": target_account.name,
+                "result": "ok" if ok else "failed",
+                "error": None if ok else msg,
+            },
+        )
+
+    if not ok:
+        return jsonify({"ok": False, "error": msg}), 502
+
+    return jsonify({"ok": True, "copied_accounts": len(target_accounts)})
 
 
 def _parse_js_dict_constants(js_text: str, const_name: str) -> dict[str, str]:
