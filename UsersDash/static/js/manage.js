@@ -214,7 +214,9 @@
     const copyModal = document.querySelector('[data-role="copy-settings-modal"]');
     const copyCloseBtns = Array.from(document.querySelectorAll('[data-role="copy-settings-close"]'));
     const copySourceSelect = document.querySelector('[data-role="copy-source-select"]');
-    const copyTargetLabel = document.querySelector('[data-role="copy-target"]');
+    const copyTargetsWrap = document.querySelector('[data-role="copy-targets"]');
+    const copyTargetsAll = document.querySelector('[data-role="copy-targets-all"]');
+    const copyTargetsHint = document.querySelector('[data-role="copy-targets-hint"]');
     const copySourceMeta = document.querySelector('[data-role="copy-source-meta"]');
     const copyConfirmInput = document.querySelector('[data-role="copy-confirm"]');
     const copyStatus = document.querySelector('[data-role="copy-status"]');
@@ -1034,7 +1036,6 @@
         }
 
         updateDefaultsButtonState();
-        updateCopyTargetLabel();
         updateCopyOpenState();
     }
 
@@ -1086,6 +1087,10 @@
         }
     }
 
+    function getAccountById(accountId) {
+        return adminAccounts.find((acc) => Number(acc.id) === Number(accountId));
+    }
+
     function formatAccountLabel(account) {
         const name = account && account.name ? account.name : "—";
         const server = account && account.server ? account.server : "N/A";
@@ -1093,48 +1098,16 @@
         return `${name} · ${server} · ${owner}`;
     }
 
-    function updateCopyTargetLabel() {
-        if (!copyTargetLabel) return;
-        if (!state.selectedAccountId) {
-            copyTargetLabel.textContent = "—";
-            return;
-        }
-        copyTargetLabel.textContent = formatAccountLabel({
-            name: state.selectedAccountName,
-            server: state.selectedServerName,
-            owner: "",
-        });
-    }
-
     function updateCopyOpenState() {
         if (!copyOpenBtn) return;
-        copyOpenBtn.disabled = !state.selectedAccountId;
+        copyOpenBtn.disabled = adminAccounts.length < 2;
     }
 
-    function updateCopySourceMeta() {
-        if (!copySourceMeta || !copySourceSelect) return;
-        const sourceId = Number(copySourceSelect.value);
-        const account = adminAccounts.find((acc) => Number(acc.id) === sourceId);
-        if (!account) {
-            copySourceMeta.textContent = "";
-            return;
-        }
-        const status = account.is_active ? "активна" : "неактивна";
-        copySourceMeta.textContent = `${account.server || "N/A"} · ${account.owner || "—"} · ${status}`;
-    }
-
-    function updateCopyConfirmState() {
-        if (!copyConfirmBtn || !copySourceSelect || !copyConfirmInput) return;
-        const hasSource = Boolean(copySourceSelect.value);
-        const confirmed = Boolean(copyConfirmInput.checked);
-        const hasTarget = Boolean(state.selectedAccountId);
-        copyConfirmBtn.disabled = !(hasSource && confirmed && hasTarget);
-    }
-
-    function renderCopyOptions() {
+    function renderSourceOptions() {
         if (!copySourceSelect) return;
-        const targetId = Number(state.selectedAccountId);
-        const accounts = adminAccounts.filter((acc) => Number(acc.id) !== targetId);
+        const accounts = adminAccounts.slice().sort((a, b) => {
+            return (a.name || "").localeCompare((b.name || ""), "ru");
+        });
         copySourceSelect.innerHTML = "";
 
         const placeholder = document.createElement("option");
@@ -1149,13 +1122,104 @@
             option.textContent = formatAccountLabel(acc);
             copySourceSelect.appendChild(option);
         });
+
+        if (state.selectedAccountId) {
+            copySourceSelect.value = String(state.selectedAccountId);
+        }
+    }
+
+    function updateCopySourceMeta() {
+        if (!copySourceMeta || !copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        const account = getAccountById(sourceId);
+        if (!account) {
+            copySourceMeta.textContent = "";
+            return;
+        }
+        const status = account.is_active ? "активна" : "неактивна";
+        copySourceMeta.textContent = `${account.server || "N/A"} · ${account.owner || "—"} · ${status}`;
+    }
+
+    function renderTargetOptions() {
+        if (!copyTargetsWrap || !copySourceSelect) return;
+        const sourceId = Number(copySourceSelect.value);
+        const sourceAccount = getAccountById(sourceId);
+        const sourceServerId = sourceAccount ? sourceAccount.server_id : null;
+        const targets = adminAccounts
+            .filter((acc) => Number(acc.id) !== sourceId)
+            .filter((acc) => sourceServerId === null || acc.server_id === sourceServerId)
+            .sort((a, b) => (a.name || "").localeCompare((b.name || ""), "ru"));
+
+        copyTargetsWrap.innerHTML = "";
+        targets.forEach((acc) => {
+            const label = document.createElement("label");
+            label.className = "copy-settings-modal__target-item";
+            label.innerHTML = `
+                <input type="checkbox" value="${acc.id}">
+                <span>${formatAccountLabel(acc)}</span>
+            `;
+            copyTargetsWrap.appendChild(label);
+        });
+
+        if (copyTargetsHint) {
+            if (!sourceAccount) {
+                copyTargetsHint.textContent = "Выберите источник, чтобы увидеть доступные цели.";
+            } else if (!targets.length) {
+                copyTargetsHint.textContent = "На этом сервере нет других ферм для копирования.";
+            } else {
+                copyTargetsHint.textContent = "";
+            }
+        }
+
+        if (copyTargetsAll) {
+            copyTargetsAll.checked = false;
+            copyTargetsAll.disabled = !targets.length;
+        }
+    }
+
+    function collectSelectedTargetIds() {
+        if (!copyTargetsWrap) return [];
+        return Array.from(copyTargetsWrap.querySelectorAll("input[type='checkbox']:checked"))
+            .map((el) => Number(el.value))
+            .filter((id) => !Number.isNaN(id));
+    }
+
+    function updateTargetsAllState() {
+        if (!copyTargetsAll || !copyTargetsWrap) return;
+        const boxes = Array.from(copyTargetsWrap.querySelectorAll("input[type='checkbox']"));
+        if (!boxes.length) {
+            copyTargetsAll.checked = false;
+            copyTargetsAll.disabled = true;
+            return;
+        }
+        const checked = boxes.filter((el) => el.checked).length;
+        copyTargetsAll.checked = checked > 0 && checked === boxes.length;
+        copyTargetsAll.disabled = false;
+    }
+
+    function toggleTargetsAll() {
+        if (!copyTargetsAll || !copyTargetsWrap) return;
+        const boxes = Array.from(copyTargetsWrap.querySelectorAll("input[type='checkbox']"));
+        boxes.forEach((el) => {
+            el.checked = copyTargetsAll.checked;
+        });
+        updateCopyConfirmState();
+    }
+
+    function updateCopyConfirmState() {
+        if (!copyConfirmBtn || !copySourceSelect || !copyConfirmInput) return;
+        const hasSource = Boolean(copySourceSelect.value);
+        const confirmed = Boolean(copyConfirmInput.checked);
+        const selectedTargets = collectSelectedTargetIds();
+        copyConfirmBtn.disabled = !(hasSource && confirmed && selectedTargets.length);
     }
 
     function openCopyModal() {
         if (!copyModal) return;
-        renderCopyOptions();
-        updateCopyTargetLabel();
+        renderSourceOptions();
         updateCopySourceMeta();
+        renderTargetOptions();
+        updateTargetsAllState();
         setCopyStatus("");
         if (copyConfirmInput) copyConfirmInput.checked = false;
         updateCopyConfirmState();
@@ -1177,14 +1241,15 @@
     }
 
     async function applyCopySettings() {
-        if (!state.selectedAccountId || !copySourceSelect) return;
+        if (!copySourceSelect) return;
         const sourceId = Number(copySourceSelect.value);
+        const targetIds = collectSelectedTargetIds();
         if (!sourceId) {
             setCopyStatus("Выберите аккаунт-источник.", "error");
             return;
         }
-        if (sourceId === Number(state.selectedAccountId)) {
-            setCopyStatus("Источник и целевая ферма совпадают.", "error");
+        if (!targetIds.length) {
+            setCopyStatus("Выберите хотя бы одну целевую ферму.", "error");
             return;
         }
 
@@ -1196,34 +1261,23 @@
         setCopyStatus("");
 
         try {
-            const url = replaceTemplate(state.copySettingsUrlTemplate, state.selectedAccountId);
+            const url = state.copySettingsUrlTemplate;
             const resp = await fetch(url, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ source_account_id: sourceId }),
+                body: JSON.stringify({
+                    source_account_id: sourceId,
+                    target_account_ids: targetIds,
+                }),
             });
             const data = await resp.json().catch(() => ({}));
             if (!resp.ok || !data.ok) {
                 throw new Error(data.error || "Не удалось копировать настройки");
             }
 
-            const warnings = Array.isArray(data.warnings) ? data.warnings : [];
-            const copied = typeof data.copied_steps === "number" ? data.copied_steps : 0;
-            const baseMessage = `Скопировано шагов: ${copied}.`;
-            if (warnings.length) {
-                setCopyStatus(`${baseMessage} ${warnings.join(" ")}`, "warning");
-            } else {
-                setCopyStatus("Настройки успешно скопированы.", "success");
-            }
-
-            await loadSteps(state.selectedAccountId, {
-                name: state.selectedAccountName,
-                server: state.selectedServerName,
-            });
-            if (!warnings.length) {
-                setTimeout(closeCopyModal, 200);
-                showMiniToast("Настройки скопированы", "success");
-            }
+            const copiedCount = typeof data.copied_accounts === "number" ? data.copied_accounts : 0;
+            setCopyStatus(`Настройки скопированы для ${copiedCount} фермы(м).`, "success");
+            showMiniToast("Настройки скопированы", "success");
         } catch (err) {
             console.error(err);
             setCopyStatus(err.message || "Не удалось копировать настройки", "error");
@@ -2324,8 +2378,19 @@
         if (copySourceSelect) {
             copySourceSelect.addEventListener('change', () => {
                 updateCopySourceMeta();
+                renderTargetOptions();
+                updateTargetsAllState();
                 updateCopyConfirmState();
             });
+        }
+        if (copyTargetsWrap) {
+            copyTargetsWrap.addEventListener('change', () => {
+                updateTargetsAllState();
+                updateCopyConfirmState();
+            });
+        }
+        if (copyTargetsAll) {
+            copyTargetsAll.addEventListener('change', toggleTargetsAll);
         }
         if (copyConfirmInput) {
             copyConfirmInput.addEventListener('change', updateCopyConfirmState);
