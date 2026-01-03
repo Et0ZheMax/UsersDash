@@ -1628,6 +1628,50 @@ def api_manage_account_settings(acc_id):
     menu     = json.loads(acc.get("MenuData", "{}"))
     return jsonify({"Data": settings, "MenuData": menu})
 
+
+@app.route("/api/manage/account/<acc_id>/settings", methods=["PUT"])
+def api_manage_account_settings_update(acc_id):
+    """
+    PUT /api/manage/account/<acc_id>/settings
+    payload:
+      - Data: [ ...полный список шагов... ]
+      - MenuData: { ... } (опционально)
+    """
+    payload = request.get_json(silent=True) or {}
+    data_list = payload.get("Data")
+    menu_data = payload.get("MenuData", None)
+
+    if not isinstance(data_list, list):
+        return jsonify({"error": "invalid Data format"}), 400
+
+    if menu_data is not None and not isinstance(menu_data, dict):
+        return jsonify({"error": "invalid MenuData format"}), 400
+
+    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+        all_accs = json.load(f)
+
+    for acc in all_accs:
+        if acc.get("Id") == acc_id:
+            acc["Data"] = json.dumps(
+                data_list,
+                ensure_ascii=False,
+                separators=(',', ':'),
+            )
+            if menu_data is not None:
+                acc["MenuData"] = json.dumps(
+                    menu_data,
+                    ensure_ascii=False,
+                    separators=(',', ':'),
+                )
+            break
+    else:
+        return jsonify({"error": "acc not found"}), 404
+
+    with open(PROFILE_PATH, "w", encoding="utf-8") as f:
+        json.dump(all_accs, f, indent=2, ensure_ascii=False)
+
+    return jsonify({"status": "ok"})
+
 @app.route("/api/manage/account/<acc_id>/settings/<int:step_idx>", methods=["PUT"])
 def api_manage_account_setting_step(acc_id, step_idx):
     """

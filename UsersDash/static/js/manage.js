@@ -213,6 +213,10 @@
     const copyOpenBtn = document.querySelector('[data-role="copy-settings-open"]');
     const copyModal = document.querySelector('[data-role="copy-settings-modal"]');
     const copyCloseBtns = Array.from(document.querySelectorAll('[data-role="copy-settings-close"]'));
+    const copyTabs = Array.from(document.querySelectorAll('[data-role="copy-settings-tab"]'));
+    const copySubtitle = document.querySelector('[data-role="copy-settings-subtitle"]');
+    const copyNoteSameServer = document.querySelector('[data-role="copy-note-same-server"]');
+    const copyNoteCrossServer = document.querySelector('[data-role="copy-note-cross-server"]');
     const copySourceSelect = document.querySelector('[data-role="copy-source-select"]');
     const copyTargetsWrap = document.querySelector('[data-role="copy-targets"]');
     const copyTargetsAll = document.querySelector('[data-role="copy-targets-all"]');
@@ -1103,6 +1107,49 @@
         copyOpenBtn.disabled = adminAccounts.length < 2;
     }
 
+    function getCopyMode() {
+        if (!state.copyMode) {
+            state.copyMode = "same-server";
+        }
+        return state.copyMode;
+    }
+
+    function setCopyMode(mode) {
+        state.copyMode = mode || "same-server";
+        renderCopyTabs();
+        renderCopyNotes();
+        renderTargetOptions();
+        updateTargetsAllState();
+        if (copyConfirmInput) {
+            copyConfirmInput.checked = false;
+        }
+        setCopyStatus("");
+        updateCopyConfirmState();
+    }
+
+    function renderCopyTabs() {
+        if (!copyTabs.length) return;
+        const mode = getCopyMode();
+        copyTabs.forEach((btn) => {
+            btn.classList.toggle("is-active", btn.dataset.copyMode === mode);
+        });
+    }
+
+    function renderCopyNotes() {
+        const mode = getCopyMode();
+        if (copySubtitle) {
+            copySubtitle.textContent = mode === "cross-server"
+                ? "Скопируйте настройки между фермами разных серверов."
+                : "Скопируйте настройки 1-в-1 между фермами одного сервера.";
+        }
+        if (copyNoteSameServer) {
+            copyNoteSameServer.hidden = mode !== "same-server";
+        }
+        if (copyNoteCrossServer) {
+            copyNoteCrossServer.hidden = mode !== "cross-server";
+        }
+    }
+
     function renderSourceOptions() {
         if (!copySourceSelect) return;
         const accounts = adminAccounts.slice().sort((a, b) => {
@@ -1145,9 +1192,15 @@
         const sourceId = Number(copySourceSelect.value);
         const sourceAccount = getAccountById(sourceId);
         const sourceServerId = sourceAccount ? sourceAccount.server_id : null;
+        const mode = getCopyMode();
         const targets = adminAccounts
             .filter((acc) => Number(acc.id) !== sourceId)
-            .filter((acc) => sourceServerId === null || acc.server_id === sourceServerId)
+            .filter((acc) => {
+                if (mode === "cross-server") {
+                    return true;
+                }
+                return sourceServerId === null || acc.server_id === sourceServerId;
+            })
             .sort((a, b) => (a.name || "").localeCompare((b.name || ""), "ru"));
 
         copyTargetsWrap.innerHTML = "";
@@ -1165,7 +1218,9 @@
             if (!sourceAccount) {
                 copyTargetsHint.textContent = "Выберите источник, чтобы увидеть доступные цели.";
             } else if (!targets.length) {
-                copyTargetsHint.textContent = "На этом сервере нет других ферм для копирования.";
+                copyTargetsHint.textContent = mode === "cross-server"
+                    ? "Нет других ферм для копирования."
+                    : "На этом сервере нет других ферм для копирования.";
             } else {
                 copyTargetsHint.textContent = "";
             }
@@ -1216,6 +1271,9 @@
 
     function openCopyModal() {
         if (!copyModal) return;
+        getCopyMode();
+        renderCopyTabs();
+        renderCopyNotes();
         renderSourceOptions();
         updateCopySourceMeta();
         renderTargetOptions();
@@ -1268,6 +1326,7 @@
                 body: JSON.stringify({
                     source_account_id: sourceId,
                     target_account_ids: targetIds,
+                    allow_cross_server: getCopyMode() === "cross-server",
                 }),
             });
             const data = await resp.json().catch(() => ({}));
@@ -2371,6 +2430,16 @@
 
         if (copyOpenBtn) {
             copyOpenBtn.addEventListener('click', openCopyModal);
+        }
+        if (copyTabs.length) {
+            copyTabs.forEach((tab) => {
+                tab.addEventListener('click', () => {
+                    if (tab.classList.contains("is-active")) {
+                        return;
+                    }
+                    setCopyMode(tab.dataset.copyMode);
+                });
+            });
         }
         copyCloseBtns.forEach((btn) => {
             btn.addEventListener('click', closeCopyModal);
