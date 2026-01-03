@@ -683,6 +683,61 @@ def copy_manage_settings_for_accounts(
     return False, _format_http_error(resp)
 
 
+def _extract_steps_from_settings(raw_settings: Any) -> list | None:
+    if isinstance(raw_settings, dict):
+        steps = raw_settings.get("Data") or raw_settings.get("data")
+    elif isinstance(raw_settings, list):
+        steps = raw_settings
+    else:
+        steps = None
+
+    return steps if isinstance(steps, list) else None
+
+
+def copy_manage_settings_cross_server(
+    source_account,
+    target_accounts: list,
+) -> Tuple[bool, str]:
+    """Копирует manage-настройки между серверами через пошаговое обновление."""
+    if not target_accounts:
+        return False, "target_accounts is empty"
+
+    source_settings = fetch_account_settings(source_account)
+    source_steps = _extract_steps_from_settings(source_settings)
+    if not source_steps:
+        return False, "unable to load source settings"
+
+    for target_account in target_accounts:
+        target_settings = fetch_account_settings(target_account)
+        target_steps = _extract_steps_from_settings(target_settings)
+        if target_steps is None:
+            return False, "unable to load target settings"
+
+        if len(target_steps) != len(source_steps):
+            return False, f"step count mismatch for account {getattr(target_account, 'id', '?')}"
+
+        for idx, source_step in enumerate(source_steps):
+            if not isinstance(source_step, dict):
+                continue
+
+            payload: dict[str, Any] = {}
+            if "IsActive" in source_step:
+                payload["IsActive"] = bool(source_step.get("IsActive"))
+            if isinstance(source_step.get("Config"), dict):
+                payload["Config"] = source_step.get("Config")
+            if isinstance(source_step.get("ScheduleRules"), list):
+                payload["ScheduleRules"] = source_step.get("ScheduleRules")
+
+            if not payload:
+                continue
+
+            ok, msg = update_account_step_settings(target_account, idx, payload)
+            if not ok:
+                return False, msg
+
+    return True, "OK"
+
+
 def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
     """
     Применяет manage-шаблон к аккаунту через
