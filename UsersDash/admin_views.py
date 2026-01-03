@@ -63,6 +63,7 @@ from UsersDash.services.remote_api import (
     save_template_payload,
     update_account_active,
     copy_manage_settings_for_accounts,
+    copy_manage_settings_cross_server,
     delete_template_payload,
 )
 from UsersDash.services.default_settings import apply_defaults_for_account, has_defaults_for_tariff
@@ -1628,13 +1629,14 @@ def manage():
 @admin_bp.route("/manage/account/<int:account_id>/copy-settings", methods=["POST"])
 @login_required
 def copy_account_settings(account_id: int | None = None):
-    """Копирует manage-настройки между аккаунтами одной машины."""
+    """Копирует manage-настройки между аккаунтами."""
 
     admin_required()
 
     payload = request.get_json(silent=True) or {}
     source_id = payload.get("source_account_id") or account_id
     target_ids = payload.get("target_account_ids") or []
+    allow_cross_server = bool(payload.get("allow_cross_server"))
 
     if source_id is None:
         return jsonify({"ok": False, "error": "source_account_id is required"}), 400
@@ -1673,10 +1675,13 @@ def copy_account_settings(account_id: int | None = None):
         return jsonify({"ok": False, "error": "target account not found"}), 404
 
     different_server = any(acc.server_id != source_account.server_id for acc in target_accounts)
-    if different_server:
+    if different_server and not allow_cross_server:
         return jsonify({"ok": False, "error": "targets must be on the same server"}), 400
 
-    ok, msg = copy_manage_settings_for_accounts(source_account, target_accounts)
+    if allow_cross_server and different_server:
+        ok, msg = copy_manage_settings_cross_server(source_account, target_accounts)
+    else:
+        ok, msg = copy_manage_settings_for_accounts(source_account, target_accounts)
 
     for target_account in target_accounts:
         log_settings_action(

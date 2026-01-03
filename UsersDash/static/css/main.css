@@ -1333,6 +1333,36 @@ h1 {
   font-size: 14px;
 }
 
+.copy-settings-modal__tabs {
+  display: inline-flex;
+  gap: 8px;
+  padding: 6px;
+  border-radius: 12px;
+  background: #0f1425;
+  border: 1px solid #202844;
+  margin-bottom: 16px;
+}
+
+.copy-settings-modal__tab {
+  border: 0;
+  background: transparent;
+  color: #cbd5f5;
+  font-size: 13px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.copy-settings-modal__tab:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.copy-settings-modal__tab.is-active {
+  background: #243055;
+  color: #ffffff;
+}
+
 .copy-settings-modal__grid {
   display: grid;
   gap: 16px;

@@ -103,11 +103,23 @@
         <div class="modal-header">
             <div>
                 <div class="copy-settings-modal__title">Копирование настроек</div>
-                <div class="copy-settings-modal__subtitle">Скопируйте настройки 1-в-1 между фермами одного сервера.</div>
+                <div class="copy-settings-modal__subtitle" data-role="copy-settings-subtitle">
+                    Скопируйте настройки 1-в-1 между фермами одного сервера.
+                </div>
             </div>
             <button class="modal-close-btn" type="button" data-role="copy-settings-close" aria-label="Закрыть">×</button>
         </div>
         <div class="modal-body">
+            <div class="copy-settings-modal__tabs">
+                <button class="copy-settings-modal__tab is-active" type="button" data-role="copy-settings-tab"
+                        data-copy-mode="same-server">
+                    В пределах сервера
+                </button>
+                <button class="copy-settings-modal__tab" type="button" data-role="copy-settings-tab"
+                        data-copy-mode="cross-server">
+                    Между серверами
+                </button>
+            </div>
             <div class="copy-settings-modal__grid">
                 <div class="copy-settings-modal__section">
                     <label class="copy-settings-modal__label" for="copy-source-select">Источник настроек</label>
@@ -134,7 +146,10 @@
                 <ul class="copy-settings-modal__list">
                     <li>Полная конфигурация шагов (Data) 1-в-1.</li>
                     <li>Все параметры Config, ScheduleRules и флаги активностей.</li>
-                    <li>Копирование выполняется только в пределах одного сервера.</li>
+                    <li data-role="copy-note-same-server">Копирование выполняется только в пределах одного сервера.</li>
+                    <li data-role="copy-note-cross-server" hidden>
+                        Копирование разрешено между серверами. Убедитесь, что версии API совместимы.
+                    </li>
                 </ul>
             </div>
             <label class="config-checkbox copy-settings-modal__confirm">
