@@ -1257,13 +1257,20 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!searchInput) return;
 
         const query = searchInput.value.trim().toLowerCase();
+        const searchEmail = query.includes("@");
         const table = document.querySelector('[data-role="admin-farmdata-table"]');
         if (!table) return;
 
         const rows = table.querySelectorAll("tbody tr[data-account-id]");
         rows.forEach(function (tr) {
-            const text = tr.textContent.toLowerCase();
-            tr.style.display = text.includes(query) ? "" : "none";
+            const farmName = (tr.dataset.farmName || "").toLowerCase();
+            let isMatch = farmName.includes(query);
+            if (!isMatch && searchEmail) {
+                const emailInput = tr.querySelector('input[name="email"]');
+                const email = emailInput ? emailInput.value.toLowerCase() : "";
+                isMatch = email.includes(query);
+            }
+            tr.style.display = isMatch ? "" : "none";
         });
 
         updateFarmdataVisibleTotal();
