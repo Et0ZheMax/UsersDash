@@ -778,6 +778,21 @@ def _parse_positive_float(raw: str | None, default: float) -> float:
         return default
 
 
+def _normalize_kingdom(value: Any) -> str | None:
+    """Нормализует значение королевства, возвращая None для пустых и служебных строк."""
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if cleaned.lower() in {"none", "null", "—", "-"}:
+            return None
+        return cleaned
+    return str(value)
+
+
 def _shorten_number(value: float | int) -> str:
     """Форматирует числа в компактный вид (k/m/b)."""
 
@@ -1012,10 +1027,10 @@ def rss_sale_page():
 
     for acc in accounts:
         fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
-        kingdom_raw = acc.game_world or (fd.server if fd else None) or "Не указано"
-        kingdom = kingdom_raw.strip() if isinstance(kingdom_raw, str) else str(kingdom_raw)
-        if not kingdom:
-            kingdom = "Не указано"
+        kingdom_raw = _normalize_kingdom(acc.game_world)
+        if not kingdom_raw:
+            kingdom_raw = _normalize_kingdom(fd.server if fd else None)
+        kingdom = kingdom_raw or "Не указано"
 
         res_info = resources_map.get(acc.id) or {}
         res_raw = res_info.get("raw") or {}
