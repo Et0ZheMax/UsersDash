@@ -30,7 +30,7 @@
                         {% set acc = item.account %}
                         {% set owner_name = acc.owner.username if acc.owner else '—' %}
                         {% set server_name = acc.server.name if acc.server else 'N/A' %}
-                        {% set message_text = 'Привет! Нужно продлить бота на ферме ' ~ acc.name ~ '.' %}
+                        {% set message_text = 'Привет! ⛏ \nВремя работы бота подходит к концу.\nПродлеваем?' %}
                         <div class="admin-payment-card admin-payment-card--{{ item.status }} {% if item.blocked_for_payment %}is-blocked{% endif %}"
                              data-payment-card
                              data-account-id="{{ acc.id }}"
