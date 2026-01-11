@@ -87,21 +87,31 @@
                 <div class="kpi-value" data-role="incomplete-data-count">{{ incomplete_accounts_total }}</div>
                 <div class="kpi-hint">Фермы без почты, пароля, оплаты или тарифа</div>
             </button>
-            <div class="kpi-card">
-                <div class="kpi-label">Пользователей всего</div>
-                <div class="kpi-value">{{ total_users }}</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-label">Админов</div>
-                <div class="kpi-value">{{ total_admins }}</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-label">Клиентов</div>
-                <div class="kpi-value">{{ total_clients }}</div>
-            </div>
-            <div class="kpi-card">
-                <div class="kpi-label">Ферм/аккаунтов</div>
-                <div class="kpi-value">{{ total_accounts }}</div>
+            <button class="kpi-card kpi-card--clickable rss-sale-card" type="button" data-role="rss-sale-card">
+                <div class="kpi-label">RSS на продажу</div>
+                <div class="rss-sale-card__meta">Выжимка по игровым серверам</div>
+                <div class="rss-sale-card__list" data-role="rss-sale-list"></div>
+            </button>
+            <div class="kpi-card kpi-card--wide">
+                <div class="kpi-label">Пользователи и фермы</div>
+                <div class="kpi-metrics">
+                    <div class="kpi-metric">
+                        <span class="kpi-metric__label">Всего пользователей</span>
+                        <span class="kpi-metric__value">{{ total_users }}</span>
+                    </div>
+                    <div class="kpi-metric">
+                        <span class="kpi-metric__label">Админов</span>
+                        <span class="kpi-metric__value">{{ total_admins }}</span>
+                    </div>
+                    <div class="kpi-metric">
+                        <span class="kpi-metric__label">Клиентов</span>
+                        <span class="kpi-metric__value">{{ total_clients }}</span>
+                    </div>
+                    <div class="kpi-metric">
+                        <span class="kpi-metric__label">Ферм/аккаунтов</span>
+                        <span class="kpi-metric__value">{{ total_accounts }}</span>
+                    </div>
+                </div>
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">Серверов</div>
@@ -199,6 +209,22 @@
     </div>
 </div>
 
+<div class="rss-sale-modal" data-role="rss-sale-modal" hidden>
+    <div class="rss-sale-modal__dialog">
+        <div class="rss-sale-modal__header">
+            <div>
+                <div class="rss-sale-modal__title">RSS на продажу</div>
+                <div class="rss-sale-modal__subtitle">Выберите сервера для вывода в карточке.</div>
+            </div>
+            <button class="rss-sale-modal__close" type="button" data-role="rss-sale-close" aria-label="Закрыть">×</button>
+        </div>
+        <div class="rss-sale-modal__content" data-role="rss-sale-modal-content"></div>
+        <div class="rss-sale-modal__footer">
+            <button class="btn" type="button" data-role="rss-sale-close">Готово</button>
+        </div>
+    </div>
+</div>
+
 <script id="cash-data" type="application/json">{{ {
     "servers": server_profits,
     "monthly_total": cash_totals.monthly_total,
@@ -206,6 +232,7 @@
     "days_in_month": cash_totals.days_in_month,
     "days_left": cash_totals.days_left,
 } | tojson }}</script>
+<script id="rss-sale-data" type="application/json">{{ rss_sale_summary | tojson }}</script>
 
 <script>
     (function () {
@@ -399,6 +426,176 @@
         renderModalContent();
         attachModalHandlers();
         updateCard();
+    })();
+</script>
+
+<script>
+    (() => {
+        const card = document.querySelector('[data-role="rss-sale-card"]');
+        const listEl = document.querySelector('[data-role="rss-sale-list"]');
+        const modal = document.querySelector('[data-role="rss-sale-modal"]');
+        const modalContent = document.querySelector('[data-role="rss-sale-modal-content"]');
+        const dataEl = document.getElementById('rss-sale-data');
+        const LOCAL_STORAGE_KEY = 'usersdash-rss-sale-servers';
+
+        if (!card || !listEl || !modal || !modalContent || !dataEl) {
+            return;
+        }
+
+        const payload = JSON.parse(dataEl.textContent || '{}');
+        const groups = Array.isArray(payload.groups) ? payload.groups : [];
+
+        function shortenNumber(value) {
+            const absValue = Math.abs(value || 0);
+            if (absValue >= 1_000_000_000) {
+                return `${(value / 1_000_000_000).toFixed(1)}b`;
+            }
+            if (absValue >= 1_000_000) {
+                return `${(value / 1_000_000).toFixed(0)}m`;
+            }
+            if (absValue >= 1_000) {
+                return `${(value / 1_000).toFixed(0)}k`;
+            }
+            return String(Math.round(value || 0));
+        }
+
+        function formatMoney(value) {
+            return new Intl.NumberFormat('ru-RU', {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+            }).format(value || 0);
+        }
+
+        function buildResources(res) {
+            return [
+                shortenNumber(res.food),
+                shortenNumber(res.wood),
+                shortenNumber(res.stone),
+                shortenNumber(res.gold),
+            ].join(' / ');
+        }
+
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+                return saved ? JSON.parse(saved) : null;
+            } catch (err) {
+                return null;
+            }
+        }
+
+        function saveSettings(settings) {
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(settings));
+        }
+
+        function getInitialSettings() {
+            const saved = loadSettings();
+            if (saved && typeof saved === 'object') {
+                return saved;
+            }
+            return {
+                selected: groups.map((group) => group.name),
+            };
+        }
+
+        let settings = getInitialSettings();
+
+        function renderList() {
+            if (!groups.length) {
+                listEl.innerHTML = (
+                    '<div class="rss-sale-card__empty">Нет данных для отображения</div>'
+                );
+                return;
+            }
+            const selected = new Set(settings.selected || []);
+            const rows = groups
+                .filter((group) => selected.has(group.name))
+                .map((group) => {
+                    const res = group.resources || {};
+                    const resources = buildResources(res);
+                    const serverLabel = `${group.name} (${group.count || 0})`;
+                    return `
+                        <div class="rss-sale-card__row">
+                            <div class="rss-sale-card__server">
+                                <span class="rss-sale-card__name">${serverLabel}</span>
+                                <span class="rss-sale-card__resources">${resources}</span>
+                            </div>
+                            <div class="rss-sale-card__net">${formatMoney(group.net_income)} ₽</div>
+                        </div>
+                    `;
+                });
+
+            listEl.innerHTML = rows.join('') || (
+                '<div class="rss-sale-card__empty">Серверы не выбраны</div>'
+            );
+        }
+
+        function renderModal() {
+            if (!groups.length) {
+                modalContent.innerHTML = (
+                    '<div class="rss-sale-modal__empty">Нет серверов для выбора.</div>'
+                );
+                return;
+            }
+            modalContent.innerHTML = groups.map((group) => {
+                const res = group.resources || {};
+                const resources = buildResources(res);
+                const isChecked = (settings.selected || []).includes(group.name);
+                return `
+                    <label class="rss-sale-modal__row">
+                        <input type="checkbox" class="rss-sale-modal__checkbox"
+                               data-server="${group.name}" ${isChecked ? 'checked' : ''}>
+                        <div class="rss-sale-modal__info">
+                            <div class="rss-sale-modal__name">${group.name} (${group.count || 0})</div>
+                            <div class="rss-sale-modal__meta">
+                                ${resources} · ${formatMoney(group.net_income)} ₽
+                            </div>
+                        </div>
+                    </label>
+                `;
+            }).join('');
+        }
+
+        function openModal() {
+            if (!groups.length) {
+                return;
+            }
+            modal.hidden = false;
+            modal.classList.add('is-open');
+        }
+
+        function closeModal() {
+            modal.classList.remove('is-open');
+            modal.hidden = true;
+        }
+
+        modalContent.addEventListener('change', (event) => {
+            const checkbox = event.target.closest('.rss-sale-modal__checkbox');
+            if (!checkbox) return;
+            const name = checkbox.dataset.server;
+            const selected = new Set(settings.selected || []);
+            if (checkbox.checked) {
+                selected.add(name);
+            } else {
+                selected.delete(name);
+            }
+            settings = { selected: Array.from(selected) };
+            saveSettings(settings);
+            renderList();
+        });
+
+        card.addEventListener('click', openModal);
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+        modal.querySelectorAll('[data-role="rss-sale-close"]').forEach((btn) => {
+            btn.addEventListener('click', closeModal);
+        });
+
+        renderModal();
+        renderList();
     })();
 </script>
 
