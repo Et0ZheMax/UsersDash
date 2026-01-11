@@ -834,6 +834,79 @@ def _calc_rss_income(
     return gross_income, net_income
 
 
+def _collect_rss_sale_summary(
+    accounts: list[Account],
+    farmdata_index: dict[tuple[int, str], FarmData],
+    resources_map: dict[int, dict[str, Any]],
+    price_fws_100: float,
+    price_gold_100: float,
+    tax_percent: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Собирает агрегированные данные RSS на продажу по игровым серверам."""
+
+    overall_resources = {"food": 0, "wood": 0, "stone": 0, "gold": 0}
+    group_totals: dict[str, dict[str, Any]] = {}
+
+    for acc in accounts:
+        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        kingdom_raw = _normalize_kingdom(acc.game_world)
+        if not kingdom_raw:
+            kingdom_raw = _normalize_kingdom(fd.server if fd else None)
+        kingdom = kingdom_raw or "Не указано"
+
+        res_info = resources_map.get(acc.id) or {}
+        res_raw = res_info.get("raw") or {}
+
+        resources = {
+            "food": _safe_int(res_raw.get("food_raw")),
+            "wood": _safe_int(res_raw.get("wood_raw")),
+            "stone": _safe_int(res_raw.get("stone_raw")),
+            "gold": _safe_int(res_raw.get("gold_raw")),
+        }
+
+        for key, value in resources.items():
+            overall_resources[key] += value
+
+        group_entry = group_totals.setdefault(
+            kingdom,
+            {
+                "count": 0,
+                "resources": {"food": 0, "wood": 0, "stone": 0, "gold": 0},
+            },
+        )
+        group_entry["count"] += 1
+        for key, value in resources.items():
+            group_entry["resources"][key] += value
+
+    group_payload = []
+    for name, data in sorted(group_totals.items(), key=lambda item: item[0].lower()):
+        gross, net = _calc_rss_income(
+            data["resources"], price_fws_100, price_gold_100, tax_percent
+        )
+        group_payload.append(
+            {
+                "name": name,
+                "count": data["count"],
+                "resources": data["resources"],
+                "gross_income": gross,
+                "net_income": net,
+            }
+        )
+
+    overall_gross, overall_net = _calc_rss_income(
+        overall_resources, price_fws_100, price_gold_100, tax_percent
+    )
+
+    totals = {
+        "resources": overall_resources,
+        "gross_income": overall_gross,
+        "net_income": overall_net,
+        "accounts": len(accounts),
+    }
+
+    return group_payload, totals
+
+
 # -------------------- Общий дашборд админа --------------------
 
 
@@ -965,6 +1038,34 @@ def admin_dashboard():
 
     incomplete_accounts = _collect_incomplete_farms(accounts, farmdata_index)
 
+    price_fws_100 = RSS_SALE_DEFAULT_PRICE_FWS_100
+    price_gold_100 = RSS_SALE_DEFAULT_PRICE_GOLD_100
+    tax_percent = RSS_SALE_DEFAULT_TAX_PERCENT
+    rss_sale_accounts = (
+        Account.query.options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter(
+            Account.next_payment_amount == RSS_FOR_SALE_TARIFF_PRICE,
+            Account.is_active.is_(True),
+        )
+        .order_by(Account.game_world.asc(), Account.name.asc())
+        .all()
+    )
+    rss_farmdata_index = _build_farmdata_index(rss_sale_accounts)
+    rss_resources_map = (
+        fetch_resources_for_accounts(rss_sale_accounts) if rss_sale_accounts else {}
+    )
+    rss_sale_groups, rss_sale_totals = _collect_rss_sale_summary(
+        rss_sale_accounts,
+        rss_farmdata_index,
+        rss_resources_map,
+        price_fws_100,
+        price_gold_100,
+        tax_percent,
+    )
+
     return render_template(
         "admin/dashboard.html",
         total_users=total_users,
@@ -982,6 +1083,10 @@ def admin_dashboard():
             "days_in_month": days_in_month,
         },
         incomplete_accounts_total=len(incomplete_accounts),
+        rss_sale_summary={
+            "groups": rss_sale_groups,
+            "totals": rss_sale_totals,
+        },
     )
 
 
@@ -1021,8 +1126,6 @@ def rss_sale_page():
     farmdata_index = _build_farmdata_index(accounts)
     resources_map = fetch_resources_for_accounts(accounts) if accounts else {}
 
-    overall_resources = {"food": 0, "wood": 0, "stone": 0, "gold": 0}
-    group_totals: dict[str, dict[str, Any]] = {}
     accounts_payload: list[dict[str, Any]] = []
 
     for acc in accounts:
@@ -1041,20 +1144,6 @@ def rss_sale_page():
             "stone": _safe_int(res_raw.get("stone_raw")),
             "gold": _safe_int(res_raw.get("gold_raw")),
         }
-
-        for key, value in resources.items():
-            overall_resources[key] += value
-
-        group_entry = group_totals.setdefault(
-            kingdom,
-            {
-                "count": 0,
-                "resources": {"food": 0, "wood": 0, "stone": 0, "gold": 0},
-            },
-        )
-        group_entry["count"] += 1
-        for key, value in resources.items():
-            group_entry["resources"][key] += value
 
         gross_income, net_income = _calc_rss_income(
             resources, price_fws_100, price_gold_100, tax_percent
@@ -1085,31 +1174,14 @@ def rss_sale_page():
             }
         )
 
-    overall_gross, overall_net = _calc_rss_income(
-        overall_resources, price_fws_100, price_gold_100, tax_percent
+    group_payload, totals = _collect_rss_sale_summary(
+        accounts,
+        farmdata_index,
+        resources_map,
+        price_fws_100,
+        price_gold_100,
+        tax_percent,
     )
-
-    group_payload = []
-    for name, data in sorted(group_totals.items(), key=lambda item: item[0].lower()):
-        gross, net = _calc_rss_income(
-            data["resources"], price_fws_100, price_gold_100, tax_percent
-        )
-        group_payload.append(
-            {
-                "name": name,
-                "count": data["count"],
-                "resources": data["resources"],
-                "gross_income": gross,
-                "net_income": net,
-            }
-        )
-
-    totals = {
-        "resources": overall_resources,
-        "gross_income": overall_gross,
-        "net_income": overall_net,
-        "accounts": len(accounts_payload),
-    }
 
     return render_template(
         "admin/rss_for_sale.html",
