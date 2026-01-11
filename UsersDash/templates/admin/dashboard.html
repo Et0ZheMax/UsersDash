@@ -468,11 +468,11 @@
 
         function buildResources(res) {
             return [
-                `Е ${shortenNumber(res.food)}`,
-                `Д ${shortenNumber(res.wood)}`,
-                `К ${shortenNumber(res.stone)}`,
-                `З ${shortenNumber(res.gold)}`,
-            ].join(' · ');
+                shortenNumber(res.food),
+                shortenNumber(res.wood),
+                shortenNumber(res.stone),
+                shortenNumber(res.gold),
+            ].join(' / ');
         }
 
         function loadSettings() {
@@ -517,8 +517,8 @@
                     return `
                         <div class="rss-sale-card__row">
                             <div class="rss-sale-card__server">
-                                <div class="rss-sale-card__name">${serverLabel}</div>
-                                <div class="rss-sale-card__resources">${resources}</div>
+                                <span class="rss-sale-card__name">${serverLabel}</span>
+                                <span class="rss-sale-card__resources">${resources}</span>
                             </div>
                             <div class="rss-sale-card__net">${formatMoney(group.net_income)} ₽</div>
                         </div>

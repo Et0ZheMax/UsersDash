@@ -585,7 +585,7 @@ h1 {
     max-height: 180px;
     overflow-y: auto;
     padding-right: 6px;
-    font-size: 0.82rem;
+    font-size: 0.76rem;
 }
 
 .rss-sale-card__row {
@@ -604,18 +604,24 @@ h1 {
 
 .rss-sale-card__server {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
 }
 
 .rss-sale-card__name {
     font-weight: 600;
     color: #e5e7eb;
+    white-space: nowrap;
 }
 
 .rss-sale-card__resources {
     color: #9ca3af;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .rss-sale-card__net {
