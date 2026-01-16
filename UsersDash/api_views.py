@@ -266,7 +266,8 @@ def save_farms_v1():
                 # Не нашли соответствие — можно логировать, но не падаем
                 continue
 
-            if acc.server_id != srv.id:
+            server_changed = acc.server_id != srv.id
+            if server_changed:
                 acc.server_id = srv.id
 
             if name and acc.name != name:
@@ -299,12 +300,17 @@ def save_farms_v1():
                 fd = _get_or_create_farmdata_entry(owner_id, farm_name)
 
             if fd:
-                fd.email = email or None
-                fd.login = login_val or None
-                fd.password = password_val or None
-                fd.igg_id = igg_id or None
-                fd.server = kingdom or None
-                fd.telegram_tag = telegram_tag or None
+                def _apply_if_needed(field_name: str, value: str) -> None:
+                    if server_changed and not value:
+                        return
+                    setattr(fd, field_name, value or None)
+
+                _apply_if_needed("email", email)
+                _apply_if_needed("login", login_val)
+                _apply_if_needed("password", password_val)
+                _apply_if_needed("igg_id", igg_id)
+                _apply_if_needed("server", kingdom)
+                _apply_if_needed("telegram_tag", telegram_tag)
 
             # обновляем оплату/тариф
             if next_payment_at:
@@ -313,16 +319,19 @@ def save_farms_v1():
                 except ValueError:
                     # Игнорируем неверный формат
                     pass
-            else:
+            elif not server_changed:
                 acc.next_payment_at = None
 
             if tariff_raw not in (None, ""):
                 try:
-                    acc.next_payment_amount = int(tariff_raw)
+                    parsed_tariff = int(tariff_raw)
+                    acc.next_payment_amount = parsed_tariff
+                    acc.next_payment_tariff = parsed_tariff
                 except (TypeError, ValueError):
                     pass
-            else:
+            elif not server_changed:
                 acc.next_payment_amount = None
+                acc.next_payment_tariff = None
 
         db.session.commit()
     except Exception as exc:
