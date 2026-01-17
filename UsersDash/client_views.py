@@ -33,6 +33,7 @@ from UsersDash.services.remote_api import (
     fetch_watch_summary,
     fetch_templates_list,
     apply_template_for_account,
+    update_account_menu_data,
 )
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
@@ -1302,6 +1303,9 @@ def farm_data_save():
             }), 400
 
     # Вторая проходка — применение изменений
+    menu_sync_queue: list[
+        tuple[Account, str | None, str | None, str | None]
+    ] = []
     try:
         for acc_id, row in cleaned_items:
             acc = acc_by_id.get(acc_id)
@@ -1334,11 +1338,23 @@ def farm_data_save():
             fd.server = server_val or None
             fd.telegram_tag = telegram_tag_val or None
 
+            menu_sync_queue.append(
+                (acc, email or None, password_val or None, igg_id or None)
+            )
+
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
         print(f"[farm_data_save] ERROR: {exc}")
         return jsonify({"ok": False, "error": "Ошибка при сохранении данных."}), 500
+
+    for acc, email, password_val, igg_id in menu_sync_queue:
+        update_account_menu_data(
+            acc,
+            email=email,
+            password=password_val,
+            igg_id=igg_id,
+        )
 
     farmdata_status = collect_farmdata_status(current_user.id)
     g.farmdata_status_cache = farmdata_status
