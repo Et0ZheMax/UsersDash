@@ -62,6 +62,7 @@ from UsersDash.services.remote_api import (
     rename_template_payload,
     save_template_payload,
     update_account_active,
+    update_account_menu_data,
     copy_manage_settings_for_accounts,
     copy_manage_settings_cross_server,
     delete_template_payload,
@@ -2741,6 +2742,9 @@ def admin_farm_data_save():
     defaults_to_apply: list[tuple[Account, int]] = []
     tariffs_without_defaults = {0, 50}
     defaults_results: list[dict[str, str]] = []
+    menu_sync_queue: list[
+        tuple[Account, str | None, str | None, str | None]
+    ] = []
 
     for row in items:
         acc_id = int(row.get("account_id", 0))
@@ -2761,6 +2765,7 @@ def admin_farm_data_save():
         fd.igg_id = (row.get("igg_id") or "").strip() or None
         fd.server = (row.get("server") or "").strip() or None
         fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
+        menu_sync_queue.append((acc, fd.email, fd.password, fd.igg_id))
 
         # обновим тариф и оплату
         next_payment_raw = row.get("next_payment_date")
@@ -2817,6 +2822,14 @@ def admin_farm_data_save():
         db.session.rollback()
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
+
+    for acc, email, password_val, igg_id in menu_sync_queue:
+        update_account_menu_data(
+            acc,
+            email=email,
+            password=password_val,
+            igg_id=igg_id,
+        )
 
     if apply_tariff_defaults:
         for acc, tariff_price in defaults_to_apply:

@@ -720,6 +720,83 @@ def update_account_settings_full(
     return False, _format_http_error(resp)
 
 
+def update_account_menu_data(
+    account,
+    *,
+    email: str | None,
+    password: str | None,
+    igg_id: str | None,
+) -> Tuple[bool, str]:
+    """Обновляет MenuData на сервере по данным из "Аккаунты / Данные"."""
+
+    settings = fetch_account_settings(account)
+    if not isinstance(settings, dict):
+        msg = "не удалось получить настройки аккаунта для обновления MenuData"
+        log.warning("[farm-data menu sync] %s", msg)
+        return False, msg
+
+    menu_data = (
+        settings.get("MenuData")
+        or settings.get("menu")
+        or settings.get("menu_data")
+        or {}
+    )
+    if not isinstance(menu_data, dict):
+        msg = "MenuData имеет неожиданный формат"
+        log.warning("[farm-data menu sync] %s", msg)
+        return False, msg
+
+    menu_config = menu_data.get("Config")
+    if not isinstance(menu_config, dict):
+        menu_config = {}
+
+    menu_config["Email"] = email or ""
+    menu_config["Password"] = password or ""
+    if igg_id is not None:
+        menu_config["Custom"] = igg_id or ""
+        if igg_id and "Slot" not in menu_config:
+            menu_config["Slot"] = "igg"
+
+    menu_data["Config"] = menu_config
+
+    data_section = settings.get("Data") or settings.get("data")
+    if not isinstance(data_section, list):
+        msg = "в настройках аккаунта отсутствует список шагов Data"
+        log.warning("[farm-data menu sync] %s", msg)
+        return False, msg
+
+    payload = {"Data": data_section, "MenuData": menu_data}
+    acc_id = getattr(account, "id", None)
+    acc_name = getattr(account, "name", None)
+    server_name = getattr(getattr(account, "server", None), "name", None)
+
+    log.info(
+        "[farm-data menu sync] отправка MenuData для аккаунта id=%s name=%s server=%s",
+        acc_id,
+        acc_name,
+        server_name,
+    )
+    ok, msg = update_account_settings_full(account, payload)
+    if ok:
+        log.info(
+            "[farm-data menu sync] MenuData обновлена для аккаунта id=%s name=%s server=%s",
+            acc_id,
+            acc_name,
+            server_name,
+        )
+        return True, msg
+
+    log.warning(
+        "[farm-data menu sync] ошибка обновления MenuData для аккаунта id=%s name=%s "
+        "server=%s: %s",
+        acc_id,
+        acc_name,
+        server_name,
+        msg,
+    )
+    return False, msg
+
+
 def copy_manage_settings_cross_server(
     source_account,
     target_accounts: list,
