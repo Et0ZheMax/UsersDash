@@ -663,6 +663,33 @@
     let farmDataAutoSaveQueued = false;
     let lastAutoSaveToastAt = 0;
 
+    function setFarmDataRowSaveStatus(row, text, statusType) {
+        if (!row) return;
+        const statusEl = row.querySelector('[data-role="row-save-status"]');
+        if (!statusEl) return;
+
+        statusEl.textContent = text || "";
+        statusEl.classList.remove("farmdata-save-status--success", "farmdata-save-status--error");
+        if (statusType === "success") {
+            statusEl.classList.add("farmdata-save-status--success");
+        } else if (statusType === "error") {
+            statusEl.classList.add("farmdata-save-status--error");
+        }
+    }
+
+    function setFarmDataRowDirtyState(row, isDirty) {
+        if (!row) return;
+        row.dataset.dirty = isDirty ? "1" : "0";
+        row.classList.toggle("farmdata-row--dirty", isDirty);
+        const marker = row.querySelector('[data-role="row-dirty-indicator"]');
+        if (marker) {
+            marker.hidden = !isDirty;
+        }
+        if (isDirty) {
+            setFarmDataRowSaveStatus(row, "", "idle");
+        }
+    }
+
     function clearFarmDataErrors(targetRow) {
         const table = document.querySelector('[data-role="farmdata-table"]');
         if (!table) return;
@@ -701,6 +728,7 @@
             if (!row) return;
 
             row.classList.add("farmdata-row-error");
+            setFarmDataRowDirtyState(row, true);
             const fieldName = resolveFarmDataFieldName(error.message);
             const input = fieldName ? row.querySelector(`input[name="${fieldName}"]`) : null;
             const messageEl = document.createElement("div");
@@ -714,6 +742,8 @@
                 const cell = row.querySelector("td") || row;
                 cell.appendChild(messageEl);
             }
+
+            setFarmDataRowSaveStatus(row, "Ошибка", "error");
         });
     }
 
@@ -835,7 +865,8 @@
             dirtyRows.forEach((row) => {
                 if (!row) return;
                 if (savedSet.has(String(row.dataset.accountId))) {
-                    row.dataset.dirty = "0";
+                    setFarmDataRowDirtyState(row, false);
+                    setFarmDataRowSaveStatus(row, "✓ сохранено", "success");
                 }
             });
             renderFarmDataErrors(data.errors || []);
@@ -896,7 +927,7 @@
         const row = target.closest('[data-role="farmdata-table"] tbody tr[data-account-id]');
         if (!row) return;
 
-        row.dataset.dirty = "1";
+        setFarmDataRowDirtyState(row, true);
         clearFarmDataErrors(row);
         applyFarmDataStatusUI();
         scheduleFarmDataAutoSave();
@@ -905,11 +936,22 @@
     document.addEventListener("input", handleClientFarmDataChange);
     document.addEventListener("change", handleClientFarmDataChange);
 
+    function initFarmDataRowIndicators() {
+        const table = document.querySelector('[data-role="farmdata-table"]');
+        if (!table) return;
+
+        table.querySelectorAll("tbody tr[data-account-id]").forEach((row) => {
+            const isDirty = row.dataset.dirty === "1";
+            setFarmDataRowDirtyState(row, isDirty);
+        });
+    }
+
     document.addEventListener("DOMContentLoaded", function () {
         autoHideFlashMessages();
         setupNavToggle();
         setupAccountSearch();
         applyFarmDataStatusUI();
+        initFarmDataRowIndicators();
         loadAdminAccountResources();
         setupServerStatesSection();
         setupWatchCardsSection();

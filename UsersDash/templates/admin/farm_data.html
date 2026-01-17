@@ -49,6 +49,11 @@
         color: #9ca3af;
     }
 
+    .farmdata-card-caption--muted {
+        margin-top: 0.2rem;
+        color: #6b7280;
+    }
+
     .farmdata-card-meta {
         display: flex;
         flex-direction: column;
@@ -151,8 +156,16 @@
         border-bottom: 1px solid rgba(31, 41, 55, 0.8);
     }
 
+    table.farmdata-table tbody tr.farmdata-row--dirty {
+        background: rgba(59, 130, 246, 0.08);
+    }
+
     .farmdata-row--blocked {
         background: rgba(208, 107, 107, 0.08);
+    }
+
+    table.farmdata-table tbody tr.farmdata-row-error {
+        background: rgba(220, 38, 38, 0.08);
     }
 
     table.farmdata-table tbody tr:last-child {
@@ -190,6 +203,17 @@
         outline: none;
     }
 
+    .farmdata-input--error {
+        border-color: rgba(220, 38, 38, 0.9);
+        box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25);
+    }
+
+    .farmdata-error-message {
+        margin-top: 0.2rem;
+        font-size: 0.75rem;
+        color: #f87171;
+    }
+
     .farmdata-input:focus {
         border-color: #3b82f6;
         box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
@@ -213,6 +237,34 @@
         padding: 1rem 0;
         text-align: center;
         color: #9ca3af;
+    }
+
+    .farmdata-dirty-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+        font-size: 0.7rem;
+        background: rgba(251, 191, 36, 0.12);
+        color: #fbbf24;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+
+    .farmdata-save-status {
+        display: block;
+        margin-top: 0.2rem;
+        font-size: 0.75rem;
+        color: #9ca3af;
+    }
+
+    .farmdata-save-status--success {
+        color: #22c55e;
+    }
+
+    .farmdata-save-status--error {
+        color: #f87171;
     }
 
     .farmdata-actions {
@@ -305,6 +357,9 @@
                     <div class="farmdata-card-caption">
                         Вносите изменения здесь — они будут источником истины для RssV7 и клиентских кабинетов.
                     </div>
+                    <div class="farmdata-card-caption farmdata-card-caption--muted">
+                        Сохраняются только изменённые строки.
+                    </div>
                 </div>
                 <div class="farmdata-card-meta">
                     <div class="farmdata-badge-admin">
@@ -378,11 +433,12 @@
                         <th>Telegram</th>
                         <th>След. оплата</th>
                         <th>Тариф, ₽</th>
+                        <th>Сохранение</th>
                     </tr>
                     </thead>
                     <tbody data-role="farmdata-body">
                         <tr data-role="farmdata-placeholder">
-                            <td colspan="9" class="farmdata-no-accounts">
+                            <td colspan="10" class="farmdata-no-accounts">
                                 Готовим таблицу к отображению...
                             </td>
                         </tr>
@@ -651,6 +707,96 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    function setFarmdataRowSaveStatus(row, text, statusType) {
+        if (!row) return;
+        const statusEl = row.querySelector('[data-role="row-save-status"]');
+        if (!statusEl) return;
+
+        statusEl.textContent = text || "";
+        statusEl.classList.remove("farmdata-save-status--success", "farmdata-save-status--error");
+        if (statusType === "success") {
+            statusEl.classList.add("farmdata-save-status--success");
+        } else if (statusType === "error") {
+            statusEl.classList.add("farmdata-save-status--error");
+        }
+    }
+
+    function setFarmdataRowDirtyState(row, isDirty) {
+        if (!row) return;
+        row.dataset.dirty = isDirty ? "1" : "0";
+        row.classList.toggle("farmdata-row--dirty", isDirty);
+
+        const marker = row.querySelector('[data-role="row-dirty-indicator"]');
+        if (marker) {
+            marker.hidden = !isDirty;
+        }
+        if (isDirty) {
+            setFarmdataRowSaveStatus(row, "", "idle");
+        }
+    }
+
+    function clearAdminFarmdataErrors(targetRow) {
+        const table = document.querySelector('[data-role="admin-farmdata-table"]');
+        if (!table) return;
+
+        const rows = targetRow
+            ? [targetRow]
+            : Array.from(table.querySelectorAll("tbody tr[data-account-id]"));
+        rows.forEach(function (row) {
+            row.classList.remove("farmdata-row-error");
+            row.querySelectorAll(".farmdata-input--error").forEach(function (input) {
+                input.classList.remove("farmdata-input--error");
+            });
+            row.querySelectorAll(".farmdata-error-message").forEach(function (message) {
+                message.remove();
+            });
+        });
+    }
+
+    function resolveAdminFarmdataFieldName(message) {
+        const text = String(message || "").toLowerCase();
+        if (text.includes("igg")) return "igg_id";
+        if (text.includes("email") || text.includes("e-mail") || text.includes("почт")) return "email";
+        if (text.includes("парол")) return "password";
+        if (text.includes("королевств") || text.includes("сервер")) return "server";
+        if (text.includes("telegram")) return "telegram_tag";
+        if (text.includes("тариф")) return "tariff";
+        if (text.includes("оплат")) return "next_payment_date";
+        return null;
+    }
+
+    function renderAdminFarmdataErrors(errors) {
+        if (!Array.isArray(errors) || errors.length === 0) return;
+
+        const table = document.querySelector('[data-role="admin-farmdata-table"]');
+        if (!table) return;
+
+        errors.forEach(function (error) {
+            const accountId = error && error.account_id != null ? String(error.account_id) : "";
+            if (!accountId) return;
+
+            const row = table.querySelector(`tbody tr[data-account-id="${accountId}"]`);
+            if (!row) return;
+
+            row.classList.add("farmdata-row-error");
+            const fieldName = resolveAdminFarmdataFieldName(error.message);
+            const input = fieldName ? row.querySelector(`input[name="${fieldName}"]`) : null;
+            const messageEl = document.createElement("div");
+            messageEl.className = "farmdata-error-message";
+            messageEl.textContent = error.message || "Ошибка в строке.";
+
+            if (input) {
+                input.classList.add("farmdata-input--error");
+                input.insertAdjacentElement("afterend", messageEl);
+            } else {
+                const cell = row.querySelector("td") || row;
+                cell.appendChild(messageEl);
+            }
+
+            setFarmdataRowSaveStatus(row, "Ошибка", "error");
+        });
+    }
+
     function initFarmdataRow(row) {
         if (!row) return;
         if (!row.dataset.dirty) {
@@ -659,6 +805,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const blocked = row.dataset.paymentBlocked === "1";
         const active = row.dataset.isActive === "1";
         applyPaymentStateToRow(row, blocked, active);
+        setFarmdataRowDirtyState(row, row.dataset.dirty === "1");
 
         const tariffInput = row.querySelector('input[name="tariff"]');
         if (tariffInput) {
@@ -736,6 +883,12 @@ document.addEventListener("DOMContentLoaded", function () {
                     <div class="tariff-label tariff-label--interactive" data-role="tariff-label"></div>
                     <div class="tariff-dropdown" data-role="tariff-dropdown" hidden></div>
                 </div>
+            </td>
+            <td>
+                <span class="farmdata-dirty-badge" data-role="row-dirty-indicator" hidden>
+                    Изменено
+                </span>
+                <span class="farmdata-save-status" data-role="row-save-status"></span>
             </td>`;
 
         initFarmdataRow(tr);
@@ -776,7 +929,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (!totalRows) {
             const emptyRow = document.createElement("tr");
-            emptyRow.innerHTML = '<td colspan="9" class="farmdata-no-accounts">Аккаунты пока не найдены.</td>';
+            emptyRow.innerHTML = '<td colspan="10" class="farmdata-no-accounts">Аккаунты пока не найдены.</td>';
             body.appendChild(emptyRow);
             setFarmdataLoaderState({ loaded: 0, total: 0, isDone: true });
             return;
@@ -824,7 +977,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (loaded === 0) {
             const emptyRow = document.createElement("tr");
-            emptyRow.innerHTML = '<td colspan="9" class="farmdata-no-accounts">Не удалось загрузить данные.</td>';
+            emptyRow.innerHTML = '<td colspan="10" class="farmdata-no-accounts">Не удалось загрузить данные.</td>';
             body.appendChild(emptyRow);
         }
 
@@ -1185,6 +1338,8 @@ document.addEventListener("DOMContentLoaded", function () {
             }
         }
 
+        clearAdminFarmdataErrors();
+
         try {
             const resp = await fetch("/admin/farm-data/save", {
                 method: "POST",
@@ -1232,11 +1387,24 @@ document.addEventListener("DOMContentLoaded", function () {
                     showToast(`Шаблон настроек применён (${appliedNames.join(", ")})`, "success");
                 }
             }
+            const rowErrors = Array.isArray(data.errors) ? data.errors : [];
+            const errorIds = new Set(
+                rowErrors
+                    .map(function (row) { return row && row.account_id != null ? String(row.account_id) : ""; })
+                    .filter(Boolean)
+            );
             dirtyRows.forEach(function (row) {
-                if (row) {
-                    row.dataset.dirty = "0";
+                if (!row) return;
+                const rowId = row.dataset.accountId ? String(row.dataset.accountId) : "";
+                if (rowId && errorIds.has(rowId)) {
+                    setFarmdataRowDirtyState(row, true);
+                    setFarmdataRowSaveStatus(row, "Ошибка", "error");
+                    return;
                 }
+                setFarmdataRowDirtyState(row, false);
+                setFarmdataRowSaveStatus(row, "✓ сохранено", "success");
             });
+            renderAdminFarmdataErrors(rowErrors);
         } catch (err) {
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
@@ -1350,7 +1518,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
         const row = target.closest('tr[data-account-id]');
         if (row) {
-            row.dataset.dirty = "1";
+            setFarmdataRowDirtyState(row, true);
+            clearAdminFarmdataErrors(row);
         }
 
         scheduleAdminFarmDataAutoSave();
