@@ -1239,8 +1239,19 @@ def farm_data_save():
     payload = request.get_json(silent=True) or {}
     items = payload.get("items") or []
 
-    if not isinstance(items, list) or not items:
-        return jsonify({"ok": False, "error": "Нет данных для сохранения"}), 400
+    if not isinstance(items, list):
+        return jsonify({"ok": False, "error": "Некорректный формат данных"}), 400
+
+    if not items:
+        farmdata_status = collect_farmdata_status(current_user.id)
+        g.farmdata_status_cache = farmdata_status
+        return jsonify(
+            {
+                "ok": True,
+                "farmdata_status": farmdata_status,
+                "farmdata_required": bool(farmdata_status.get("has_issues")),
+            }
+        )
 
     # Собираем валидные account_id из payload
     cleaned_items = []
@@ -1289,18 +1300,25 @@ def farm_data_save():
     )
     fd_by_key = {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
 
+    def normalize_field(row: dict, key: str) -> tuple[str, bool]:
+        if key not in row:
+            return "", False
+        return (row.get(key) or "").strip(), True
+
     # Первая проходка — валидация IGG
     for acc_id, row in cleaned_items:
         acc = acc_by_id.get(acc_id)
         if not acc:
             continue
 
-        igg_id = (row.get("igg_id") or "").strip()
-        if igg_id and not igg_id.isdigit():
-            return jsonify({
-                "ok": False,
-                "error": f"IGG ID для фермы «{acc.name}» должен содержать только цифры",
-            }), 400
+        igg_id, igg_present = normalize_field(row, "igg_id")
+        if igg_present and igg_id and not igg_id.isdigit():
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": f"IGG ID для фермы «{acc.name}» должен содержать только цифры",
+                }
+            ), 400
 
     # Вторая проходка — применение изменений
     menu_sync_queue: list[
@@ -1316,31 +1334,48 @@ def farm_data_save():
             farm_name = acc.name
             key = (current_user.id, farm_name)
 
-            email = (row.get("email") or "").strip()
-            password_val = (row.get("password") or "").strip()
-            igg_id = (row.get("igg_id") or "").strip()
-            server_val = (row.get("server") or "").strip()
-            telegram_tag_val = (row.get("telegram_tag") or "").strip()
+            email, email_present = normalize_field(row, "email")
+            password_val, password_present = normalize_field(row, "password")
+            igg_id, igg_present = normalize_field(row, "igg_id")
+            server_val, server_present = normalize_field(row, "server")
+            telegram_tag_val, telegram_present = normalize_field(row, "telegram_tag")
+            has_any_value = any(
+                value
+                for value, present in [
+                    (email, email_present),
+                    (password_val, password_present),
+                    (igg_id, igg_present),
+                    (server_val, server_present),
+                    (telegram_tag_val, telegram_present),
+                ]
+                if present
+            )
 
             fd = fd_by_key.get(key)
             if not fd:
                 # создаём только если есть хоть какие-то данные
-                if not any([email, password_val, igg_id, server_val, telegram_tag_val]):
+                if not has_any_value:
                     continue
 
                 fd = _get_or_create_farmdata_entry(current_user.id, farm_name)
                 fd_by_key[key] = fd
 
             # Обновляем поля
-            fd.email = email or None
-            fd.password = password_val or None
-            fd.igg_id = igg_id or None
-            fd.server = server_val or None
-            fd.telegram_tag = telegram_tag_val or None
+            if email_present:
+                fd.email = email or None
+            if password_present:
+                fd.password = password_val or None
+            if igg_present:
+                fd.igg_id = igg_id or None
+            if server_present:
+                fd.server = server_val or None
+            if telegram_present:
+                fd.telegram_tag = telegram_tag_val or None
 
-            menu_sync_queue.append(
-                (acc, email or None, password_val or None, igg_id or None)
-            )
+            if email_present or password_present or igg_present:
+                menu_sync_queue.append(
+                    (acc, fd.email, fd.password, fd.igg_id)
+                )
 
         db.session.commit()
     except Exception as exc:
