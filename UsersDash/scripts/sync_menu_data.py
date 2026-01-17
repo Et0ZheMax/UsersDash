@@ -10,12 +10,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
-from UsersDash.app import create_app
-from UsersDash.models import Account, FarmData
-from UsersDash.services.remote_api import update_account_menu_data
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from UsersDash.app import create_app  # noqa: E402
+from UsersDash.models import Account, FarmData  # noqa: E402
+from UsersDash.services.remote_api import update_account_menu_data  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

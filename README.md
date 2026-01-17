@@ -82,8 +82,10 @@
 - Локальные файлы: `python UsersDash/scripts/sync_menu_data.py --mode local`
 - Отправка на серверы: `python UsersDash/scripts/sync_menu_data.py --mode server`
 - Собственный каталог с конфигами: `python UsersDash/scripts/sync_menu_data.py --configs-dir путь`
+- Альтернатива через модуль: `python -m UsersDash.scripts.sync_menu_data --mode local`
 
-Для серверного режима нужны настроенные API-адреса серверов и доступ к ним.
+Для серверного режима нужны настроенные API-адреса серверов и доступ к ним. В Windows можно
+запускать скрипт из каталога репозитория либо через `-m`, чтобы корректно резолвить пакет.
 
 ## Тестирование
 
