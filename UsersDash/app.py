@@ -171,6 +171,155 @@ def ensure_blocked_for_payment_column():
         print(f"[MIGRATE] Не удалось добавить колонку blocked_for_payment: {exc}")
 
 
+def ensure_farm_data_account_id_column() -> None:
+    """Добавляет колонку account_id в farm_data и синхронизирует данные (SQLite)."""
+
+    try:
+        engine = db.engine
+        if engine.url.get_backend_name() != "sqlite":
+            return
+
+        inspector = inspect(engine)
+        columns = [col["name"] for col in inspector.get_columns("farm_data")]
+        if "account_id" in columns:
+            return
+
+        merge_fields = (
+            "email",
+            "login",
+            "password",
+            "igg_id",
+            "server",
+            "telegram_tag",
+        )
+
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE farm_data ADD COLUMN account_id INTEGER"))
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE farm_data
+                    SET account_id = (
+                        SELECT accounts.id
+                        FROM accounts
+                        WHERE accounts.owner_id = farm_data.user_id
+                          AND accounts.name = farm_data.farm_name
+                    )
+                    WHERE account_id IS NULL
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE farm_data
+                    SET user_id = (
+                        SELECT accounts.owner_id
+                        FROM accounts
+                        WHERE accounts.id = farm_data.account_id
+                    )
+                    WHERE account_id IS NOT NULL
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE farm_data
+                    SET farm_name = (
+                        SELECT accounts.name
+                        FROM accounts
+                        WHERE accounts.id = farm_data.account_id
+                    )
+                    WHERE account_id IS NOT NULL
+                    """
+                )
+            )
+
+            duplicates = conn.execute(
+                text(
+                    """
+                    SELECT account_id
+                    FROM farm_data
+                    WHERE account_id IS NOT NULL
+                    GROUP BY account_id
+                    HAVING COUNT(*) > 1
+                    """
+                )
+            ).fetchall()
+
+            for row in duplicates:
+                account_id = row[0]
+                rows = conn.execute(
+                    text(
+                        """
+                        SELECT id, email, login, password, igg_id, server, telegram_tag,
+                               created_at, updated_at
+                        FROM farm_data
+                        WHERE account_id = :account_id
+                        ORDER BY COALESCE(updated_at, created_at) DESC, id DESC
+                        """
+                    ),
+                    {"account_id": account_id},
+                ).mappings().all()
+
+                if not rows:
+                    continue
+
+                keep_row = rows[0]
+                updates: dict[str, str | None] = {}
+                for field in merge_fields:
+                    if keep_row[field] not in (None, ""):
+                        continue
+                    for candidate in rows[1:]:
+                        value = candidate[field]
+                        if value not in (None, ""):
+                            updates[field] = value
+                            break
+
+                if updates:
+                    assignments = ", ".join([f"{field} = :{field}" for field in updates])
+                    updates["id"] = keep_row["id"]
+                    conn.execute(
+                        text(f"UPDATE farm_data SET {assignments} WHERE id = :id"),
+                        updates,
+                    )
+
+                for dup_row in rows[1:]:
+                    conn.execute(
+                        text("DELETE FROM farm_data WHERE id = :id"),
+                        {"id": dup_row["id"]},
+                    )
+
+            null_count = conn.execute(
+                text("SELECT COUNT(*) FROM farm_data WHERE account_id IS NULL")
+            ).scalar_one()
+            if null_count:
+                print(f"[MIGRATE] Внимание: записей farm_data без account_id: {null_count}")
+
+            indexes = conn.execute(text("PRAGMA index_list(farm_data)")).fetchall()
+            for index in indexes:
+                if index[1] == "uq_farm_data_user_farm":
+                    conn.execute(text("DROP INDEX uq_farm_data_user_farm"))
+                    break
+
+            conn.execute(
+                text(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_farm_data_account_id
+                    ON farm_data (account_id)
+                    """
+                )
+            )
+
+        print("[MIGRATE] Добавлена колонка farm_data.account_id и выполнена синхронизация.")
+    except Exception as exc:
+        print(f"[MIGRATE] Не удалось обновить farm_data.account_id: {exc}")
+
+
 def _run_midnight_backup(app: Flask):
     """Фоновая задача: ежедневный бэкап БД в 00:00."""
 
@@ -218,6 +367,7 @@ def create_app() -> Flask:
     with app.app_context():
         db.create_all()
         ensure_blocked_for_payment_column()
+        ensure_farm_data_account_id_column()
         ensure_default_admin()
 
     # Регистрируем blueprints
