@@ -6,7 +6,9 @@ import os
 import re
 import csv
 import io
+import threading
 import json
+import time
 import difflib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -2631,6 +2633,91 @@ def admin_farm_data_chunk():
     )
 
 
+def _dispatch_menu_sync_background(
+    items: list[dict[str, str | int | None]],
+) -> None:
+    if not items:
+        return
+
+    app = current_app._get_current_object()
+
+    def worker(payloads: list[dict[str, str | int | None]]) -> None:
+        with app.app_context():
+            account_ids = [
+                item["account_id"]
+                for item in payloads
+                if isinstance(item.get("account_id"), int)
+            ]
+            if not account_ids:
+                return
+
+            accounts = (
+                Account.query.options(joinedload(Account.server))
+                .filter(Account.id.in_(account_ids))
+                .all()
+            )
+            accounts_map = {acc.id: acc for acc in accounts}
+            server_limits: dict[int | None, threading.Semaphore] = {}
+            for acc in accounts:
+                server_limits.setdefault(acc.server_id, threading.Semaphore(2))
+
+            max_workers = min(4, len(payloads))
+            if max_workers < 1:
+                return
+
+            def sync_one(item: dict[str, str | int | None]) -> tuple[bool, str]:
+                acc = accounts_map.get(item["account_id"])
+                if not acc:
+                    return False, "аккаунт не найден"
+                semaphore = server_limits.setdefault(acc.server_id, threading.Semaphore(1))
+                max_attempts = 3
+                last_msg = "неизвестная ошибка"
+                for attempt in range(1, max_attempts + 1):
+                    with semaphore:
+                        ok, msg = update_account_menu_data(
+                            acc,
+                            email=item.get("email"),
+                            password=item.get("password"),
+                            igg_id=item.get("igg_id"),
+                        )
+                    last_msg = msg
+                    if ok:
+                        return True, msg
+                    if attempt < max_attempts:
+                        app.logger.warning(
+                            "Повтор %s/%s обновления MenuData для аккаунта %s: %s",
+                            attempt,
+                            max_attempts,
+                            acc.id,
+                            msg,
+                        )
+                        time.sleep(0.5 * attempt)
+                return False, last_msg
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(sync_one, item): item for item in payloads
+                }
+                for future in as_completed(future_map):
+                    item = future_map[future]
+                    try:
+                        ok, msg = future.result()
+                    except Exception as exc:
+                        ok = False
+                        msg = str(exc)
+                    if not ok:
+                        acc_id = item.get("account_id")
+                        app.logger.warning(
+                            "Не удалось обновить MenuData для аккаунта %s: %s",
+                            acc_id,
+                            msg,
+                        )
+            db.session.remove()
+
+    thread = threading.Thread(target=worker, args=(items,), daemon=True)
+    thread.start()
+
+
 @admin_bp.route("/farm-data/autocreate-clients", methods=["POST"])
 @login_required
 def admin_farm_data_autocreate_clients():
@@ -2742,9 +2829,7 @@ def admin_farm_data_save():
     defaults_to_apply: list[tuple[Account, int]] = []
     tariffs_without_defaults = {0, 50}
     defaults_results: list[dict[str, str]] = []
-    menu_sync_queue: list[
-        tuple[Account, str | None, str | None, str | None]
-    ] = []
+    menu_sync_queue: list[dict[str, str | int | None]] = []
 
     for row in items:
         acc_id = int(row.get("account_id", 0))
@@ -2765,7 +2850,14 @@ def admin_farm_data_save():
         fd.igg_id = (row.get("igg_id") or "").strip() or None
         fd.server = (row.get("server") or "").strip() or None
         fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
-        menu_sync_queue.append((acc, fd.email, fd.password, fd.igg_id))
+        menu_sync_queue.append(
+            {
+                "account_id": acc.id,
+                "email": fd.email,
+                "password": fd.password,
+                "igg_id": fd.igg_id,
+            }
+        )
 
         # обновим тариф и оплату
         next_payment_raw = row.get("next_payment_date")
@@ -2823,13 +2915,7 @@ def admin_farm_data_save():
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
 
-    for acc, email, password_val, igg_id in menu_sync_queue:
-        update_account_menu_data(
-            acc,
-            email=email,
-            password=password_val,
-            igg_id=igg_id,
-        )
+    _dispatch_menu_sync_background(menu_sync_queue)
 
     if apply_tariff_defaults:
         for acc, tariff_price in defaults_to_apply:
