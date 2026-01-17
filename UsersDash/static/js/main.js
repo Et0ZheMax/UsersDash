@@ -657,7 +657,10 @@
         }
 
     const farmDataWatchedFields = new Set(["email", "password", "igg_id", "server", "telegram_tag"]);
+    const farmDataAutoSaveDelay = 700;
     let farmDataSaveInProgress = false;
+    let farmDataAutoSaveTimer = null;
+    let farmDataAutoSaveQueued = false;
     let lastAutoSaveToastAt = 0;
 
     function setFarmDataSavingState(isSaving, isAuto) {
@@ -678,13 +681,14 @@
     function collectClientFarmDataItems() {
         const table = document.querySelector('[data-role="farmdata-table"]');
         if (!table) {
-            return { items: [], rows: [], missingTable: true };
+            return { items: [], dirtyRows: [], totalRows: 0, missingTable: true };
         }
 
         const rows = Array.from(table.querySelectorAll("tbody tr[data-account-id]"));
+        const dirtyRows = rows.filter((tr) => tr.dataset.dirty === "1");
         const items = [];
 
-        rows.forEach(function (tr) {
+        dirtyRows.forEach(function (tr) {
             const accountId = tr.dataset.accountId;
             if (!accountId) return;
 
@@ -707,19 +711,24 @@
             items.push(item);
         });
 
-        return { items, rows, missingTable: false };
+        return { items, dirtyRows, totalRows: rows.length, missingTable: false };
     }
 
     async function handleFarmDataSave(btn, options = {}) {
         const isAuto = Boolean(options.isAuto);
-        const { items, rows, missingTable } = collectClientFarmDataItems();
+        const {
+            items,
+            dirtyRows,
+            totalRows,
+            missingTable
+        } = collectClientFarmDataItems();
         if (missingTable) {
             if (!isAuto) {
                 showToast("Таблица с фермами не найдена.", "error");
             }
             return;
         }
-        if (!rows.length) {
+        if (!totalRows) {
             if (!isAuto) {
                 showToast("Нет ферм для сохранения.", "info");
             }
@@ -728,7 +737,7 @@
 
         if (!items.length) {
             if (!isAuto) {
-                showToast("Нет данных для сохранения.", "info");
+                showToast("Нет изменений для сохранения.", "info");
             }
             return;
         }
@@ -767,6 +776,11 @@
             }
 
             applyFarmDataStatusUI(data.farmdata_status);
+            dirtyRows.forEach((row) => {
+                if (row) {
+                    row.dataset.dirty = "0";
+                }
+            });
             const now = Date.now();
             if (!isAuto || now - lastAutoSaveToastAt > 8000) {
                 showToast(isAuto ? "Изменения сохранены автоматически." : "Данные ферм сохранены.", "success");
@@ -781,6 +795,10 @@
             if (isAuto) {
                 farmDataSaveInProgress = false;
                 setFarmDataSavingState(false);
+                if (farmDataAutoSaveQueued) {
+                    farmDataAutoSaveQueued = false;
+                    scheduleFarmDataAutoSave();
+                }
             } else {
                 setButtonLoading(btn, false);
                 const textEl = btn ? findBtnTextEl(btn) : null;
@@ -793,9 +811,18 @@
 
     function scheduleFarmDataAutoSave() {
         if (farmDataSaveInProgress) {
+            farmDataAutoSaveQueued = true;
             return;
         }
-        handleFarmDataSave(null, { isAuto: true });
+
+        if (farmDataAutoSaveTimer) {
+            clearTimeout(farmDataAutoSaveTimer);
+        }
+
+        farmDataAutoSaveTimer = setTimeout(function () {
+            farmDataAutoSaveTimer = null;
+            handleFarmDataSave(null, { isAuto: true });
+        }, farmDataAutoSaveDelay);
     }
 
     function handleClientFarmDataChange(event) {
@@ -806,6 +833,7 @@
         const row = target.closest('[data-role="farmdata-table"] tbody tr[data-account-id]');
         if (!row) return;
 
+        row.dataset.dirty = "1";
         applyFarmDataStatusUI();
         scheduleFarmDataAutoSave();
     }

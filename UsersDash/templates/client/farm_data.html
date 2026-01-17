@@ -277,7 +277,7 @@
                             {% set acc = item.account %}
                             {% set fd = item.farmdata %}
                             {% set has_required = fd and fd.email and fd.password and fd.igg_id and fd.server and fd.telegram_tag %}
-                            <tr data-account-id="{{ acc.id }}">
+                            <tr data-account-id="{{ acc.id }}" data-dirty="0">
                                 <td class="farmdata-name-cell">
                                     <div class="farmdata-name-main">
                                         {{ acc.name }}

@@ -653,6 +653,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
     function initFarmdataRow(row) {
         if (!row) return;
+        if (!row.dataset.dirty) {
+            row.dataset.dirty = "0";
+        }
         const blocked = row.dataset.paymentBlocked === "1";
         const active = row.dataset.isActive === "1";
         applyPaymentStateToRow(row, blocked, active);
@@ -671,6 +674,7 @@ document.addEventListener("DOMContentLoaded", function () {
         tr.dataset.farmName = item.farm_name || "";
         tr.dataset.isActive = item.is_active ? "1" : "0";
         tr.dataset.paymentBlocked = item.blocked_for_payment ? "1" : "0";
+        tr.dataset.dirty = "0";
 
         const nextPayment = item.next_payment_at || "";
         const tariffVal = item.tariff !== null && item.tariff !== undefined ? item.tariff : "";
@@ -1052,14 +1056,23 @@ document.addEventListener("DOMContentLoaded", function () {
     function collectAdminFarmDataItems() {
         const table = document.querySelector('[data-role="admin-farmdata-table"]');
         if (!table) {
-            return { items: [], formatWarnings: [], missingTable: true, hasRows: false };
+            return {
+                items: [],
+                dirtyRows: [],
+                formatWarnings: [],
+                missingTable: true,
+                hasRows: false
+            };
         }
 
         const rows = table.querySelectorAll("tbody tr[data-account-id]");
+        const dirtyRows = Array.from(rows).filter(function (row) {
+            return row.dataset.dirty === "1";
+        });
         const items = [];
         const formatWarnings = [];
 
-        rows.forEach(function (tr) {
+        dirtyRows.forEach(function (tr) {
             const accountId = tr.dataset.accountId;
             if (!accountId) return;
             const farmLabel = formatFarmLabel(tr);
@@ -1107,6 +1120,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         return {
             items,
+            dirtyRows,
             formatWarnings,
             missingTable: false,
             hasRows: rows.length > 0
@@ -1119,7 +1133,13 @@ document.addEventListener("DOMContentLoaded", function () {
             clearTimeout(adminFarmDataAutoSaveTimer);
             adminFarmDataAutoSaveTimer = null;
         }
-        const { items, formatWarnings, missingTable, hasRows } = collectAdminFarmDataItems();
+        const {
+            items,
+            dirtyRows,
+            formatWarnings,
+            missingTable,
+            hasRows
+        } = collectAdminFarmDataItems();
 
         if (missingTable) {
             if (!isAuto) {
@@ -1128,9 +1148,16 @@ document.addEventListener("DOMContentLoaded", function () {
             return;
         }
 
-        if (!hasRows || !items.length) {
+        if (!hasRows) {
             if (!isAuto) {
                 showToast("Нет данных для сохранения.", "info");
+            }
+            return;
+        }
+
+        if (!items.length) {
+            if (!isAuto) {
+                showToast("Нет изменений для сохранения.", "info");
             }
             return;
         }
@@ -1205,6 +1232,11 @@ document.addEventListener("DOMContentLoaded", function () {
                     showToast(`Шаблон настроек применён (${appliedNames.join(", ")})`, "success");
                 }
             }
+            dirtyRows.forEach(function (row) {
+                if (row) {
+                    row.dataset.dirty = "0";
+                }
+            });
         } catch (err) {
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
@@ -1239,7 +1271,7 @@ document.addEventListener("DOMContentLoaded", function () {
         adminFarmDataAutoSaveTimer = setTimeout(function () {
             adminFarmDataAutoSaveTimer = null;
             saveAdminFarmData({ isAuto: true });
-        }, 900);
+        }, 700);
     }
 
     document.addEventListener("input", function (e) {
@@ -1316,6 +1348,11 @@ document.addEventListener("DOMContentLoaded", function () {
             updateTariffLabel(target);
         }
 
+        const row = target.closest('tr[data-account-id]');
+        if (row) {
+            row.dataset.dirty = "1";
+        }
+
         scheduleAdminFarmDataAutoSave();
     }
 
@@ -1345,7 +1382,6 @@ document.addEventListener("DOMContentLoaded", function () {
                 input.dispatchEvent(new Event("input", { bubbles: true }));
                 updateTariffLabel(input);
                 closeTariffDropdowns();
-                saveAdminFarmData({ isAuto: true });
                 return;
             }
 

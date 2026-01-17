@@ -2841,56 +2841,75 @@ def admin_farm_data_save():
             user_id=acc.owner_id, farm_name=acc.name
         ).first()
 
-        if not fd:
+        email_present = "email" in row
+        password_present = "password" in row
+        igg_present = "igg_id" in row
+        server_present = "server" in row
+        telegram_present = "telegram_tag" in row
+        has_farmdata_fields = any(
+            [email_present, password_present, igg_present, server_present, telegram_present]
+        )
+
+        if not fd and has_farmdata_fields:
             fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
             db.session.add(fd)
 
-        fd.email = (row.get("email") or "").strip() or None
-        fd.password = (row.get("password") or "").strip() or None
-        fd.igg_id = (row.get("igg_id") or "").strip() or None
-        fd.server = (row.get("server") or "").strip() or None
-        fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
-        menu_sync_queue.append(
-            {
-                "account_id": acc.id,
-                "email": fd.email,
-                "password": fd.password,
-                "igg_id": fd.igg_id,
-            }
-        )
+        if fd:
+            if email_present:
+                fd.email = (row.get("email") or "").strip() or None
+            if password_present:
+                fd.password = (row.get("password") or "").strip() or None
+            if igg_present:
+                fd.igg_id = (row.get("igg_id") or "").strip() or None
+            if server_present:
+                fd.server = (row.get("server") or "").strip() or None
+            if telegram_present:
+                fd.telegram_tag = (row.get("telegram_tag") or "").strip() or None
+
+            if email_present or password_present or igg_present:
+                menu_sync_queue.append(
+                    {
+                        "account_id": acc.id,
+                        "email": fd.email,
+                        "password": fd.password,
+                        "igg_id": fd.igg_id,
+                    }
+                )
 
         # обновим тариф и оплату
-        next_payment_raw = row.get("next_payment_date")
-        if next_payment_raw:
-            parsed_dt = parse_next_payment(next_payment_raw)
-            if parsed_dt:
-                acc.next_payment_at = parsed_dt
+        if "next_payment_date" in row:
+            next_payment_raw = row.get("next_payment_date")
+            if next_payment_raw:
+                parsed_dt = parse_next_payment(next_payment_raw)
+                if parsed_dt:
+                    acc.next_payment_at = parsed_dt
+                else:
+                    warnings.append(
+                        f"{acc.name}: не удалось распознать дату '{next_payment_raw}'"
+                    )
             else:
-                warnings.append(
-                    f"{acc.name}: не удалось распознать дату '{next_payment_raw}'"
-                )
-        else:
-            acc.next_payment_at = None
+                acc.next_payment_at = None
 
         parsed_tariff = None
-        tariff_raw = row.get("tariff")
-        if tariff_raw is None or str(tariff_raw).strip() == "":
-            acc.next_payment_amount = None
-        else:
-            parsed_tariff = parse_tariff(tariff_raw)
-            if parsed_tariff is not None:
-                previous_tariff = acc.next_payment_amount
-                acc.next_payment_amount = parsed_tariff
-                if (
-                    apply_tariff_defaults
-                    and parsed_tariff != previous_tariff
-                    and parsed_tariff not in tariffs_without_defaults
-                ):
-                    defaults_to_apply.append((acc, parsed_tariff))
+        if "tariff" in row:
+            tariff_raw = row.get("tariff")
+            if tariff_raw is None or str(tariff_raw).strip() == "":
+                acc.next_payment_amount = None
             else:
-                warnings.append(
-                    f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
-                )
+                parsed_tariff = parse_tariff(tariff_raw)
+                if parsed_tariff is not None:
+                    previous_tariff = acc.next_payment_amount
+                    acc.next_payment_amount = parsed_tariff
+                    if (
+                        apply_tariff_defaults
+                        and parsed_tariff != previous_tariff
+                        and parsed_tariff not in tariffs_without_defaults
+                    ):
+                        defaults_to_apply.append((acc, parsed_tariff))
+                else:
+                    warnings.append(
+                        f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
+                    )
 
         parsed_tariff_plan = None
         if "tariff_plan" in row:
@@ -2905,7 +2924,7 @@ def admin_farm_data_save():
                     warnings.append(
                         f"{acc.name}: некорректное значение выбранного тарифа '{tariff_plan_raw}'"
                     )
-        elif parsed_tariff is not None and acc.next_payment_tariff is None:
+        elif "tariff" in row and parsed_tariff is not None and acc.next_payment_tariff is None:
             acc.next_payment_tariff = parsed_tariff
 
     try:
