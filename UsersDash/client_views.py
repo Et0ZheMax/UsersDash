@@ -1238,6 +1238,8 @@ def farm_data_save():
 
     payload = request.get_json(silent=True) or {}
     items = payload.get("items") or []
+    errors: list[dict[str, Any]] = []
+    saved: list[int] = []
 
     if not isinstance(items, list):
         return jsonify({"ok": False, "error": "Некорректный формат данных"}), 400
@@ -1248,12 +1250,14 @@ def farm_data_save():
         return jsonify(
             {
                 "ok": True,
+                "saved": saved,
+                "errors": errors,
                 "farmdata_status": farmdata_status,
                 "farmdata_required": bool(farmdata_status.get("has_issues")),
             }
         )
 
-    # Собираем валидные account_id из payload
+    # Собираем account_id из payload для выборки аккаунтов
     cleaned_items = []
     account_ids = set()
 
@@ -1262,14 +1266,29 @@ def farm_data_save():
         try:
             acc_id = int(account_id_raw)
         except (TypeError, ValueError):
-            # некорректный ID — пропускаем
+            errors.append(
+                {
+                    "account_id": account_id_raw,
+                    "message": "Некорректный идентификатор аккаунта.",
+                }
+            )
             continue
 
         cleaned_items.append((acc_id, row))
         account_ids.add(acc_id)
 
     if not cleaned_items:
-        return jsonify({"ok": False, "error": "Нет валидных ферм для сохранения"}), 400
+        farmdata_status = collect_farmdata_status(current_user.id)
+        g.farmdata_status_cache = farmdata_status
+        return jsonify(
+            {
+                "ok": True,
+                "saved": saved,
+                "errors": errors,
+                "farmdata_status": farmdata_status,
+                "farmdata_required": bool(farmdata_status.get("has_issues")),
+            }
+        )
 
     # Подтягиваем аккаунты текущего пользователя одним запросом
     from UsersDash.models import Account, FarmData  # локальный импорт, чтобы избежать циклов
@@ -1286,7 +1305,24 @@ def farm_data_save():
     acc_by_id = {acc.id: acc for acc in accounts}
 
     if not acc_by_id:
-        return jsonify({"ok": False, "error": "Фермы не найдены или не принадлежат вам"}), 400
+        missing_errors = [
+            {
+                "account_id": acc_id,
+                "message": "Ферма не найдена или не принадлежит вам.",
+            }
+            for acc_id, _ in cleaned_items
+        ]
+        farmdata_status = collect_farmdata_status(current_user.id)
+        g.farmdata_status_cache = farmdata_status
+        return jsonify(
+            {
+                "ok": True,
+                "saved": saved,
+                "errors": errors + missing_errors,
+                "farmdata_status": farmdata_status,
+                "farmdata_required": bool(farmdata_status.get("has_issues")),
+            }
+        )
 
     # Для оптимизации сразу вытаскиваем все FarmData по (user_id, farm_name)
     farm_names = {acc.name for acc in accounts}
@@ -1305,62 +1341,59 @@ def farm_data_save():
             return "", False
         return (row.get(key) or "").strip(), True
 
-    # Первая проходка — валидация IGG
+    menu_sync_queue: list[
+        tuple[Account, str | None, str | None, str | None]
+    ] = []
     for acc_id, row in cleaned_items:
         acc = acc_by_id.get(acc_id)
         if not acc:
+            errors.append(
+                {
+                    "account_id": acc_id,
+                    "message": "Ферма не найдена или не принадлежит вам.",
+                }
+            )
             continue
 
         igg_id, igg_present = normalize_field(row, "igg_id")
         if igg_present and igg_id and not igg_id.isdigit():
-            return jsonify(
+            errors.append(
                 {
-                    "ok": False,
-                    "error": f"IGG ID для фермы «{acc.name}» должен содержать только цифры",
+                    "account_id": acc_id,
+                    "message": f"IGG ID для фермы «{acc.name}» должен содержать только цифры.",
                 }
-            ), 400
+            )
+            continue
 
-    # Вторая проходка — применение изменений
-    menu_sync_queue: list[
-        tuple[Account, str | None, str | None, str | None]
-    ] = []
-    try:
-        for acc_id, row in cleaned_items:
-            acc = acc_by_id.get(acc_id)
-            if not acc:
-                # чужой аккаунт или неактивный — на всякий случай игнорируем
+        farm_name = acc.name
+        key = (current_user.id, farm_name)
+
+        email, email_present = normalize_field(row, "email")
+        password_val, password_present = normalize_field(row, "password")
+        server_val, server_present = normalize_field(row, "server")
+        telegram_tag_val, telegram_present = normalize_field(row, "telegram_tag")
+        has_any_value = any(
+            value
+            for value, present in [
+                (email, email_present),
+                (password_val, password_present),
+                (igg_id, igg_present),
+                (server_val, server_present),
+                (telegram_tag_val, telegram_present),
+            ]
+            if present
+        )
+
+        fd = fd_by_key.get(key)
+        if not fd:
+            if not has_any_value:
                 continue
 
-            farm_name = acc.name
-            key = (current_user.id, farm_name)
+            fd = _get_or_create_farmdata_entry(current_user.id, farm_name)
+            fd_by_key[key] = fd
 
-            email, email_present = normalize_field(row, "email")
-            password_val, password_present = normalize_field(row, "password")
-            igg_id, igg_present = normalize_field(row, "igg_id")
-            server_val, server_present = normalize_field(row, "server")
-            telegram_tag_val, telegram_present = normalize_field(row, "telegram_tag")
-            has_any_value = any(
-                value
-                for value, present in [
-                    (email, email_present),
-                    (password_val, password_present),
-                    (igg_id, igg_present),
-                    (server_val, server_present),
-                    (telegram_tag_val, telegram_present),
-                ]
-                if present
-            )
-
-            fd = fd_by_key.get(key)
-            if not fd:
-                # создаём только если есть хоть какие-то данные
-                if not has_any_value:
-                    continue
-
-                fd = _get_or_create_farmdata_entry(current_user.id, farm_name)
-                fd_by_key[key] = fd
-
-            # Обновляем поля
+        nested_tx = db.session.begin_nested()
+        try:
             if email_present:
                 fd.email = email or None
             if password_present:
@@ -1377,6 +1410,22 @@ def farm_data_save():
                     (acc, fd.email, fd.password, fd.igg_id)
                 )
 
+            db.session.flush()
+            nested_tx.commit()
+        except Exception as exc:
+            nested_tx.rollback()
+            print(f"[farm_data_save] ERROR: {exc}")
+            errors.append(
+                {
+                    "account_id": acc_id,
+                    "message": "Ошибка при сохранении строки. Попробуйте ещё раз.",
+                }
+            )
+            continue
+
+        saved.append(acc_id)
+
+    try:
         db.session.commit()
     except Exception as exc:
         db.session.rollback()
@@ -1397,6 +1446,8 @@ def farm_data_save():
     return jsonify(
         {
             "ok": True,
+            "saved": saved,
+            "errors": errors,
             "farmdata_status": farmdata_status,
             "farmdata_required": bool(farmdata_status.get("has_issues")),
         }
