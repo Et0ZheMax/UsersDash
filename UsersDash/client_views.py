@@ -58,8 +58,12 @@ def _normalize_guid(raw: Any) -> str:
     return re.sub(r"[^0-9a-z]", "", str(raw or "").lower())
 
 
-def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
-    existing = FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+def _get_or_create_farmdata_entry(
+    account_id: int,
+    user_id: int,
+    farm_name: str,
+) -> FarmData:
+    existing = FarmData.query.filter_by(account_id=account_id).first()
     if existing:
         return existing
 
@@ -69,21 +73,26 @@ def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
             text(
                 """
                 INSERT OR IGNORE INTO farm_data
-                    (user_id, farm_name, created_at, updated_at)
+                    (account_id, user_id, farm_name, created_at, updated_at)
                 VALUES
-                    (:user_id, :farm_name, :created_at, :updated_at)
+                    (:account_id, :user_id, :farm_name, :created_at, :updated_at)
                 """
             ),
             {
+                "account_id": account_id,
                 "user_id": user_id,
                 "farm_name": farm_name,
                 "created_at": now,
                 "updated_at": now,
             },
         )
-        return FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+        return FarmData.query.filter_by(account_id=account_id).first()
 
-    farm_data = FarmData(user_id=user_id, farm_name=farm_name)
+    farm_data = FarmData(
+        account_id=account_id,
+        user_id=user_id,
+        farm_name=farm_name,
+    )
     db.session.add(farm_data)
     return farm_data
 
@@ -1172,7 +1181,7 @@ def farm_data():
 
     Теперь:
     - подставляем список ферм (Account) текущего пользователя;
-    - к каждой ферме подтягиваем, если есть, FarmData по имени;
+    - к каждой ферме подтягиваем, если есть, FarmData по account_id;
     - имя фермы пользователь НЕ вводит, оно всегда из Account.name.
     """
     if getattr(current_user, "role", None) == "admin":
@@ -1186,19 +1195,20 @@ def farm_data():
         .all()
     )
 
-    # Все FarmData этого пользователя
+    # Все FarmData по аккаунтам этого пользователя
+    account_ids = [acc.id for acc in accounts]
     farm_entries = (
         FarmData.query
-        .filter_by(user_id=current_user.id)
+        .filter(FarmData.account_id.in_(account_ids))
         .all()
     )
-    by_name = {entry.farm_name: entry for entry in farm_entries}
+    by_account_id = {entry.account_id: entry for entry in farm_entries}
 
     items = []
     for acc in accounts:
         items.append({
             "account": acc,
-            "farmdata": by_name.get(acc.name),
+            "farmdata": by_account_id.get(acc.id),
         })
 
     return render_template(
@@ -1230,7 +1240,7 @@ def farm_data_save():
     В базе мы:
       - находим все аккаунты текущего пользователя по переданным account_id;
       - для каждого аккаунта создаём/обновляем запись FarmData
-        (user_id = current_user.id, farm_name = Account.name).
+        (account_id = Account.id, user_id = current_user.id, farm_name = Account.name).
     """
     # Админ не должен сюда писать — у него есть своя админская таблица
     if getattr(current_user, "role", None) == "admin":
@@ -1324,17 +1334,16 @@ def farm_data_save():
             }
         )
 
-    # Для оптимизации сразу вытаскиваем все FarmData по (user_id, farm_name)
-    farm_names = {acc.name for acc in accounts}
+    # Для оптимизации сразу вытаскиваем все FarmData по account_id
+    account_ids = {acc.id for acc in accounts}
     farmdata_entries = (
         FarmData.query
         .filter(
-            FarmData.user_id == current_user.id,
-            FarmData.farm_name.in_(farm_names),
+            FarmData.account_id.in_(account_ids),
         )
         .all()
     )
-    fd_by_key = {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
+    fd_by_key = {fd.account_id: fd for fd in farmdata_entries}
 
     def normalize_field(row: dict, key: str) -> tuple[str, bool]:
         if key not in row:
@@ -1366,7 +1375,7 @@ def farm_data_save():
             continue
 
         farm_name = acc.name
-        key = (current_user.id, farm_name)
+        key = acc.id
 
         email, email_present = normalize_field(row, "email")
         password_val, password_present = normalize_field(row, "password")
@@ -1389,11 +1398,14 @@ def farm_data_save():
             if not has_any_value:
                 continue
 
-            fd = _get_or_create_farmdata_entry(current_user.id, farm_name)
+            fd = _get_or_create_farmdata_entry(acc.id, current_user.id, farm_name)
             fd_by_key[key] = fd
 
         nested_tx = db.session.begin_nested()
         try:
+            fd.account_id = acc.id
+            fd.user_id = current_user.id
+            fd.farm_name = farm_name
             if email_present:
                 fd.email = email or None
             if password_present:

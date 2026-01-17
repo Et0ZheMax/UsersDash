@@ -101,7 +101,7 @@ def update_menu_data_payload(menu_data_raw: str, menu_config: dict[str, str]) ->
 
 def update_local_configs(
     configs_dir: Path,
-    accounts_map: dict[tuple[int, str], dict[str, str]],
+    name_to_config: dict[str, dict[str, str]],
 ) -> tuple[int, int, int]:
     """Обновляет MenuData в локальных конфигурациях.
 
@@ -110,10 +110,6 @@ def update_local_configs(
     updated = 0
     skipped_invalid = 0
     found_names: set[str] = set()
-
-    name_to_config = {
-        name: cfg for (_, name), cfg in accounts_map.items()
-    }
 
     for path in sorted(configs_dir.glob("*.json")):
         payload = load_json(path)
@@ -156,13 +152,13 @@ def update_local_configs(
     return updated, skipped_no_match, skipped_invalid
 
 
-def sync_server(accounts: list[Account], data_map: dict[tuple[int, str], FarmData]) -> tuple[int, int]:
+def sync_server(accounts: list[Account], data_map: dict[int, FarmData]) -> tuple[int, int]:
     """Отправляет MenuData на сервера для аккаунтов из списка."""
     updated = 0
     skipped = 0
 
     for acc in accounts:
-        fd = data_map.get((acc.owner_id, acc.name))
+        fd = data_map.get(acc.id)
         if not fd:
             skipped += 1
             continue
@@ -196,19 +192,19 @@ def main() -> None:
         accounts = Account.query.all()
         farm_data = FarmData.query.all()
 
-    farm_data_map = {(fd.user_id, fd.farm_name): fd for fd in farm_data}
-    accounts_map: dict[tuple[int, str], dict[str, str]] = {}
+    farm_data_map = {fd.account_id: fd for fd in farm_data}
+    accounts_map: dict[int, dict[str, str]] = {}
     skipped_no_data = 0
 
     for acc in accounts:
-        fd = farm_data_map.get((acc.owner_id, acc.name))
+        fd = farm_data_map.get(acc.id)
         if not fd:
             skipped_no_data += 1
             continue
         if not (fd.email or fd.password or fd.igg_id):
             skipped_no_data += 1
             continue
-        accounts_map[(acc.owner_id, acc.name)] = build_menu_config(fd)
+        accounts_map[acc.id] = build_menu_config(fd)
 
     logging.info("Всего аккаунтов: %s", len(accounts))
     logging.info("Готово к синхронизации: %s", len(accounts_map))
@@ -218,9 +214,14 @@ def main() -> None:
         if not configs_dir.exists():
             logging.warning("[local] каталог %s не найден", configs_dir)
         else:
+            name_to_config = {
+                acc.name: accounts_map[acc.id]
+                for acc in accounts
+                if acc.id in accounts_map
+            }
             updated, skipped_no_match, skipped_invalid = update_local_configs(
                 configs_dir,
-                accounts_map,
+                name_to_config,
             )
             logging.info("[local] обновлено записей: %s", updated)
             logging.info("[local] пропущено (нет соответствия): %s", skipped_no_match)

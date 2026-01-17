@@ -170,50 +170,33 @@ def _get_or_create_client_for_farm(
 
 
 def _merge_farmdata_for_move(
-    old_owner_id: int | None,
-    old_name: str | None,
+    account_id: int,
     new_owner_id: int,
     new_name: str,
-):
+) -> FarmData:
     """
-    Переносит/объединяет FarmData при смене владельца или имени фермы.
-    - Если данных не было — создаёт запись для нового владельца/имени.
-    - Если были, но у нового владельца пусто — переносит полностью.
-    - Если у нового владельца уже были данные, то заполняет пустые поля
-      значениями из старой записи.
+    Обновляет привязку FarmData к аккаунту при смене владельца или имени.
     """
-
-    if not old_owner_id or not old_name:
-        target_fd = FarmData.query.filter_by(
-            user_id=new_owner_id, farm_name=new_name
-        ).first()
-        if not target_fd:
-            target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
-            db.session.add(target_fd)
-        return
-
-    old_fd = FarmData.query.filter_by(user_id=old_owner_id, farm_name=old_name).first()
-    target_fd = FarmData.query.filter_by(
-        user_id=new_owner_id, farm_name=new_name
-    ).first()
-
-    if old_fd and not target_fd:
-        old_fd.user_id = new_owner_id
-        old_fd.farm_name = new_name
-        target_fd = old_fd
-    elif old_fd and target_fd and old_fd is not target_fd:
-        for field in ["email", "login", "password", "igg_id", "server", "telegram_tag"]:
-            current_val = getattr(target_fd, field)
-            if not current_val:
-                setattr(target_fd, field, getattr(old_fd, field))
-
+    target_fd = FarmData.query.filter_by(account_id=account_id).first()
     if not target_fd:
-        target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+        target_fd = FarmData(
+            account_id=account_id,
+            user_id=new_owner_id,
+            farm_name=new_name,
+        )
         db.session.add(target_fd)
+    else:
+        target_fd.user_id = new_owner_id
+        target_fd.farm_name = new_name
+    return target_fd
 
 
-def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
-    existing = FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+def _get_or_create_farmdata_entry(
+    account_id: int,
+    user_id: int,
+    farm_name: str,
+) -> FarmData:
+    existing = FarmData.query.filter_by(account_id=account_id).first()
     if existing:
         return existing
 
@@ -223,21 +206,26 @@ def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
             text(
                 """
                 INSERT OR IGNORE INTO farm_data
-                    (user_id, farm_name, created_at, updated_at)
+                    (account_id, user_id, farm_name, created_at, updated_at)
                 VALUES
-                    (:user_id, :farm_name, :created_at, :updated_at)
+                    (:account_id, :user_id, :farm_name, :created_at, :updated_at)
                 """
             ),
             {
+                "account_id": account_id,
                 "user_id": user_id,
                 "farm_name": farm_name,
                 "created_at": now,
                 "updated_at": now,
             },
         )
-        return FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+        return FarmData.query.filter_by(account_id=account_id).first()
 
-    farm_data = FarmData(user_id=user_id, farm_name=farm_name)
+    farm_data = FarmData(
+        account_id=account_id,
+        user_id=user_id,
+        farm_name=farm_name,
+    )
     db.session.add(farm_data)
     return farm_data
 
@@ -706,26 +694,26 @@ def _collect_watch_cards(servers: list[Server]) -> list[dict[str, Any]]:
 
 def _build_farmdata_index(
     accounts: list[Account],
-) -> dict[tuple[int, str], FarmData]:
-    """Возвращает индекс FarmData по ключу (owner_id, farm_name)."""
+) -> dict[int, FarmData]:
+    """Возвращает индекс FarmData по ключу account_id."""
 
-    owner_ids = {acc.owner_id for acc in accounts if acc.owner_id}
-    if not owner_ids:
+    account_ids = {acc.id for acc in accounts}
+    if not account_ids:
         return {}
 
-    farmdata_entries = FarmData.query.filter(FarmData.user_id.in_(owner_ids)).all()
-    return {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
+    farmdata_entries = FarmData.query.filter(FarmData.account_id.in_(account_ids)).all()
+    return {fd.account_id: fd for fd in farmdata_entries}
 
 
 def _collect_incomplete_farms(
-    accounts: list[Account], farmdata_index: dict[tuple[int, str], FarmData]
+    accounts: list[Account], farmdata_index: dict[int, FarmData]
 ) -> list[dict[str, Any]]:
     """Собирает фермы с незаполненными полями email/password/pay_date/tariff."""
 
     items: list[dict[str, Any]] = []
 
     for acc in accounts:
-        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        fd = farmdata_index.get(acc.id)
         email = fd.email if fd else None
         password = fd.password if fd else None
         next_payment = acc.next_payment_at.strftime("%Y-%m-%d") if acc.next_payment_at else None
@@ -839,7 +827,7 @@ def _calc_rss_income(
 
 def _collect_rss_sale_summary(
     accounts: list[Account],
-    farmdata_index: dict[tuple[int, str], FarmData],
+    farmdata_index: dict[int, FarmData],
     resources_map: dict[int, dict[str, Any]],
     price_fws_100: float,
     price_gold_100: float,
@@ -851,7 +839,7 @@ def _collect_rss_sale_summary(
     group_totals: dict[str, dict[str, Any]] = {}
 
     for acc in accounts:
-        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        fd = farmdata_index.get(acc.id)
         kingdom_raw = _normalize_kingdom(acc.game_world)
         if not kingdom_raw:
             kingdom_raw = _normalize_kingdom(fd.server if fd else None)
@@ -966,7 +954,7 @@ def admin_dashboard():
             continue
 
         telegram_tag = None
-        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        fd = farmdata_index.get(acc.id)
         if fd and fd.telegram_tag:
             telegram_tag = fd.telegram_tag.lstrip("@")
 
@@ -1132,7 +1120,7 @@ def rss_sale_page():
     accounts_payload: list[dict[str, Any]] = []
 
     for acc in accounts:
-        fd = farmdata_index.get((acc.owner_id, acc.name)) if acc.owner_id else None
+        fd = farmdata_index.get(acc.id)
         kingdom_raw = _normalize_kingdom(acc.game_world)
         if not kingdom_raw:
             kingdom_raw = _normalize_kingdom(fd.server if fd else None)
@@ -2513,8 +2501,7 @@ def account_edit(account_id: int):
 
         if owner_changed or name_changed:
             _merge_farmdata_for_move(
-                old_owner_id,
-                old_name,
+                account.id,
                 account.owner_id,
                 account.name,
             )
@@ -2587,17 +2574,17 @@ def admin_farm_data_chunk():
         .all()
     )
 
-    owner_ids = {acc.owner_id for acc in accounts}
+    account_ids = [acc.id for acc in accounts]
     farmdata_entries = (
         FarmData.query
-        .filter(FarmData.user_id.in_(owner_ids))
+        .filter(FarmData.account_id.in_(account_ids))
         .all()
     )
-    fd_index = {(fd.user_id, fd.farm_name): fd for fd in farmdata_entries}
+    fd_index = {fd.account_id: fd for fd in farmdata_entries}
 
     items: list[dict[str, Any]] = []
     for acc in accounts:
-        fd = fd_index.get((acc.owner_id, acc.name))
+        fd = fd_index.get(acc.id)
         items.append(
             {
                 "account_id": acc.id,
@@ -2751,8 +2738,7 @@ def admin_farm_data_autocreate_clients():
 
             if acc.owner_id != owner_user.id:
                 _merge_farmdata_for_move(
-                    acc.owner_id,
-                    acc.name,
+                    acc.id,
                     owner_user.id,
                     acc.name,
                 )
@@ -2837,9 +2823,7 @@ def admin_farm_data_save():
         if not acc:
             continue
 
-        fd = FarmData.query.filter_by(
-            user_id=acc.owner_id, farm_name=acc.name
-        ).first()
+        fd = FarmData.query.filter_by(account_id=acc.id).first()
 
         email_present = "email" in row
         password_present = "password" in row
@@ -2851,10 +2835,17 @@ def admin_farm_data_save():
         )
 
         if not fd and has_farmdata_fields:
-            fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
+            fd = FarmData(
+                account_id=acc.id,
+                user_id=acc.owner_id,
+                farm_name=acc.name,
+            )
             db.session.add(fd)
 
         if fd:
+            fd.account_id = acc.id
+            fd.user_id = acc.owner_id
+            fd.farm_name = acc.name
             if email_present:
                 fd.email = (row.get("email") or "").strip() or None
             if password_present:
@@ -3011,13 +3002,13 @@ def admin_farm_data_sync_preview():
         acc_by_name = {acc.name: acc for acc in accounts}
 
         # Подтягиваем FarmData пачкой
-        farm_names = {acc.name for acc in accounts}
+        account_ids = [acc.id for acc in accounts]
         fd_entries = (
             FarmData.query.filter(
-                FarmData.farm_name.in_(farm_names)
+                FarmData.account_id.in_(account_ids)
             ).all()
         )
-        fd_by_key = {(fd.user_id, fd.farm_name): fd for fd in fd_entries}
+        fd_by_key = {fd.account_id: fd for fd in fd_entries}
 
         for item in remote_items:
             internal_id = item.get("id") or item.get("internal_id")
@@ -3033,7 +3024,7 @@ def admin_farm_data_sync_preview():
                 # опционально можно добавить change типа "аккаунт не найден"
                 continue
 
-            fd = fd_by_key.get((acc.owner_id, acc.name))
+            fd = fd_by_key.get(acc.id)
 
             # Соберём локальные и удалённые значения в одном месте
             local = {
@@ -3135,12 +3126,18 @@ def admin_farm_data_sync_apply():
                 continue
 
             fd = FarmData.query.filter_by(
-                user_id=acc.owner_id,
-                farm_name=acc.name
+                account_id=acc.id
             ).first()
             if not fd:
-                fd = FarmData(user_id=acc.owner_id, farm_name=acc.name)
+                fd = FarmData(
+                    account_id=acc.id,
+                    user_id=acc.owner_id,
+                    farm_name=acc.name,
+                )
                 db.session.add(fd)
+            else:
+                fd.user_id = acc.owner_id
+                fd.farm_name = acc.name
 
             # В зависимости от поля, обновляем FarmData или Account
             if field == "email":
@@ -3230,13 +3227,13 @@ def admin_farm_data_pull_preview():
         acc_by_internal = {acc.internal_id: acc for acc in accounts if acc.internal_id}
         acc_by_name = {acc.name: acc for acc in accounts}
 
-        farm_names = {acc.name for acc in accounts}
+        account_ids = [acc.id for acc in accounts]
         fd_entries = (
             FarmData.query.filter(
-                FarmData.farm_name.in_(farm_names)
+                FarmData.account_id.in_(account_ids)
             ).all()
         )
-        fd_by_key = {(fd.user_id, fd.farm_name): fd for fd in fd_entries}
+        fd_by_key = {fd.account_id: fd for fd in fd_entries}
 
         for item in remote_items:
             internal_id = item.get("id") or item.get("internal_id")
@@ -3251,7 +3248,7 @@ def admin_farm_data_pull_preview():
             fd = None
             owner_name = ""
             if acc:
-                fd = fd_by_key.get((acc.owner_id, acc.name))
+                fd = fd_by_key.get(acc.id)
                 owner_name = acc.owner.username if acc.owner else ""
 
             local_data = {
@@ -3414,8 +3411,7 @@ def admin_farm_data_pull_apply():
 
                 if farm_name and acc.name != farm_name:
                     _merge_farmdata_for_move(
-                        acc.owner_id,
-                        acc.name,
+                        acc.id,
                         acc.owner_id,
                         farm_name,
                     )
@@ -3424,7 +3420,7 @@ def admin_farm_data_pull_apply():
                 if internal_id and acc.internal_id != internal_id:
                     acc.internal_id = internal_id
 
-            fd = _get_or_create_farmdata_entry(acc.owner_id, acc.name)
+            fd = _get_or_create_farmdata_entry(acc.id, acc.owner_id, acc.name)
 
             fd.email = (row.get("email") or "").strip() or None
             fd.password = (row.get("password") or "").strip() or None

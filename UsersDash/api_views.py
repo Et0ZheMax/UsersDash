@@ -20,46 +20,25 @@ api_bp = Blueprint("api", __name__)
 
 
 def _merge_farmdata_for_move(
-    old_owner_id: int | None,
-    old_name: str | None,
+    account_id: int,
     new_owner_id: int,
     new_name: str,
-) -> None:
+) -> FarmData:
     """
-    Переносит/объединяет FarmData при смене владельца или имени фермы.
-    - Если данных не было — создаёт запись для нового владельца/имени.
-    - Если были, но у нового владельца пусто — переносит полностью.
-    - Если у нового владельца уже были данные, то заполняет пустые поля
-      значениями из старой записи.
+    Обновляет привязку FarmData к аккаунту при смене владельца или имени.
     """
-
-    if not old_owner_id or not old_name:
-        target_fd = FarmData.query.filter_by(
-            user_id=new_owner_id, farm_name=new_name
-        ).first()
-        if not target_fd:
-            target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
-            db.session.add(target_fd)
-        return
-
-    old_fd = FarmData.query.filter_by(user_id=old_owner_id, farm_name=old_name).first()
-    target_fd = FarmData.query.filter_by(
-        user_id=new_owner_id, farm_name=new_name
-    ).first()
-
-    if old_fd and not target_fd:
-        old_fd.user_id = new_owner_id
-        old_fd.farm_name = new_name
-        target_fd = old_fd
-    elif old_fd and target_fd and old_fd is not target_fd:
-        for field in ["email", "login", "password", "igg_id", "server", "telegram_tag"]:
-            current_val = getattr(target_fd, field)
-            if not current_val:
-                setattr(target_fd, field, getattr(old_fd, field))
-
+    target_fd = FarmData.query.filter_by(account_id=account_id).first()
     if not target_fd:
-        target_fd = FarmData(user_id=new_owner_id, farm_name=new_name)
+        target_fd = FarmData(
+            account_id=account_id,
+            user_id=new_owner_id,
+            farm_name=new_name,
+        )
         db.session.add(target_fd)
+    else:
+        target_fd.user_id = new_owner_id
+        target_fd.farm_name = new_name
+    return target_fd
 
 
 def _get_server_from_request() -> Server:
@@ -87,8 +66,12 @@ def _get_server_from_request() -> Server:
     return srv
 
 
-def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
-    existing = FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+def _get_or_create_farmdata_entry(
+    account_id: int,
+    user_id: int,
+    farm_name: str,
+) -> FarmData:
+    existing = FarmData.query.filter_by(account_id=account_id).first()
     if existing:
         return existing
 
@@ -98,21 +81,26 @@ def _get_or_create_farmdata_entry(user_id: int, farm_name: str) -> FarmData:
             text(
                 """
                 INSERT OR IGNORE INTO farm_data
-                    (user_id, farm_name, created_at, updated_at)
+                    (account_id, user_id, farm_name, created_at, updated_at)
                 VALUES
-                    (:user_id, :farm_name, :created_at, :updated_at)
+                    (:account_id, :user_id, :farm_name, :created_at, :updated_at)
                 """
             ),
             {
+                "account_id": account_id,
                 "user_id": user_id,
                 "farm_name": farm_name,
                 "created_at": now,
                 "updated_at": now,
             },
         )
-        return FarmData.query.filter_by(user_id=user_id, farm_name=farm_name).first()
+        return FarmData.query.filter_by(account_id=account_id).first()
 
-    farm_data = FarmData(user_id=user_id, farm_name=farm_name)
+    farm_data = FarmData(
+        account_id=account_id,
+        user_id=user_id,
+        farm_name=farm_name,
+    )
     db.session.add(farm_data)
     return farm_data
 
@@ -163,20 +151,20 @@ def get_farms_v1():
         .all()
     )
 
-    # Все FarmData для владельцев этих аккаунтов
-    owner_ids = {acc.owner_id for acc in accounts}
+    # Все FarmData для этих аккаунтов
+    account_ids = [acc.id for acc in accounts]
     farm_data_entries = (
         FarmData.query
-        .filter(FarmData.user_id.in_(owner_ids))
+        .filter(FarmData.account_id.in_(account_ids))
         .all()
     )
 
-    # Индекс FarmData по (user_id, farm_name)
-    fd_index = {(fd.user_id, fd.farm_name): fd for fd in farm_data_entries}
+    # Индекс FarmData по account_id
+    fd_index = {fd.account_id: fd for fd in farm_data_entries}
 
     items = []
     for acc in accounts:
-        fd = fd_index.get((acc.owner_id, acc.name))
+        fd = fd_index.get(acc.id)
         owner = acc.owner
 
         items.append({
@@ -271,12 +259,7 @@ def save_farms_v1():
                 acc.server_id = srv.id
 
             if name and acc.name != name:
-                _merge_farmdata_for_move(
-                    acc.owner_id,
-                    acc.name,
-                    acc.owner_id,
-                    name,
-                )
+                _merge_farmdata_for_move(acc.id, acc.owner_id, name)
                 acc.name = name
 
             if internal_id and acc.internal_id != internal_id:
@@ -295,11 +278,13 @@ def save_farms_v1():
             tariff_raw = row.get("tariff")
 
             # upsert FarmData
-            fd = FarmData.query.filter_by(user_id=owner_id, farm_name=farm_name).first()
+            fd = FarmData.query.filter_by(account_id=acc.id).first()
             if not fd and any([email, login_val, password_val, igg_id, kingdom, telegram_tag]):
-                fd = _get_or_create_farmdata_entry(owner_id, farm_name)
+                fd = _get_or_create_farmdata_entry(acc.id, owner_id, farm_name)
 
             if fd:
+                fd.user_id = owner_id
+                fd.farm_name = farm_name
                 def _apply_if_needed(field_name: str, value: str) -> None:
                     if server_changed and not value:
                         return

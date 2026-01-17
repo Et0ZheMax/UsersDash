@@ -99,6 +99,8 @@
 - Миграционные скрипты `migrate_*.py` запускаются вручную: `python UsersDash/migrate_add_account_columns.py` и т.д.
 - Скрипт `UsersDash/migrate_add_unique_constraints.py` очищает дубликаты и добавляет уникальные индексы для
   Account/FarmData перед включением ограничений.
+- Скрипт `UsersDash/migrate_add_farmdata_account_id.py` добавляет `account_id` в `farm_data`, заполняет поле
+  по совпадению `user_id` и `farm_name`, устраняет дубликаты и включает уникальность по аккаунту.
 - Для резервных копий используется сервис `UsersDash/services/db_backup.py`, бэкапы создаются ежедневно
   фоновым потоком.
 
