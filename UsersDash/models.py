@@ -31,6 +31,11 @@ class User(UserMixin, db.Model):
         back_populates="owner",
         lazy="dynamic",
     )
+    telegram_profile = db.relationship(
+        "TelegramSubscriber",
+        back_populates="owner",
+        uselist=False,
+    )
 
     def get_id(self):
         """
@@ -169,6 +174,33 @@ class GlobalInfoMessage(db.Model):
 
     def __repr__(self) -> str:
         return f"<GlobalInfoMessage id={self.id} updated_at={self.updated_at}>"
+
+
+class TelegramSubscriber(db.Model):
+    """Профиль Telegram для клиента UsersDash."""
+
+    __tablename__ = "telegram_subscribers"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True)
+    chat_id = db.Column(db.String(64), nullable=False, unique=True)
+    username = db.Column(db.String(64), nullable=True)
+    first_name = db.Column(db.String(128), nullable=True)
+    last_name = db.Column(db.String(128), nullable=True)
+    timezone = db.Column(db.String(64), nullable=True)
+    allow_broadcasts = db.Column(db.Boolean, default=True, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_interaction_at = db.Column(db.DateTime, nullable=True)
+
+    owner = db.relationship(
+        "User",
+        back_populates="telegram_profile",
+    )
+
+    def __repr__(self) -> str:
+        return f"<TelegramSubscriber user_id={self.user_id} chat_id={self.chat_id}>"
 
 
 class FarmData(db.Model):
