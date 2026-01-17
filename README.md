@@ -25,6 +25,8 @@
 - `UsersDash/tests/` — автотесты на `unittest` для аудита настроек и проверок логов.
 - Скрипты `migrate_*.py` и `reset_admin_password.py` — локальные миграции и сброс пароля
   администратора.
+- `UsersDash/scripts/sync_menu_data.py` — синхронизация MenuData из таблицы FarmData в локальные
+  `bot_farm_configs` или на серверы через API.
 - `UsersDash/bot_farm_configs/` — дефолтные конфигурации для ботов и учебных профилей.
 - `RSSv7/` — Windows-сборка RssCounter с мониторингом LDPlayer, Telegram-оповещениями и
   веб-интерфейсом на Flask (порт 5001).
@@ -65,6 +67,25 @@
   в Telegram.
 - Повторные напоминания об ошибке отправляются каждые 20 минут, пока сервер не восстановится.
 - После восстановления оповещения сбрасываются, чтобы следующие сбои снова уведомлялись мгновенно.
+
+## Синхронизация MenuData
+
+Скрипт `UsersDash/scripts/sync_menu_data.py` обновляет `MenuData.Config` из данных `FarmData` для
+аккаунтов `Account`. Поддерживаются режимы:
+
+- `--mode local` — обновляет локальные JSON в `UsersDash/bot_farm_configs` по имени фермы.
+- `--mode server` — отправляет обновления через API (`update_account_menu_data`).
+- `--mode both` — сначала локальные файлы, затем серверы.
+
+Примеры запуска из корня репозитория:
+
+- Локальные файлы: `python UsersDash/scripts/sync_menu_data.py --mode local`
+- Отправка на серверы: `python UsersDash/scripts/sync_menu_data.py --mode server`
+- Собственный каталог с конфигами: `python UsersDash/scripts/sync_menu_data.py --configs-dir путь`
+- Альтернатива через модуль: `python -m UsersDash.scripts.sync_menu_data --mode local`
+
+Для серверного режима нужны настроенные API-адреса серверов и доступ к ним. В Windows можно
+запускать скрипт из каталога репозитория либо через `-m`, чтобы корректно резолвить пакет.
 
 ## Тестирование
 
