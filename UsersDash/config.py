@@ -7,6 +7,18 @@ from pathlib import Path
 from UsersDash.telegram_settings import load_telegram_settings
 
 
+def _get_int_env(name: str, default: int) -> int:
+    """Аккуратно читает целое число из переменных окружения."""
+
+    raw_value = os.environ.get(name)
+    if raw_value is None or raw_value == "":
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        return default
+
+
 class Config:
     """
     Базовая конфигурация приложения.
@@ -29,3 +41,9 @@ class Config:
 
     # Настройки Telegram для уведомлений
     TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_IDS = load_telegram_settings()
+
+    # Настройки Telegram-бота для клиентов
+    TELEGRAM_ADMIN_CHAT_IDS = os.environ.get("TELEGRAM_ADMIN_CHAT_IDS", "")
+    TELEGRAM_BIND_CODE = os.environ.get("TELEGRAM_BIND_CODE", "")
+    TELEGRAM_REMINDER_DAYS = _get_int_env("TELEGRAM_REMINDER_DAYS", 3)
+    TELEGRAM_REMINDER_HOUR = _get_int_env("TELEGRAM_REMINDER_HOUR", 10)
