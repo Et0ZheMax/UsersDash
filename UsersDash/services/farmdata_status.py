@@ -33,13 +33,16 @@ def collect_farmdata_status(user_id: int) -> Dict[str, object]:
     if not accounts:
         return {"has_issues": False, "missing_accounts": [], "missing_details": []}
 
-    entries: List[FarmData] = FarmData.query.filter_by(user_id=user_id).all()
-    fd_by_name = {entry.farm_name: entry for entry in entries}
+    account_ids = [acc.id for acc in accounts]
+    entries: List[FarmData] = (
+        FarmData.query.filter(FarmData.account_id.in_(account_ids)).all()
+    )
+    fd_by_account = {entry.account_id: entry for entry in entries}
 
     missing_accounts: List[str] = []
     missing_details: List[Dict[str, object]] = []
     for acc in accounts:
-        fd = fd_by_name.get(acc.name)
+        fd = fd_by_account.get(acc.id)
         if not fd:
             missing_accounts.append(acc.name)
             missing_details.append(
@@ -68,4 +71,3 @@ def collect_farmdata_status(user_id: int) -> Dict[str, object]:
         "missing_accounts": missing_accounts,
         "missing_details": missing_details,
     }
-

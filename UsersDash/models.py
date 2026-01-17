@@ -181,6 +181,9 @@ class FarmData(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
 
+    # Привязка к аккаунту (ферме)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False)
+
     # Владелец этих данных (клиент в UsersDash)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
 
@@ -212,12 +215,20 @@ class FarmData(db.Model):
         backref=db.backref("farm_data_entries", lazy="dynamic"),
     )
 
+    account = db.relationship(
+        "Account",
+        backref=db.backref("farm_data_entry", uselist=False),
+    )
+
     __table_args__ = (
-        db.UniqueConstraint("user_id", "farm_name", name="uq_farm_data_user_farm"),
+        db.UniqueConstraint("account_id", name="uq_farm_data_account_id"),
     )
 
     def __repr__(self) -> str:
-        return f"<FarmData id={self.id} user_id={self.user_id} farm_name={self.farm_name}>"
+        return (
+            f"<FarmData id={self.id} account_id={self.account_id} user_id={self.user_id} "
+            f"farm_name={self.farm_name}>"
+        )
 
 
 class AccountResourceSnapshot(db.Model):
