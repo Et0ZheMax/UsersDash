@@ -663,6 +663,60 @@
     let farmDataAutoSaveQueued = false;
     let lastAutoSaveToastAt = 0;
 
+    function clearFarmDataErrors(targetRow) {
+        const table = document.querySelector('[data-role="farmdata-table"]');
+        if (!table) return;
+
+        const rows = targetRow ? [targetRow] : Array.from(table.querySelectorAll("tbody tr[data-account-id]"));
+        rows.forEach((row) => {
+            row.classList.remove("farmdata-row-error");
+            row.querySelectorAll(".farmdata-input--error").forEach((input) => {
+                input.classList.remove("farmdata-input--error");
+            });
+            row.querySelectorAll(".farmdata-error-message").forEach((message) => message.remove());
+        });
+    }
+
+    function resolveFarmDataFieldName(message) {
+        const text = String(message || "").toLowerCase();
+        if (text.includes("igg")) return "igg_id";
+        if (text.includes("email") || text.includes("e-mail") || text.includes("почт")) return "email";
+        if (text.includes("парол")) return "password";
+        if (text.includes("сервер")) return "server";
+        if (text.includes("telegram")) return "telegram_tag";
+        return null;
+    }
+
+    function renderFarmDataErrors(errors) {
+        if (!Array.isArray(errors) || errors.length === 0) return;
+
+        const table = document.querySelector('[data-role="farmdata-table"]');
+        if (!table) return;
+
+        errors.forEach((error) => {
+            const accountId = error && error.account_id != null ? String(error.account_id) : "";
+            if (!accountId) return;
+
+            const row = table.querySelector(`tbody tr[data-account-id="${accountId}"]`);
+            if (!row) return;
+
+            row.classList.add("farmdata-row-error");
+            const fieldName = resolveFarmDataFieldName(error.message);
+            const input = fieldName ? row.querySelector(`input[name="${fieldName}"]`) : null;
+            const messageEl = document.createElement("div");
+            messageEl.className = "farmdata-error-message";
+            messageEl.textContent = error.message || "Ошибка в строке.";
+
+            if (input) {
+                input.classList.add("farmdata-input--error");
+                input.insertAdjacentElement("afterend", messageEl);
+            } else {
+                const cell = row.querySelector("td") || row;
+                cell.appendChild(messageEl);
+            }
+        });
+    }
+
     function setFarmDataSavingState(isSaving, isAuto) {
         const btn = document.querySelector('[data-action="farmdata-save"]');
         const textEl = btn ? findBtnTextEl(btn) : null;
@@ -755,6 +809,7 @@
                 textEl.textContent = "Сохраняем...";
             }
         }
+        clearFarmDataErrors();
         try {
             const resp = await fetch("/farm-data/save", {
                 method: "POST",
@@ -776,14 +831,22 @@
             }
 
             applyFarmDataStatusUI(data.farmdata_status);
+            const savedSet = new Set((data.saved || []).map((value) => String(value)));
             dirtyRows.forEach((row) => {
-                if (row) {
+                if (!row) return;
+                if (savedSet.has(String(row.dataset.accountId))) {
                     row.dataset.dirty = "0";
                 }
             });
+            renderFarmDataErrors(data.errors || []);
             const now = Date.now();
             if (!isAuto || now - lastAutoSaveToastAt > 8000) {
-                showToast(isAuto ? "Изменения сохранены автоматически." : "Данные ферм сохранены.", "success");
+                const hasErrors = Array.isArray(data.errors) && data.errors.length > 0;
+                if (hasErrors) {
+                    showToast("Часть строк не сохранена. Проверьте подсветку.", "error");
+                } else {
+                    showToast(isAuto ? "Изменения сохранены автоматически." : "Данные ферм сохранены.", "success");
+                }
                 if (isAuto) {
                     lastAutoSaveToastAt = now;
                 }
@@ -834,6 +897,7 @@
         if (!row) return;
 
         row.dataset.dirty = "1";
+        clearFarmDataErrors(row);
         applyFarmDataStatusUI();
         scheduleFarmDataAutoSave();
     }

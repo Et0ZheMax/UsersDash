@@ -92,6 +92,10 @@
         border-bottom: 1px solid rgba(31, 41, 55, 0.8);
     }
 
+    table.farmdata-table tbody tr.farmdata-row-error {
+        background: rgba(220, 38, 38, 0.08);
+    }
+
     table.farmdata-table tbody tr:last-child {
         border-bottom: none;
     }
@@ -147,6 +151,11 @@
         outline: none;
     }
 
+    .farmdata-input--error {
+        border-color: rgba(220, 38, 38, 0.9);
+        box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25);
+    }
+
     .farmdata-input:focus {
         border-color: #3b82f6;
         box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
@@ -155,6 +164,12 @@
     .farmdata-input::placeholder {
         color: #6b7280;
         font-size: 0.8rem;
+    }
+
+    .farmdata-error-message {
+        margin-top: 0.2rem;
+        font-size: 0.75rem;
+        color: #f87171;
     }
 
     .farmdata-input--short {
