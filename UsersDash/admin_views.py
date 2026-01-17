@@ -8,6 +8,7 @@ import csv
 import io
 import threading
 import json
+import time
 import difflib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -2656,7 +2657,11 @@ def _dispatch_menu_sync_background(
                 .all()
             )
             accounts_map = {acc.id: acc for acc in accounts}
-            max_workers = min(8, len(payloads))
+            server_limits: dict[int | None, threading.Semaphore] = {}
+            for acc in accounts:
+                server_limits.setdefault(acc.server_id, threading.Semaphore(2))
+
+            max_workers = min(4, len(payloads))
             if max_workers < 1:
                 return
 
@@ -2664,12 +2669,30 @@ def _dispatch_menu_sync_background(
                 acc = accounts_map.get(item["account_id"])
                 if not acc:
                     return False, "аккаунт не найден"
-                return update_account_menu_data(
-                    acc,
-                    email=item.get("email"),
-                    password=item.get("password"),
-                    igg_id=item.get("igg_id"),
-                )
+                semaphore = server_limits.setdefault(acc.server_id, threading.Semaphore(1))
+                max_attempts = 3
+                last_msg = "неизвестная ошибка"
+                for attempt in range(1, max_attempts + 1):
+                    with semaphore:
+                        ok, msg = update_account_menu_data(
+                            acc,
+                            email=item.get("email"),
+                            password=item.get("password"),
+                            igg_id=item.get("igg_id"),
+                        )
+                    last_msg = msg
+                    if ok:
+                        return True, msg
+                    if attempt < max_attempts:
+                        app.logger.warning(
+                            "Повтор %s/%s обновления MenuData для аккаунта %s: %s",
+                            attempt,
+                            max_attempts,
+                            acc.id,
+                            msg,
+                        )
+                        time.sleep(0.5 * attempt)
+                return False, last_msg
 
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_map = {
