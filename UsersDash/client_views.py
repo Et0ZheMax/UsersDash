@@ -1199,7 +1199,10 @@ def farm_data():
     account_ids = [acc.id for acc in accounts]
     farm_entries = (
         FarmData.query
-        .filter(FarmData.account_id.in_(account_ids))
+        .filter(
+            FarmData.account_id.in_(account_ids),
+            FarmData.user_id == current_user.id,
+        )
         .all()
     )
     by_account_id = {entry.account_id: entry for entry in farm_entries}

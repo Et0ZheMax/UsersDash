@@ -35,7 +35,10 @@ def collect_farmdata_status(user_id: int) -> Dict[str, object]:
 
     account_ids = [acc.id for acc in accounts]
     entries: List[FarmData] = (
-        FarmData.query.filter(FarmData.account_id.in_(account_ids)).all()
+        FarmData.query.filter(
+            FarmData.account_id.in_(account_ids),
+            FarmData.user_id == user_id,
+        ).all()
     )
     fd_by_account = {entry.account_id: entry for entry in entries}
 
