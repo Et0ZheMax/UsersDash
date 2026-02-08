@@ -2606,15 +2606,27 @@ def admin_farm_data_chunk():
     )
     fd_index = {fd.account_id: fd for fd in farmdata_entries}
 
+    resources_by_server: dict[int, dict[str, Any]] = {}
+    for acc in accounts:
+        if acc.server_id in resources_by_server:
+            continue
+        resources_by_server[acc.server_id] = fetch_resources_for_server(acc.server)
+
     items: list[dict[str, Any]] = []
     for acc in accounts:
         fd = fd_index.get(acc.id)
+        instance_id = None
+        server_resources = resources_by_server.get(acc.server_id, {})
+        if server_resources:
+            _, resource = _resolve_remote_account(acc, server_resources)
+            if resource:
+                instance_id = resource.get("instanceId")
         items.append(
             {
                 "account_id": acc.id,
                 "owner_name": acc.owner.username if acc.owner else "—",
                 "farm_name": acc.name,
-                "internal_id": acc.internal_id or "",
+                "instance_id": instance_id if instance_id is not None else "",
                 "server_bot": acc.server.name if acc.server else "—",
                 "is_active": acc.is_active,
                 "blocked_for_payment": acc.blocked_for_payment,
@@ -2688,6 +2700,7 @@ def _collect_farm_conflicts_for_server(
                 "owner_name": acc.owner.username if acc.owner else "—",
                 "farm_name": acc.name,
                 "internal_id": internal_id,
+                "instance_id": res.get("instanceId") or internal_id,
                 "server_name": server.name,
                 "remote_name": remote_name,
                 "remote_id": res.get("id"),
@@ -2763,6 +2776,57 @@ def admin_farm_data_conflicts_resolve():
     db.session.commit()
 
     return jsonify({"ok": True})
+
+
+@admin_bp.route("/farm-data/conflicts/resolve-batch", methods=["POST"])
+@login_required
+def admin_farm_data_conflicts_resolve_batch():
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    rows = payload.get("items") or []
+    if not isinstance(rows, list) or not rows:
+        return jsonify({"ok": False, "error": "Нет данных для применения"}), 400
+
+    updated = 0
+    warnings: list[str] = []
+
+    for row in rows:
+        account_id = row.get("account_id")
+        remote_name = (row.get("remote_name") or "").strip()
+        if not remote_name:
+            continue
+
+        try:
+            account_id_int = int(account_id)
+        except (TypeError, ValueError):
+            continue
+
+        account = Account.query.filter_by(id=account_id_int).first()
+        if not account:
+            continue
+
+        existing = Account.query.filter(
+            Account.owner_id == account.owner_id,
+            Account.name == remote_name,
+            Account.id != account.id,
+        ).first()
+        if existing:
+            warnings.append(
+                f"{account.name}: у владельца уже есть ферма с именем {remote_name}"
+            )
+            continue
+
+        account.name = remote_name
+        fd = FarmData.query.filter_by(account_id=account.id).first()
+        if fd:
+            fd.farm_name = remote_name
+        updated += 1
+
+    db.session.commit()
+
+    return jsonify({"ok": True, "updated": updated, "warnings": warnings})
 
 
 def _dispatch_menu_sync_background(

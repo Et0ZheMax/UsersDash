@@ -577,6 +577,11 @@
                             </div>
                             <div class="modal-footer">
                                 <button type="button"
+                                        class="btn btn-primary"
+                                        data-role="conflict-rename-all">
+                                    Переименовать всё
+                                </button>
+                                <button type="button"
                                         class="btn btn-secondary"
                                         data-role="conflict-modal-close">
                                     Закрыть
@@ -729,6 +734,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const PAYMENT_URL_UNPAID = {{ url_for('admin.mark_account_unpaid', account_id=0)|tojson }};
     const CONFLICTS_URL = {{ url_for('admin.admin_farm_data_conflicts')|tojson }};
     const CONFLICTS_RESOLVE_URL = {{ url_for('admin.admin_farm_data_conflicts_resolve')|tojson }};
+    const CONFLICTS_RESOLVE_BATCH_URL = {{ url_for('admin.admin_farm_data_conflicts_resolve_batch')|tojson }};
 
     function applyPaymentStateToRow(row, blocked, isActive) {
         if (!row) return;
@@ -872,9 +878,9 @@ document.addEventListener("DOMContentLoaded", function () {
         tr.dataset.dirty = "0";
 
         const nextPayment = item.next_payment_at || "";
-        const internalId = item.internal_id ? String(item.internal_id) : "";
+        const instanceId = item.instance_id ? String(item.instance_id) : "";
         const farmName = item.farm_name || "";
-        const farmNameLabel = internalId ? `${farmName}_${internalId}` : farmName;
+        const farmNameLabel = instanceId ? `${farmName}_${instanceId}` : farmName;
         const tariffVal = item.tariff !== null && item.tariff !== undefined ? item.tariff : "";
         const tariffStr = tariffVal !== null && tariffVal !== undefined && tariffVal !== ""
             ? String(tariffVal)
@@ -1675,6 +1681,8 @@ document.addEventListener("DOMContentLoaded", function () {
     const conflictErrors = document.querySelector('[data-role="conflict-errors"]');
     const conflictLoader = document.querySelector('[data-role="conflict-loader"]');
     const conflictEmpty = document.querySelector('[data-role="conflict-empty"]');
+    const conflictRenameAllBtn = document.querySelector('[data-role="conflict-rename-all"]');
+    let conflictItems = [];
 
     function openSyncModal() {
         if (!syncModal) return;
@@ -1742,6 +1750,7 @@ document.addEventListener("DOMContentLoaded", function () {
             conflictErrors.style.display = "none";
             conflictErrors.textContent = "";
         }
+        conflictItems = [];
         if (conflictLoader) {
             conflictLoader.style.display = "block";
         }
@@ -1759,12 +1768,12 @@ document.addEventListener("DOMContentLoaded", function () {
     function buildConflictRow(item) {
         const tr = document.createElement("tr");
         const remoteName = item.remote_name || "";
-        const internalId = item.internal_id || "—";
+        const instanceId = item.instance_id || "—";
         tr.innerHTML = `
             <td>${escapeHtml(item.owner_name || "—")}</td>
             <td>${escapeHtml(item.farm_name || "")}</td>
             <td>${escapeHtml(remoteName || "")}</td>
-            <td>${escapeHtml(String(internalId))}</td>
+            <td>${escapeHtml(String(instanceId))}</td>
             <td>${escapeHtml(item.server_name || "—")}</td>
             <td>
                 <button type="button"
@@ -1810,6 +1819,7 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             const items = Array.isArray(data.items) ? data.items : [];
+            conflictItems = items;
             const errors = Array.isArray(data.errors) ? data.errors : [];
             if (errors.length && conflictErrors) {
                 conflictErrors.textContent = errors.join(" | ");
@@ -1872,6 +1882,49 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     }
 
+    async function resolveConflictsBatch(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            showToast("Нет конфликтов для применения.", "info");
+            return;
+        }
+        if (conflictRenameAllBtn) {
+            conflictRenameAllBtn.disabled = true;
+        }
+        try {
+            const resp = await fetch(CONFLICTS_RESOLVE_BATCH_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({
+                    items: items.map(function (item) {
+                        return {
+                            account_id: item.account_id,
+                            remote_name: item.remote_name
+                        };
+                    })
+                })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось переименовать конфликты.");
+            }
+            showToast(`Переименовано: ${data.updated || 0}`, "success");
+            if (Array.isArray(data.warnings) && data.warnings.length) {
+                showToast(data.warnings.join(" | "), "info");
+            }
+            await loadConflicts();
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Не удалось переименовать конфликты.", "error");
+        } finally {
+            if (conflictRenameAllBtn) {
+                conflictRenameAllBtn.disabled = false;
+            }
+        }
+    }
+
     const syncBtn = document.querySelector('[data-role="farmdata-sync"]');
     const syncSpinner = document.querySelector('[data-role="farmdata-sync-spinner"]');
 
@@ -1881,6 +1934,16 @@ document.addEventListener("DOMContentLoaded", function () {
     const conflictBtn = document.querySelector('[data-role="farmdata-conflicts"]');
     const autoCreateBtn = document.querySelector('[data-role="auto-create-clients"]');
     const autoCreateSpinner = document.querySelector('[data-role="auto-create-spinner"]');
+
+    if (conflictRenameAllBtn) {
+        conflictRenameAllBtn.addEventListener("click", async function () {
+            if (!conflictItems.length) {
+                showToast("Нет конфликтов для применения.", "info");
+                return;
+            }
+            await resolveConflictsBatch(conflictItems);
+        });
+    }
 
     if (syncBtn) {
         syncBtn.addEventListener("click", async function () {
