@@ -1052,7 +1052,7 @@
         defaultsToolbarBtn.disabled = !canUseDefaults;
 
         if (hasAccount && !state.selectedAccountHasDefaults) {
-            defaultsToolbarBtn.title = "Для этого тарифа нет схемы по умолчанию.";
+            defaultsToolbarBtn.title = "Для этого тарифа нет настроек по умолчанию.";
         } else {
             defaultsToolbarBtn.removeAttribute("title");
         }
@@ -1812,7 +1812,7 @@
     async function applyDefaultsForCurrentAccount(btn) {
         if (!state.selectedAccountId || applyDefaultsInProgress) return;
         if (!state.selectedAccountHasDefaults) {
-            alert("Для этого тарифа нет схемы по умолчанию.");
+            alert("Для этого тарифа нет настроек по умолчанию.");
             return;
         }
 

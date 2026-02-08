@@ -1034,7 +1034,7 @@ def manage_apply_defaults(account_id: int):
     tariff_name = get_tariff_name_by_price(tariff_price)
 
     if not tariff_price or not has_defaults_for_tariff(tariff_price):
-        return jsonify({"ok": False, "error": "Для тарифа этой фермы нет схемы по умолчанию."}), 400
+        return jsonify({"ok": False, "error": "Для тарифа этой фермы нет настроек по умолчанию."}), 400
 
     with settings_audit_context(
         account.owner,
