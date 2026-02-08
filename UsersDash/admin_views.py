@@ -97,6 +97,19 @@ def admin_required():
         abort(403)
 
 
+def _is_remote_account_missing(message: str) -> bool:
+    """Проверяет, что удалённый бот сообщил об отсутствии аккаунта."""
+
+    if not message:
+        return False
+
+    normalized = message.lower()
+    if "404" in normalized and ("not found" in normalized or "не найден" in normalized):
+        return True
+
+    return "account not found" in normalized
+
+
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 RSS_SALE_DEFAULT_PRICE_FWS_100 = 299
@@ -1549,6 +1562,8 @@ def mark_account_unpaid(account_id: int):
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
+    warning: str | None = None
+
     with settings_audit_context(
         account.owner,
         current_user,
@@ -1563,23 +1578,32 @@ def mark_account_unpaid(account_id: int):
     ) as audit_ctx:
         ok, msg = update_account_active(account, False)
         if not ok:
-            audit_ctx["result"] = "failed"
-            db.session.rollback()
-            return (
-                jsonify({"ok": False, "error": f"Не удалось выключить ферму: {msg}"}),
-                500,
-            )
+            if _is_remote_account_missing(msg):
+                warning = (
+                    "Ферма не найдена в боте. UsersDash отметил отключение "
+                    "только в локальной базе."
+                )
+                audit_ctx["result"] = "ok_local_only"
+            else:
+                audit_ctx["result"] = "failed"
+                db.session.rollback()
+                return (
+                    jsonify({"ok": False, "error": f"Не удалось выключить ферму: {msg}"}),
+                    500,
+                )
 
         account.is_active = False
         account.blocked_for_payment = True
         db.session.commit()
-        audit_ctx["result"] = "ok"
+        if audit_ctx["result"] != "ok_local_only":
+            audit_ctx["result"] = "ok"
 
     return jsonify(
         {
             "ok": True,
             "blocked_for_payment": account.blocked_for_payment,
             "is_active": account.is_active,
+            "warning": warning,
         }
     )
 
@@ -2590,6 +2614,7 @@ def admin_farm_data_chunk():
                 "account_id": acc.id,
                 "owner_name": acc.owner.username if acc.owner else "—",
                 "farm_name": acc.name,
+                "internal_id": acc.internal_id or "",
                 "server_bot": acc.server.name if acc.server else "—",
                 "is_active": acc.is_active,
                 "blocked_for_payment": acc.blocked_for_payment,
@@ -2618,6 +2643,126 @@ def admin_farm_data_chunk():
             "items": items,
         }
     )
+
+
+def _collect_farm_conflicts_for_server(
+    server: Server,
+) -> tuple[list[dict[str, Any]], str | None]:
+    resources = fetch_resources_for_server(server)
+    if not resources:
+        return [], f"{server.name}: не удалось получить ресурсы из бота."
+
+    by_id: dict[str, dict[str, Any]] = {}
+    by_instance: dict[str, dict[str, Any]] = {}
+    for res in resources.values():
+        remote_id = res.get("id")
+        if remote_id is not None:
+            by_id[str(remote_id)] = res
+        instance_id = res.get("instanceId")
+        if instance_id is not None:
+            by_instance[str(instance_id)] = res
+
+    accounts = (
+        Account.query
+        .options(joinedload(Account.owner))
+        .filter_by(server_id=server.id)
+        .filter(Account.internal_id.isnot(None))
+        .all()
+    )
+
+    conflicts: list[dict[str, Any]] = []
+    for acc in accounts:
+        internal_id = str(acc.internal_id).strip() if acc.internal_id is not None else ""
+        if not internal_id:
+            continue
+        res = by_id.get(internal_id) or by_instance.get(internal_id)
+        if not res:
+            continue
+        remote_name = (res.get("nickname") or "").strip()
+        if not remote_name or remote_name == acc.name:
+            continue
+
+        conflicts.append(
+            {
+                "account_id": acc.id,
+                "owner_name": acc.owner.username if acc.owner else "—",
+                "farm_name": acc.name,
+                "internal_id": internal_id,
+                "server_name": server.name,
+                "remote_name": remote_name,
+                "remote_id": res.get("id"),
+                "remote_instance_id": res.get("instanceId"),
+            }
+        )
+
+    return conflicts, None
+
+
+@admin_bp.route("/farm-data/conflicts", methods=["GET"])
+@login_required
+def admin_farm_data_conflicts():
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    servers = Server.query.filter(Server.is_active.is_(True)).order_by(Server.name).all()
+    items: list[dict[str, Any]] = []
+    errors: list[str] = []
+
+    for server in servers:
+        conflicts, err = _collect_farm_conflicts_for_server(server)
+        if err:
+            errors.append(err)
+        items.extend(conflicts)
+
+    items.sort(key=lambda row: (row.get("server_name") or "", row.get("farm_name") or ""))
+
+    return jsonify({"ok": True, "items": items, "errors": errors})
+
+
+@admin_bp.route("/farm-data/conflicts/resolve", methods=["POST"])
+@login_required
+def admin_farm_data_conflicts_resolve():
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    action = (payload.get("action") or "").strip()
+    account_id = payload.get("account_id")
+    remote_name = (payload.get("remote_name") or "").strip()
+
+    try:
+        account_id_int = int(account_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Некорректный account_id"}), 400
+
+    account = Account.query.filter_by(id=account_id_int).first()
+    if not account:
+        return jsonify({"ok": False, "error": "Аккаунт не найден"}), 404
+
+    if action == "accept_rename":
+        if not remote_name:
+            return jsonify({"ok": False, "error": "Не передано новое имя"}), 400
+
+        existing = Account.query.filter(
+            Account.owner_id == account.owner_id,
+            Account.name == remote_name,
+            Account.id != account.id,
+        ).first()
+        if existing:
+            return jsonify({"ok": False, "error": "У владельца уже есть ферма с таким именем"}), 409
+
+        account.name = remote_name
+        fd = FarmData.query.filter_by(account_id=account.id).first()
+        if fd:
+            fd.farm_name = remote_name
+    elif action == "clear_internal_id":
+        account.internal_id = None
+    else:
+        return jsonify({"ok": False, "error": "Неизвестное действие"}), 400
+
+    db.session.commit()
+
+    return jsonify({"ok": True})
 
 
 def _dispatch_menu_sync_background(
