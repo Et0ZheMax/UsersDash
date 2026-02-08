@@ -15,7 +15,6 @@ from UsersDash.models import Account
 from UsersDash.services.remote_api import (
     apply_template_for_account,
     fetch_account_settings,
-    fetch_template_schema,
     fetch_templates_list,
     update_account_step_settings,
 )
@@ -109,74 +108,6 @@ def _template_candidates(price: int | str | None) -> list[str]:
     return unique
 
 
-def _extract_schema_scripts(schema_payload: Any) -> dict[str, Any]:
-    if not isinstance(schema_payload, dict):
-        return {}
-
-    scripts: Any = None
-
-    nested = schema_payload.get("schema") if isinstance(schema_payload, dict) else None
-    if isinstance(nested, dict):
-        scripts = nested.get("Scripts") or nested
-
-    if scripts is None:
-        scripts = schema_payload.get("Scripts") if isinstance(schema_payload, dict) else None
-
-    if scripts is None:
-        scripts = schema_payload
-
-    return scripts if isinstance(scripts, dict) else {}
-
-
-def _default_value_by_spec(spec: dict[str, Any]) -> Any:
-    stype = spec.get("type")
-    if stype == "select":
-        return {
-            "value": spec.get("default", {}).get("value", ""),
-            "options": spec.get("options", []) or [],
-        }
-    if stype == "bool":
-        return False
-    if stype == "number":
-        return 0
-    return ""
-
-
-def _inflate_steps_with_schema(steps: list[dict], schema_scripts: dict[str, Any]) -> list[dict]:
-    inflated: list[dict] = []
-    for step in steps:
-        copy_step = copy.deepcopy(step)
-        script_id = copy_step.get("ScriptId")
-        if not script_id or script_id not in schema_scripts:
-            inflated.append(copy_step)
-            continue
-
-        cfg = copy_step.setdefault("Config", {})
-        fields_spec = schema_scripts[script_id].get("fields") if isinstance(schema_scripts[script_id], dict) else None
-        if not isinstance(fields_spec, dict):
-            inflated.append(copy_step)
-            continue
-
-        for key, spec in fields_spec.items():
-            if key not in cfg:
-                cfg[key] = _default_value_by_spec(spec if isinstance(spec, dict) else {})
-            elif isinstance(cfg[key], dict) and isinstance(spec, dict) and spec.get("type") == "select":
-                cfg[key].setdefault("options", list(spec.get("options") or []))
-
-        inflated.append(copy_step)
-
-    return inflated
-
-
-def _schema_scripts_for_account(account: Account) -> dict[str, Any]:
-    server = getattr(account, "server", None)
-    if not server:
-        return {}
-
-    schema_payload, _ = fetch_template_schema(server)
-    return _extract_schema_scripts(schema_payload)
-
-
 @lru_cache(maxsize=None)
 def _load_defaults_from_file(path: Path) -> list[dict]:
     if not path.exists():
@@ -264,11 +195,7 @@ def apply_defaults_for_account(account: Account, *, tariff_price: int | str | No
     if not defaults:
         tariff_name = get_tariff_name_by_price(price) or "неизвестный тариф"
         extra = f"; попытки шаблонов: {', '.join(template_attempts)}" if template_attempts else ""
-        return False, f"Не найдена схема по умолчанию для тарифа '{tariff_name}'{extra}"
-
-    schema_scripts = _schema_scripts_for_account(account)
-    if schema_scripts:
-        defaults = _inflate_steps_with_schema(defaults, schema_scripts)
+        return False, f"Не найдены настройки по умолчанию для тарифа '{tariff_name}'{extra}"
 
     raw_settings = fetch_account_settings(account)
     existing_steps = None

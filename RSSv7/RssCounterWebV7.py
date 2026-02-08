@@ -2643,22 +2643,7 @@ def api_apply_template(acc_id):
         if not ok:
             return jsonify({"error": "template invalid", "details": err}), 400
 
-        schema = schema_load()
-        gaps = find_template_schema_gaps(template_steps, schema)
-        if gaps:
-            return (
-                jsonify(
-                    {
-                        "error": "template_missing_keys",
-                        "template": safe_template,
-                        "missing_keys": gaps,
-                    }
-                ),
-                409,
-            )
-
-        template_filled = template_inflate_with_schema(template_steps, schema)
-        merged_steps = merge_template_into_account(current_steps, template_filled)
+        merged_steps = merge_template_into_account(current_steps, template_steps)
 
         acc["Data"] = json.dumps(merged_steps, ensure_ascii=False, separators=(",", ":"))
 
