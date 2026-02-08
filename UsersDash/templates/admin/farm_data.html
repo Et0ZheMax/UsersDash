@@ -409,6 +409,11 @@
                     </button>
                     <button type="button"
                             class="btn btn-secondary"
+                            data-role="farmdata-conflicts">
+                        Проверить конфликты
+                    </button>
+                    <button type="button"
+                            class="btn btn-secondary"
                             data-role="auto-create-clients">
                         Создать клиентов по именам
                         <span class="btn-spinner" data-role="auto-create-spinner" hidden></span>
@@ -534,6 +539,52 @@
                                         class="btn btn-primary"
                                         data-role="pull-apply">
                                     Добавить выбранные
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="modal" data-role="conflict-modal" hidden>
+                        <div class="modal-backdrop" data-role="conflict-modal-close"></div>
+                        <div class="modal-dialog">
+                            <div class="modal-header">
+                                <h3>Конфликты фермы по InstanceId</h3>
+                                <button type="button"
+                                        class="modal-close-btn"
+                                        data-role="conflict-modal-close">&times;</button>
+                            </div>
+                            <div class="modal-body">
+                                <p class="sync-errors" data-role="conflict-errors" style="display:none;"></p>
+                                <div data-role="conflict-loader">Загружаем список конфликтов...</div>
+                                <div data-role="conflict-empty" style="display:none;">
+                                    Конфликтов не найдено.
+                                </div>
+                                <div class="sync-table-wrapper" data-role="conflict-table" style="display:none;">
+                                    <table class="sync-table">
+                                        <thead>
+                                        <tr>
+                                            <th>Клиент</th>
+                                            <th>Ферма (UsersDash)</th>
+                                            <th>Ферма (бот)</th>
+                                            <th>InstanceId</th>
+                                            <th>Сервер</th>
+                                            <th>Действия</th>
+                                        </tr>
+                                        </thead>
+                                        <tbody data-role="conflict-rows"></tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        data-role="conflict-rename-all">
+                                    Переименовать всё
+                                </button>
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        data-role="conflict-modal-close">
+                                    Закрыть
                                 </button>
                             </div>
                         </div>
@@ -681,6 +732,9 @@ document.addEventListener("DOMContentLoaded", function () {
 
     const PAYMENT_URL_PAID = {{ url_for('admin.mark_account_paid', account_id=0)|tojson }};
     const PAYMENT_URL_UNPAID = {{ url_for('admin.mark_account_unpaid', account_id=0)|tojson }};
+    const CONFLICTS_URL = {{ url_for('admin.admin_farm_data_conflicts')|tojson }};
+    const CONFLICTS_RESOLVE_URL = {{ url_for('admin.admin_farm_data_conflicts_resolve')|tojson }};
+    const CONFLICTS_RESOLVE_BATCH_URL = {{ url_for('admin.admin_farm_data_conflicts_resolve_batch')|tojson }};
 
     function applyPaymentStateToRow(row, blocked, isActive) {
         if (!row) return;
@@ -824,6 +878,9 @@ document.addEventListener("DOMContentLoaded", function () {
         tr.dataset.dirty = "0";
 
         const nextPayment = item.next_payment_at || "";
+        const instanceId = item.instance_id ? String(item.instance_id) : "";
+        const farmName = item.farm_name || "";
+        const farmNameLabel = instanceId ? `${farmName}_${instanceId}` : farmName;
         const tariffVal = item.tariff !== null && item.tariff !== undefined ? item.tariff : "";
         const tariffStr = tariffVal !== null && tariffVal !== undefined && tariffVal !== ""
             ? String(tariffVal)
@@ -846,7 +903,7 @@ document.addEventListener("DOMContentLoaded", function () {
                 <div class="farmdata-name-main">${escapeHtml(item.owner_name || "—")}</div>
             </td>
             <td class="farmdata-name-cell">
-                <div class="farmdata-name-main">${escapeHtml(item.farm_name || "")}</div>
+                <div class="farmdata-name-main">${escapeHtml(farmNameLabel)}</div>
                 <div class="farmdata-name-sub">Сервер бота: ${escapeHtml(item.server_bot || "—")}</div>
             </td>
             <td>
@@ -1027,6 +1084,9 @@ document.addEventListener("DOMContentLoaded", function () {
                 kind === "paid" ? "Ферма включена после оплаты." : "Ферма отключена за неоплату.",
                 "success"
             );
+            if (data.warning) {
+                showToast(data.warning, "info");
+            }
         } catch (err) {
             console.error(err);
             showToast(err.message || "Не удалось обновить оплату.", "error");
@@ -1590,6 +1650,21 @@ document.addEventListener("DOMContentLoaded", function () {
         window.open(url, "_blank");
     });
 
+    document.addEventListener("click", function (e) {
+        const actionBtn = e.target.closest('[data-role="conflict-action"]');
+        if (!actionBtn) return;
+
+        const action = actionBtn.dataset.action;
+        const accountId = actionBtn.dataset.accountId;
+        const remoteName = actionBtn.dataset.remoteName || "";
+        if (!action || !accountId) {
+            showToast("Не удалось определить действие.", "error");
+            return;
+        }
+
+        resolveConflict(action, accountId, remoteName);
+    });
+
     const syncModal = document.querySelector('[data-role="sync-modal"]');
     const syncTableBody = document.querySelector('[data-role="sync-table"] tbody');
     const syncErrors = document.querySelector('[data-role="sync-errors"]');
@@ -1599,6 +1674,15 @@ document.addEventListener("DOMContentLoaded", function () {
     const pullTableBody = document.querySelector('[data-role="pull-table-body"]');
     const pullErrors = document.querySelector('[data-role="pull-errors"]');
     const pullCheckAll = document.querySelector('[data-role="pull-check-all"]');
+
+    const conflictModal = document.querySelector('[data-role="conflict-modal"]');
+    const conflictTable = document.querySelector('[data-role="conflict-table"]');
+    const conflictRows = document.querySelector('[data-role="conflict-rows"]');
+    const conflictErrors = document.querySelector('[data-role="conflict-errors"]');
+    const conflictLoader = document.querySelector('[data-role="conflict-loader"]');
+    const conflictEmpty = document.querySelector('[data-role="conflict-empty"]');
+    const conflictRenameAllBtn = document.querySelector('[data-role="conflict-rename-all"]');
+    let conflictItems = [];
 
     function openSyncModal() {
         if (!syncModal) return;
@@ -1628,6 +1712,20 @@ document.addEventListener("DOMContentLoaded", function () {
         el.addEventListener("click", closePullModal);
     });
 
+    function openConflictModal() {
+        if (!conflictModal) return;
+        conflictModal.hidden = false;
+    }
+
+    function closeConflictModal() {
+        if (!conflictModal) return;
+        conflictModal.hidden = true;
+    }
+
+    document.querySelectorAll('[data-role="conflict-modal-close"]').forEach(function (el) {
+        el.addEventListener("click", closeConflictModal);
+    });
+
     if (checkAll) {
         checkAll.addEventListener("change", function () {
             const checked = this.checked;
@@ -1647,14 +1745,205 @@ document.addEventListener("DOMContentLoaded", function () {
         });
     }
 
+    function resetConflictView() {
+        if (conflictErrors) {
+            conflictErrors.style.display = "none";
+            conflictErrors.textContent = "";
+        }
+        conflictItems = [];
+        if (conflictLoader) {
+            conflictLoader.style.display = "block";
+        }
+        if (conflictEmpty) {
+            conflictEmpty.style.display = "none";
+        }
+        if (conflictTable) {
+            conflictTable.style.display = "none";
+        }
+        if (conflictRows) {
+            conflictRows.innerHTML = "";
+        }
+    }
+
+    function buildConflictRow(item) {
+        const tr = document.createElement("tr");
+        const remoteName = item.remote_name || "";
+        const instanceId = item.instance_id || "—";
+        tr.innerHTML = `
+            <td>${escapeHtml(item.owner_name || "—")}</td>
+            <td>${escapeHtml(item.farm_name || "")}</td>
+            <td>${escapeHtml(remoteName || "")}</td>
+            <td>${escapeHtml(String(instanceId))}</td>
+            <td>${escapeHtml(item.server_name || "—")}</td>
+            <td>
+                <button type="button"
+                        class="btn btn-small btn-primary"
+                        data-role="conflict-action"
+                        data-action="accept_rename"
+                        data-account-id="${item.account_id}">
+                    Подтвердить переименование
+                </button>
+                <button type="button"
+                        class="btn btn-small btn-secondary"
+                        data-role="conflict-action"
+                        data-action="clear_internal_id"
+                        data-account-id="${item.account_id}">
+                    Отвязать internal_id
+                </button>
+            </td>
+        `;
+        const renameBtn = tr.querySelector('[data-action="accept_rename"]');
+        if (renameBtn) {
+            renameBtn.dataset.remoteName = remoteName;
+        }
+        return tr;
+    }
+
+    async function loadConflicts() {
+        if (!conflictModal) return;
+        resetConflictView();
+
+        try {
+            const resp = await fetch(CONFLICTS_URL, {
+                method: "GET",
+                headers: { "Accept": "application/json" }
+            });
+
+            if (!resp.ok) {
+                throw new Error("Ошибка загрузки конфликтов.");
+            }
+
+            const data = await resp.json();
+            if (!data.ok) {
+                throw new Error(data.error || "Ошибка загрузки конфликтов.");
+            }
+
+            const items = Array.isArray(data.items) ? data.items : [];
+            conflictItems = items;
+            const errors = Array.isArray(data.errors) ? data.errors : [];
+            if (errors.length && conflictErrors) {
+                conflictErrors.textContent = errors.join(" | ");
+                conflictErrors.style.display = "block";
+            }
+
+            if (!items.length) {
+                if (conflictEmpty) {
+                    conflictEmpty.style.display = "block";
+                }
+                return;
+            }
+
+            const fragment = document.createDocumentFragment();
+            items.forEach(function (item) {
+                fragment.appendChild(buildConflictRow(item));
+            });
+            if (conflictRows) {
+                conflictRows.appendChild(fragment);
+            }
+            if (conflictTable) {
+                conflictTable.style.display = "block";
+            }
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Не удалось загрузить конфликты.", "error");
+        } finally {
+            if (conflictLoader) {
+                conflictLoader.style.display = "none";
+            }
+        }
+    }
+
+    async function resolveConflict(action, accountId, remoteName) {
+        try {
+            const resp = await fetch(CONFLICTS_RESOLVE_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({
+                    action: action,
+                    account_id: accountId,
+                    remote_name: remoteName || ""
+                })
+            });
+
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось применить действие.");
+            }
+
+            showToast("Конфликт обновлён.", "success");
+            await loadConflicts();
+            updateFarmdataVisibleTotal();
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Не удалось применить действие.", "error");
+        }
+    }
+
+    async function resolveConflictsBatch(items) {
+        if (!Array.isArray(items) || items.length === 0) {
+            showToast("Нет конфликтов для применения.", "info");
+            return;
+        }
+        if (conflictRenameAllBtn) {
+            conflictRenameAllBtn.disabled = true;
+        }
+        try {
+            const resp = await fetch(CONFLICTS_RESOLVE_BATCH_URL, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({
+                    items: items.map(function (item) {
+                        return {
+                            account_id: item.account_id,
+                            remote_name: item.remote_name
+                        };
+                    })
+                })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось переименовать конфликты.");
+            }
+            showToast(`Переименовано: ${data.updated || 0}`, "success");
+            if (Array.isArray(data.warnings) && data.warnings.length) {
+                showToast(data.warnings.join(" | "), "info");
+            }
+            await loadConflicts();
+        } catch (err) {
+            console.error(err);
+            showToast(err.message || "Не удалось переименовать конфликты.", "error");
+        } finally {
+            if (conflictRenameAllBtn) {
+                conflictRenameAllBtn.disabled = false;
+            }
+        }
+    }
+
     const syncBtn = document.querySelector('[data-role="farmdata-sync"]');
     const syncSpinner = document.querySelector('[data-role="farmdata-sync-spinner"]');
 
     const pullBtn = document.querySelector('[data-role="farmdata-pull"]');
     const pullSpinner = document.querySelector('[data-role="farmdata-pull-spinner"]');
     const pullApplyBtn = document.querySelector('[data-role="pull-apply"]');
+    const conflictBtn = document.querySelector('[data-role="farmdata-conflicts"]');
     const autoCreateBtn = document.querySelector('[data-role="auto-create-clients"]');
     const autoCreateSpinner = document.querySelector('[data-role="auto-create-spinner"]');
+
+    if (conflictRenameAllBtn) {
+        conflictRenameAllBtn.addEventListener("click", async function () {
+            if (!conflictItems.length) {
+                showToast("Нет конфликтов для применения.", "info");
+                return;
+            }
+            await resolveConflictsBatch(conflictItems);
+        });
+    }
 
     if (syncBtn) {
         syncBtn.addEventListener("click", async function () {
@@ -1876,6 +2165,13 @@ document.addEventListener("DOMContentLoaded", function () {
             } finally {
                 setBtnLoading(pullBtn, false, pullSpinner);
             }
+        });
+    }
+
+    if (conflictBtn) {
+        conflictBtn.addEventListener("click", async function () {
+            openConflictModal();
+            await loadConflicts();
         });
     }
 
