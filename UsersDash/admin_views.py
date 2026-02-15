@@ -1576,6 +1576,7 @@ def mark_account_unpaid(account_id: int):
             "reason": "mark_unpaid",
         },
     ) as audit_ctx:
+        audit_ctx["result"] = "pending"
         ok, msg = update_account_active(account, False)
         if not ok:
             if _is_remote_account_missing(msg):
@@ -1595,7 +1596,7 @@ def mark_account_unpaid(account_id: int):
         account.is_active = False
         account.blocked_for_payment = True
         db.session.commit()
-        if audit_ctx["result"] != "ok_local_only":
+        if audit_ctx.get("result") != "ok_local_only":
             audit_ctx["result"] = "ok"
 
     return jsonify(
