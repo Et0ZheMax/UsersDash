@@ -845,6 +845,11 @@ def apply_template_for_account(account, template: str) -> Tuple[bool, str]:
     server_resources = fetch_resources_for_server(server)
     remote_id, _ = _resolve_remote_account(account, server_resources)
     if not remote_id:
+        fallback_remote = getattr(account, "internal_id", None) or getattr(account, "name", None)
+        if fallback_remote:
+            remote_id = str(fallback_remote)
+
+    if not remote_id:
         return False, "unable to resolve remote_id for account"
 
     url = f"{base}/manage/account/{remote_id}/apply_template"
