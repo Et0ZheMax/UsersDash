@@ -1767,15 +1767,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
     function buildConflictRow(item) {
         const tr = document.createElement("tr");
+        const conflictType = item.conflict_type || "rename_mismatch";
         const remoteName = item.remote_name || "";
         const instanceId = item.instance_id || "—";
-        tr.innerHTML = `
-            <td>${escapeHtml(item.owner_name || "—")}</td>
-            <td>${escapeHtml(item.farm_name || "")}</td>
-            <td>${escapeHtml(remoteName || "")}</td>
-            <td>${escapeHtml(String(instanceId))}</td>
-            <td>${escapeHtml(item.server_name || "—")}</td>
-            <td>
+        const actionCell = conflictType === "payment_block"
+            ? `<span class="text-danger">Требуется отключить ферму на сервере бота.</span>`
+            : `
                 <button type="button"
                         class="btn btn-small btn-primary"
                         data-role="conflict-action"
@@ -1790,7 +1787,14 @@ document.addEventListener("DOMContentLoaded", function () {
                         data-account-id="${item.account_id}">
                     Отвязать internal_id
                 </button>
-            </td>
+            `;
+        tr.innerHTML = `
+            <td>${escapeHtml(item.owner_name || "—")}</td>
+            <td>${escapeHtml(item.farm_name || "")}</td>
+            <td>${escapeHtml(remoteName || "")}</td>
+            <td>${escapeHtml(String(instanceId))}</td>
+            <td>${escapeHtml(item.server_name || "—")}</td>
+            <td>${actionCell}</td>
         `;
         const renameBtn = tr.querySelector('[data-action="accept_rename"]');
         if (renameBtn) {
@@ -1937,11 +1941,15 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (conflictRenameAllBtn) {
         conflictRenameAllBtn.addEventListener("click", async function () {
-            if (!conflictItems.length) {
+            const renameConflicts = conflictItems.filter(function (item) {
+                return (item.conflict_type || "rename_mismatch") === "rename_mismatch";
+            });
+
+            if (!renameConflicts.length) {
                 showToast("Нет конфликтов для применения.", "info");
                 return;
             }
-            await resolveConflictsBatch(conflictItems);
+            await resolveConflictsBatch(renameConflicts);
         });
     }
 
