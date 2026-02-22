@@ -2697,6 +2697,7 @@ def _collect_farm_conflicts_for_server(
 
         conflicts.append(
             {
+                "conflict_type": "rename_mismatch",
                 "account_id": acc.id,
                 "owner_name": acc.owner.username if acc.owner else "—",
                 "farm_name": acc.name,
@@ -2727,6 +2728,27 @@ def admin_farm_data_conflicts():
         if err:
             errors.append(err)
         items.extend(conflicts)
+
+    payment_conflicts = _build_payment_block_conflicts(servers)
+    for item in payment_conflicts:
+        account = item["account"]
+        server = item["server"]
+        remote_id = item.get("remote_id")
+        owner_name = account.owner.username if account.owner else "—"
+        items.append(
+            {
+                "conflict_type": "payment_block",
+                "account_id": account.id,
+                "owner_name": owner_name,
+                "farm_name": account.name,
+                "internal_id": account.internal_id or "",
+                "instance_id": remote_id if remote_id is not None else "—",
+                "server_name": server.name,
+                "remote_name": "[payment-block] Аккаунт активен на боте",
+                "remote_id": remote_id,
+                "remote_instance_id": remote_id,
+            }
+        )
 
     items.sort(key=lambda row: (row.get("server_name") or "", row.get("farm_name") or ""))
 

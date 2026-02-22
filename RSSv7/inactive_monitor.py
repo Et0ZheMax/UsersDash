@@ -35,6 +35,7 @@ STATE_FILE  = BASE_DIR / "inactive_state.json"   # кого слали в про
 TAG_TEXT = "0gain🍽️"
 
 THRESH_HOURS = int(os.getenv("INACTIVE_HOURS", "15"))
+MAX_LAST_SEEN_HOURS = int(os.getenv("INACTIVE_MAX_LAST_SEEN_HOURS", "72"))
 TELEGRAM_TOKEN = os.getenv("TG_TOKEN", "")
 TELEGRAM_CHAT  = os.getenv("TG_CHAT", "")
 TELEGRAM_MAX_LINES = 50  # не сыпем простыню в ТГ — при необходимости режем
@@ -140,6 +141,7 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
     Пишем файлы и шлём ТГ (с дедупликацией).
     """
     threshold = timedelta(hours=threshold_hrs)
+    max_last_seen = timedelta(hours=MAX_LAST_SEEN_HOURS)
     active_ids = _load_active_ids_from_profile()
     baseline = _load_today_baseline()
     rows = _query_resources()
@@ -156,27 +158,28 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
         if not dt:
             continue
 
-        # считаем dayGain (по food+wood+stone+gold)
+        # Считаем dayGain (по food+wood+stone+gold)
         base_row = baseline.get(acc_id)
         if base_row:
             bf, bw, bs, bg = base_row
             day_gain = (f - bf) + (w - bw) + (s - bs) + (g - bg)
         else:
-            # Нет baseline на сегодня — считаем, что прироста нет, но отмечаем отсутствие данных
-            day_gain = None
+            # Без baseline нельзя корректно судить о dayGain, поэтому пропускаем запись,
+            # чтобы не держать «вечные» ложные алерты.
+            continue
 
         hours_inactive = (now - dt).total_seconds() / 3600
         is_stale = now - dt >= threshold
-        zero_gain = day_gain is None or day_gain == 0
+        not_too_old = now - dt <= max_last_seen
+        zero_gain = day_gain == 0
 
-        if is_stale and zero_gain:
+        if is_stale and not_too_old and zero_gain:
             offenders.append({
                 "id": acc_id,
                 "nickname": nick,
                 "last": dt.isoformat(),
                 "hours": round(hours_inactive, 1),
                 "day_gain": 0,
-                "baseline_missing": base_row is None,
                 "tag": TAG_TEXT,
             })
 

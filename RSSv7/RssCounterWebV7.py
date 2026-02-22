@@ -3399,11 +3399,22 @@ def _collect_gather_watch() -> list[dict[str, t.Any]]:
     return alerts
 
 
-def _load_inactive_watch() -> list[dict[str, t.Any]]:
+def _load_inactive_watch(max_age_hours: int = 3) -> list[dict[str, t.Any]]:
     """Подмешиваем список неактивных аккаунтов (dayGain=0 > THRESH)."""
 
     path = _refresh_inactive_if_stale()
-    data = _safe_json_load(path)
+    full_path = Path(__file__).with_name("inactive_alerts.json")
+
+    try:
+        src = full_path if full_path.is_file() else path
+        if src.is_file():
+            age_sec = time.time() - src.stat().st_mtime
+            if age_sec > max_age_hours * 3600:
+                return []
+    except OSError:
+        return []
+
+    data = _safe_json_load(full_path if full_path.is_file() else path)
 
     if not isinstance(data, list):
         return []
@@ -3415,6 +3426,7 @@ def _load_inactive_watch() -> list[dict[str, t.Any]]:
 
         nick = item.get("nickname") or item.get("name")
         hours = item.get("hours")
+        last_seen = item.get("last")
         tag = item.get("tag") or "0gain🍽️"
 
         if not nick or hours is None:
@@ -3426,10 +3438,14 @@ def _load_inactive_watch() -> list[dict[str, t.Any]]:
             continue
 
         hours_txt = f"{hours_num:.1f}".replace(".0", "")
+        summary = f"{tag} {hours_txt}ч без прироста"
+        if last_seen:
+            summary = f"{summary} (last {last_seen})"
+
         alerts.append(
             {
                 "nickname": nick,
-                "summary": f"{tag} {hours_txt}ч без прироста",
+                "summary": summary,
                 "total": 1,
                 "kind": "inactive",
                 "hours": hours_num,
