@@ -1737,7 +1737,12 @@
                 // отправляем только выбранное значение, иначе сервер оборачивает его ещё раз в {value: ...}.
                 result[key] = input.value;
             } else if (typeof original === "number") {
-                const n = Number(input.value);
+                const rawValue = String(input.value ?? "").trim();
+                if (!rawValue) {
+                    result[key] = original;
+                    return;
+                }
+                const n = Number(rawValue);
                 result[key] = Number.isFinite(n) ? n : original;
             } else {
                 result[key] = input.value;
