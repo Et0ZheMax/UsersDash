@@ -119,6 +119,34 @@ SERVER_STATE_ALERT_INTERVAL = timedelta(minutes=20)
 _SERVER_STATE_ALERTS: dict[str, dict[str, Any]] = {}
 PAYMENT_BLOCK_ALERT_INTERVAL = timedelta(hours=2)
 _PAYMENT_BLOCK_ALERTS: dict[str, dict[str, Any]] = {}
+_FARMDATA_RESOURCES_CACHE_TTL_SECONDS = 60
+_FARMDATA_RESOURCES_CACHE_LOCK = threading.Lock()
+_FARMDATA_RESOURCES_CACHE: dict[int, dict[str, Any]] = {}
+
+
+def _get_cached_resources_for_server(
+    server: Server,
+    *,
+    force_refresh: bool = False,
+) -> dict[str, dict[str, Any]]:
+    """Возвращает кэшированные /api/resources для ускорения чанков farm-data."""
+
+    now = time.monotonic()
+    server_id = server.id
+
+    if not force_refresh:
+        with _FARMDATA_RESOURCES_CACHE_LOCK:
+            cached = _FARMDATA_RESOURCES_CACHE.get(server_id)
+            if cached and now - cached["fetched_at"] < _FARMDATA_RESOURCES_CACHE_TTL_SECONDS:
+                return cached["resources"]
+
+    resources = fetch_resources_for_server(server)
+    with _FARMDATA_RESOURCES_CACHE_LOCK:
+        _FARMDATA_RESOURCES_CACHE[server_id] = {
+            "fetched_at": now,
+            "resources": resources,
+        }
+    return resources
 
 
 def _to_moscow_time(dt: datetime) -> datetime:
@@ -2588,11 +2616,13 @@ def admin_farm_data_chunk():
         raw_limit = 200
 
     limit = min(400, max(50, raw_limit))
+    force_refresh_resources = request.args.get("refresh_resources") == "1"
 
     accounts = (
         Account.query
         .join(User, Account.owner_id == User.id)
         .join(Server, Account.server_id == Server.id)
+        .options(joinedload(Account.owner), joinedload(Account.server))
         .order_by(User.username.asc(), Account.name.asc())
         .offset(offset)
         .limit(limit)
@@ -2600,18 +2630,23 @@ def admin_farm_data_chunk():
     )
 
     account_ids = [acc.id for acc in accounts]
-    farmdata_entries = (
-        FarmData.query
-        .filter(FarmData.account_id.in_(account_ids))
-        .all()
-    )
+    farmdata_entries = []
+    if account_ids:
+        farmdata_entries = (
+            FarmData.query
+            .filter(FarmData.account_id.in_(account_ids))
+            .all()
+        )
     fd_index = {fd.account_id: fd for fd in farmdata_entries}
 
     resources_by_server: dict[int, dict[str, Any]] = {}
     for acc in accounts:
         if acc.server_id in resources_by_server:
             continue
-        resources_by_server[acc.server_id] = fetch_resources_for_server(acc.server)
+        resources_by_server[acc.server_id] = _get_cached_resources_for_server(
+            acc.server,
+            force_refresh=force_refresh_resources,
+        )
 
     items: list[dict[str, Any]] = []
     for acc in accounts:
