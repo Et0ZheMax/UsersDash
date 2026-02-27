@@ -321,6 +321,82 @@ class RenewalAdminAction(db.Model):
     actor = db.relationship("User")
 
 
+class RenewalBatchRequest(db.Model):
+    """Batch-заявка клиента на продление одной или нескольких ферм."""
+
+    __tablename__ = "renewal_batch_requests"
+
+    id = db.Column(db.Integer, primary_key=True)
+    batch_uid = db.Column(db.String(36), nullable=False, unique=True, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    subscriber_id = db.Column(db.Integer, db.ForeignKey("telegram_subscribers.id"), nullable=True, index=True)
+    status = db.Column(db.String(32), nullable=False, default="draft", index=True)
+    mode = db.Column(db.String(32), nullable=True, index=True)
+    total_amount_rub = db.Column(db.Integer, nullable=True)
+    payment_method = db.Column(db.String(64), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    receipt_file_id = db.Column(db.String(255), nullable=True)
+    confirmed_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
+    rejected_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True)
+    rejected_at = db.Column(db.DateTime, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    last_admin_reminder_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    user = db.relationship("User", foreign_keys=[user_id])
+    subscriber = db.relationship("TelegramSubscriber")
+    confirmer = db.relationship("User", foreign_keys=[confirmed_by_user_id])
+    rejector = db.relationship("User", foreign_keys=[rejected_by_user_id])
+
+
+class RenewalBatchItem(db.Model):
+    """Элемент batch-заявки по конкретной ферме."""
+
+    __tablename__ = "renewal_batch_items"
+
+    id = db.Column(db.Integer, primary_key=True)
+    batch_request_id = db.Column(db.Integer, db.ForeignKey("renewal_batch_requests.id"), nullable=False, index=True)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False, index=True)
+    account_name_snapshot = db.Column(db.String(128), nullable=False)
+    amount_rub_snapshot = db.Column(db.Integer, nullable=True)
+    tariff_snapshot = db.Column(db.Integer, nullable=True)
+    due_at_snapshot = db.Column(db.DateTime, nullable=True)
+    is_active_snapshot = db.Column(db.Boolean, nullable=True)
+    blocked_snapshot = db.Column(db.Boolean, nullable=True)
+    selected_for_renewal = db.Column(db.Boolean, default=False, nullable=False)
+    result_status = db.Column(db.String(24), default="pending", nullable=False, index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    batch_request = db.relationship(
+        "RenewalBatchRequest",
+        backref=db.backref("items", lazy="dynamic", cascade="all, delete-orphan"),
+    )
+    account = db.relationship("Account")
+
+    __table_args__ = (
+        db.UniqueConstraint("batch_request_id", "account_id", name="uq_batch_item_account"),
+    )
+
+
+class RenewalBatchAdminAction(db.Model):
+    """История действий админа по batch-заявкам."""
+
+    __tablename__ = "renewal_batch_admin_actions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    batch_request_id = db.Column(db.Integer, db.ForeignKey("renewal_batch_requests.id"), nullable=False, index=True)
+    actor_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    action_type = db.Column(db.String(32), nullable=False, index=True)
+    details_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    batch_request = db.relationship("RenewalBatchRequest")
+    actor = db.relationship("User")
+
+
 class FarmData(db.Model):
     """
     Дополнительные данные по ферме, которые заполняет сам клиент:
