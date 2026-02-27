@@ -47,3 +47,8 @@ class Config:
     TELEGRAM_BIND_CODE = os.environ.get("TELEGRAM_BIND_CODE", "")
     TELEGRAM_REMINDER_DAYS = _get_int_env("TELEGRAM_REMINDER_DAYS", 3)
     TELEGRAM_REMINDER_HOUR = _get_int_env("TELEGRAM_REMINDER_HOUR", 10)
+
+
+    # Настройки Telegram-бота продления аренды
+    RENTAL_REMINDER_DAYS = os.environ.get("RENTAL_REMINDER_DAYS", "3,1,0,-1")
+    RENTAL_PENDING_ADMIN_REMINDER_HOURS = _get_int_env("RENTAL_PENDING_ADMIN_REMINDER_HOURS", 12)

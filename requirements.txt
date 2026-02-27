@@ -1,6 +1,8 @@
+aiogram>=3.4
+APScheduler>=3.10
 cryptography>=41.0
 Flask>=2.3
 Flask-Login>=0.6
 Flask-SQLAlchemy>=3.1
-SQLAlchemy>=2.0
 requests>=2.31
+SQLAlchemy>=2.0

@@ -41,6 +41,9 @@ from UsersDash.models import (
     FarmData,
     Server,
     SettingsAuditLog,
+    TelegramBotSettings,
+    TelegramLinkToken,
+    TelegramSubscriber,
     User,
     db,
 )
@@ -82,7 +85,7 @@ from UsersDash.services.info_message import (
     set_global_info_message_text,
 )
 from UsersDash.services.notifications import send_notification
-
+from UsersDash.services.rental_bot import admin_dashboard_snapshot, generate_link_token, get_bot_settings
 
 
 admin_bp = Blueprint("admin", __name__)
@@ -3935,3 +3938,82 @@ def settings_log_diff(log_id: int):
         "changes": changes,
     })
 
+
+@admin_bp.route('/telegram-rental-settings', methods=['GET', 'POST'])
+@login_required
+def telegram_rental_settings_page():
+    """Настройки Telegram-бота продления аренды и выдача deep-link токенов."""
+
+    admin_required()
+    settings = get_bot_settings()
+
+    def _safe_form_int(value: str | None, default: int, minimum: int) -> int:
+        try:
+            parsed = int((value or "").strip())
+        except (TypeError, ValueError):
+            parsed = default
+        return max(minimum, parsed)
+
+    if request.method == 'POST':
+        settings.bot_username = request.form.get('bot_username', '').strip() or None
+        settings.default_timezone = request.form.get('default_timezone', 'Europe/Moscow').strip() or 'Europe/Moscow'
+        settings.renew_duration_days = _safe_form_int(request.form.get('renew_duration_days'), default=30, minimum=1)
+        settings.renewal_price_rub = _safe_form_int(request.form.get('renewal_price_rub'), default=0, minimum=0)
+        settings.payment_instructions = request.form.get('payment_instructions', '').strip() or None
+        settings.admin_contact = request.form.get('admin_contact', '').strip() or None
+        settings.template_reminder_3d = request.form.get('template_reminder_3d', '').strip() or None
+        settings.template_reminder_1d = request.form.get('template_reminder_1d', '').strip() or None
+        settings.template_reminder_0d = request.form.get('template_reminder_0d', '').strip() or None
+        settings.template_expired = request.form.get('template_expired', '').strip() or None
+        settings.pending_admin_reminder_hours = _safe_form_int(
+            request.form.get('pending_admin_reminder_hours'),
+            default=12,
+            minimum=1,
+        )
+        db.session.commit()
+        flash('Настройки Telegram-бота сохранены.', 'success')
+        return redirect(url_for('admin.telegram_rental_settings_page'))
+
+    stats = admin_dashboard_snapshot()
+    unlinked_clients = (
+        User.query.filter_by(role='client')
+        .outerjoin(TelegramSubscriber, TelegramSubscriber.user_id == User.id)
+        .filter(TelegramSubscriber.id.is_(None))
+        .order_by(User.username.asc())
+        .all()
+    )
+    latest_tokens = TelegramLinkToken.query.order_by(TelegramLinkToken.created_at.desc()).limit(20).all()
+
+    return render_template(
+        'admin/telegram_rental_settings.html',
+        settings=settings,
+        stats=stats,
+        unlinked_clients=unlinked_clients,
+        latest_tokens=latest_tokens,
+    )
+
+
+@admin_bp.route('/telegram-rental-settings/generate-link', methods=['POST'])
+@login_required
+def telegram_generate_link_token():
+    """Генерирует одноразовый deep-link токен для привязки Telegram к клиенту."""
+
+    admin_required()
+    try:
+        user_id = int((request.form.get('user_id') or '').strip())
+    except (TypeError, ValueError):
+        user_id = 0
+    target_user = User.query.filter_by(id=user_id, role='client').first()
+    settings = get_bot_settings()
+    if not target_user:
+        flash('Клиент не найден.', 'danger')
+        return redirect(url_for('admin.telegram_rental_settings_page'))
+
+    if not settings.bot_username:
+        flash('Сначала укажите bot_username в настройках, чтобы формировать deep-link.', 'warning')
+        return redirect(url_for('admin.telegram_rental_settings_page'))
+
+    raw_token = generate_link_token(user_id=target_user.id, created_by_user_id=current_user.id)
+    deep_link = f"https://t.me/{settings.bot_username}?start=bind_{raw_token}"
+    flash(f'Deep-link для {target_user.username}: {deep_link}', 'info')
+    return redirect(url_for('admin.telegram_rental_settings_page'))
