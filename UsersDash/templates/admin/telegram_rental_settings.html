@@ -32,9 +32,6 @@
         <label>Срок продления (дней)
             <input type="number" min="1" name="renew_duration_days" value="{{ settings.renew_duration_days }}">
         </label>
-        <label>Цена продления, ₽
-            <input type="number" min="0" name="renewal_price_rub" value="{{ settings.renewal_price_rub }}">
-        </label>
         <label>Контакт администратора (https://t.me/...)
             <input type="text" name="admin_contact" value="{{ settings.admin_contact or '' }}">
         </label>
@@ -65,6 +62,60 @@
 
     <button class="btn" type="submit" style="margin-top:12px;">Сохранить настройки</button>
 </form>
+
+{% if generated_deep_link %}
+<div class="card" style="padding: 20px; margin-bottom: 20px;">
+    <h2>Ссылка привязки готова</h2>
+    <div style="margin-bottom: 10px; color: #666;">
+        Клиент: <strong>{{ generated_user.username if generated_user else 'неизвестный клиент' }}</strong>
+    </div>
+    <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px;">
+        <input id="deepLinkOutput" type="text" readonly value="{{ generated_deep_link }}" style="min-width: 420px; flex: 1;">
+        <a class="btn btn-sm" href="{{ generated_deep_link }}" target="_blank" rel="noopener noreferrer">Открыть в Telegram</a>
+        <button class="btn btn-sm" type="button" id="copyDeepLinkBtn">Копировать</button>
+    </div>
+    <div id="copyDeepLinkStatus" style="font-size: 0.9rem; color: #666;">Можно скопировать ссылку вручную из поля выше.</div>
+</div>
+{% endif %}
+
+<div class="card" style="padding: 20px; margin-bottom: 20px;">
+    <h2>Статус Telegram-привязки клиентов</h2>
+    <table class="table">
+        <thead>
+        <tr>
+            <th>Клиент</th>
+            <th>Статус</th>
+            <th>Telegram username</th>
+            <th>chat_id</th>
+            <th>Последняя активность</th>
+            <th>Действие</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for row in clients_telegram_status %}
+            <tr>
+                <td>{{ row.client.username }}</td>
+                <td>{{ row.status_text }}</td>
+                <td>{{ row.profile.username if row.profile and row.profile.username else '—' }}</td>
+                <td>{{ row.profile.chat_id if row.profile and row.profile.chat_id else '—' }}</td>
+                <td>
+                    {% if row.profile and row.profile.last_interaction_at %}
+                        {{ row.profile.last_interaction_at.strftime('%d.%m.%Y %H:%M') }}
+                    {% else %}
+                        —
+                    {% endif %}
+                </td>
+                <td>
+                    <form method="post" action="{{ url_for('admin.telegram_generate_link_token') }}">
+                        <input type="hidden" name="user_id" value="{{ row.client.id }}">
+                        <button class="btn btn-sm" type="submit">Сгенерировать новую ссылку</button>
+                    </form>
+                </td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
 
 <div class="card" style="padding: 20px; margin-bottom: 20px;">
     <h2>Клиенты без Telegram-привязки</h2>
@@ -110,4 +161,38 @@
         </tbody>
     </table>
 </div>
+
+{% if generated_deep_link %}
+<script>
+    (function () {
+        const output = document.getElementById('deepLinkOutput');
+        const button = document.getElementById('copyDeepLinkBtn');
+        const status = document.getElementById('copyDeepLinkStatus');
+        if (!output || !button || !status) return;
+
+        button.addEventListener('click', async function () {
+            const text = output.value || '';
+            if (!text) {
+                status.textContent = 'Ссылка пустая, копировать нечего.';
+                return;
+            }
+
+            try {
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    output.focus();
+                    output.select();
+                    document.execCommand('copy');
+                }
+                status.textContent = 'Ссылка скопирована в буфер обмена.';
+            } catch (error) {
+                output.focus();
+                output.select();
+                status.textContent = 'Не удалось скопировать автоматически. Скопируйте ссылку вручную.';
+            }
+        });
+    })();
+</script>
+{% endif %}
 {% endblock %}
