@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Настройки Telegram аренды{% endblock %}
+
+{% block content %}
+<h1>Настройки Telegram-бота аренды</h1>
+
+<div class="kpi-row" style="margin-bottom: 20px;">
+    <div class="kpi-card">
+        <div class="kpi-label">Привязано клиентов</div>
+        <div class="kpi-value">{{ stats.linked_clients }}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Без Telegram</div>
+        <div class="kpi-value">{{ stats.unlinked_clients }}</div>
+    </div>
+    <div class="kpi-card">
+        <div class="kpi-label">Заявок на подтверждение</div>
+        <div class="kpi-value">{{ stats.pending_requests }}</div>
+    </div>
+</div>
+
+<form method="post" class="card" style="padding: 20px; margin-bottom: 20px;">
+    <h2>Параметры бота</h2>
+    <div class="form-grid" style="display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:12px;">
+        <label>Username бота (без @)
+            <input type="text" name="bot_username" value="{{ settings.bot_username or '' }}">
+        </label>
+        <label>Часовой пояс по умолчанию
+            <input type="text" name="default_timezone" value="{{ settings.default_timezone }}">
+        </label>
+        <label>Срок продления (дней)
+            <input type="number" min="1" name="renew_duration_days" value="{{ settings.renew_duration_days }}">
+        </label>
+        <label>Цена продления, ₽
+            <input type="number" min="0" name="renewal_price_rub" value="{{ settings.renewal_price_rub }}">
+        </label>
+        <label>Контакт администратора (https://t.me/...)
+            <input type="text" name="admin_contact" value="{{ settings.admin_contact or '' }}">
+        </label>
+        <label>Напоминание админу по pending (часов)
+            <input type="number" min="1" name="pending_admin_reminder_hours" value="{{ settings.pending_admin_reminder_hours }}">
+        </label>
+    </div>
+
+    <label style="display:block;margin-top:12px;">Инструкция по оплате
+        <textarea name="payment_instructions" rows="4">{{ settings.payment_instructions or '' }}</textarea>
+    </label>
+
+    <label style="display:block;margin-top:12px;">Шаблон за 3 дня
+        <textarea name="template_reminder_3d" rows="4">{{ settings.template_reminder_3d or '' }}</textarea>
+    </label>
+
+    <label style="display:block;margin-top:12px;">Шаблон за 1 день
+        <textarea name="template_reminder_1d" rows="4">{{ settings.template_reminder_1d or '' }}</textarea>
+    </label>
+
+    <label style="display:block;margin-top:12px;">Шаблон в день окончания
+        <textarea name="template_reminder_0d" rows="4">{{ settings.template_reminder_0d or '' }}</textarea>
+    </label>
+
+    <label style="display:block;margin-top:12px;">Шаблон для просрочки
+        <textarea name="template_expired" rows="4">{{ settings.template_expired or '' }}</textarea>
+    </label>
+
+    <button class="btn" type="submit" style="margin-top:12px;">Сохранить настройки</button>
+</form>
+
+<div class="card" style="padding: 20px; margin-bottom: 20px;">
+    <h2>Клиенты без Telegram-привязки</h2>
+    {% if unlinked_clients %}
+        <table class="table">
+            <thead>
+            <tr><th>Клиент</th><th>Действие</th></tr>
+            </thead>
+            <tbody>
+            {% for client in unlinked_clients %}
+                <tr>
+                    <td>{{ client.username }}</td>
+                    <td>
+                        <form method="post" action="{{ url_for('admin.telegram_generate_link_token') }}">
+                            <input type="hidden" name="user_id" value="{{ client.id }}">
+                            <button class="btn btn-sm" type="submit">Сгенерировать deep-link</button>
+                        </form>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div>Все клиенты привязаны к Telegram.</div>
+    {% endif %}
+</div>
+
+<div class="card" style="padding: 20px;">
+    <h2>Последние токены привязки</h2>
+    <table class="table">
+        <thead>
+        <tr><th>ID клиента</th><th>Создан</th><th>Истекает</th><th>Использован</th></tr>
+        </thead>
+        <tbody>
+        {% for token in latest_tokens %}
+            <tr>
+                <td>{{ token.user_id }}</td>
+                <td>{{ token.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                <td>{{ token.expires_at.strftime('%d.%m.%Y %H:%M') }}</td>
+                <td>{{ token.consumed_at.strftime('%d.%m.%Y %H:%M') if token.consumed_at else 'Нет' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
