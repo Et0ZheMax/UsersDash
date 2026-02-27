@@ -7,7 +7,7 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 
 from flask import current_app
@@ -15,6 +15,10 @@ from sqlalchemy import and_
 
 from UsersDash.models import (
     Account,
+    FarmData,
+    RenewalBatchAdminAction,
+    RenewalBatchItem,
+    RenewalBatchRequest,
     RenewalAdminAction,
     RenewalRequest,
     RentalNotificationLog,
@@ -27,6 +31,17 @@ from UsersDash.models import (
 
 
 PENDING_STATUSES = {"payment_pending_confirmation", "payment_data_collecting"}
+BATCH_PENDING_STATUSES = {
+    "payment_pending_confirmation",
+    "payment_data_collecting",
+    "pending_manual_review",
+}
+BATCH_ACTIVE_STATUSES = {
+    "draft",
+    "payment_data_collecting",
+    "payment_pending_confirmation",
+    "pending_manual_review",
+}
 
 
 @dataclass(slots=True)
@@ -36,6 +51,7 @@ class NotificationCandidate:
     account: Account
     user: User
     subscriber: TelegramSubscriber
+    telegram_tag: str | None
     days_left: int
     due_on: date
 
@@ -48,10 +64,24 @@ class TokenValidationError(RentalBotError):
     """Ошибка привязки Telegram-чата по токену."""
 
 
-def utcnow() -> datetime:
-    """Возвращает текущее время в UTC с timezone."""
+class BatchValidationError(RentalBotError):
+    """Ошибка операций с batch-заявками."""
 
-    return datetime.now(tz=UTC)
+
+def utcnow() -> datetime:
+    """Возвращает текущее время в UTC в naive-формате."""
+
+    return datetime.utcnow()
+
+
+def to_utc_naive(value: datetime | None) -> datetime | None:
+    """Нормализует дату ко внутреннему стандарту naive UTC."""
+
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def default_template(days_left: int) -> str:
@@ -133,7 +163,8 @@ def bind_telegram_chat(
     now = utcnow()
     if token.consumed_at:
         raise TokenValidationError("Токен уже использован.")
-    if token.expires_at < now:
+    token_expires_at = to_utc_naive(token.expires_at)
+    if token_expires_at is None or token_expires_at < now:
         raise TokenValidationError("Срок действия токена истёк.")
 
     another_owner = TelegramSubscriber.query.filter(
@@ -152,7 +183,7 @@ def bind_telegram_chat(
     profile.first_name = (first_name or "").strip() or None
     profile.last_name = (last_name or "").strip() or None
     profile.is_active = True
-    profile.last_interaction_at = datetime.utcnow()
+    profile.last_interaction_at = now
     token.consumed_at = now
     db.session.commit()
     return profile
@@ -165,20 +196,34 @@ def collect_notification_candidates(reminder_days: Iterable[int]) -> list[Notifi
     if not days_set:
         return []
 
-    now = datetime.utcnow()
+    now = utcnow()
     candidates: list[NotificationCandidate] = []
 
     query = (
         Account.query.join(User, User.id == Account.owner_id)
         .outerjoin(TelegramSubscriber, TelegramSubscriber.user_id == User.id)
+        .outerjoin(FarmData, FarmData.account_id == Account.id)
         .filter(Account.is_active.is_(True))
         .filter(Account.next_payment_at.isnot(None))
     )
 
-    for account, user, subscriber in query.with_entities(Account, User, TelegramSubscriber).all():
-        if not subscriber or not subscriber.is_active:
+    for account, user, subscriber, farm_data in query.with_entities(
+        Account,
+        User,
+        TelegramSubscriber,
+        FarmData,
+    ).all():
+        telegram_tag = (farm_data.telegram_tag or "").strip() if farm_data and farm_data.telegram_tag else None
+        if not subscriber or not subscriber.is_active or not subscriber.chat_id:
+            app_logger_info(
+                f"Пропуск уведомления account_id={account.id}, user_id={user.id}: "
+                f"нет активной Telegram-привязки (telegram_tag={telegram_tag or '—'})."
+            )
             continue
-        due = account.next_payment_at.date()
+        due_at = to_utc_naive(account.next_payment_at)
+        if due_at is None:
+            continue
+        due = due_at.date()
         days_left = (due - now.date()).days
         if days_left not in days_set:
             continue
@@ -189,6 +234,7 @@ def collect_notification_candidates(reminder_days: Iterable[int]) -> list[Notifi
                 account=account,
                 user=user,
                 subscriber=subscriber,
+                telegram_tag=telegram_tag,
                 days_left=days_left,
                 due_on=due,
             )
@@ -265,10 +311,14 @@ def create_renewal_request(
     if not account:
         raise RentalBotError("Аккаунт не найден.")
 
-    previous_paid_until = account.next_payment_at
-    base_date = previous_paid_until if previous_paid_until and previous_paid_until > datetime.utcnow() else datetime.utcnow()
+    previous_paid_until = to_utc_naive(account.next_payment_at)
+    now = utcnow()
+    base_date = previous_paid_until if previous_paid_until and previous_paid_until > now else now
     settings = get_bot_settings()
     expected_days = max(1, settings.renew_duration_days)
+
+    if account.owner_id != user_id:
+        raise RentalBotError("Аккаунт не принадлежит выбранному клиенту.")
 
     request_row = RenewalRequest(
         request_uid=str(uuid.uuid4()),
@@ -305,8 +355,9 @@ def confirm_renewal_request(request_id: int, admin_user_id: int) -> RenewalReque
     if not account:
         raise RentalBotError("Аккаунт заявки не найден.")
 
-    now = datetime.utcnow()
-    base = account.next_payment_at if account.next_payment_at and account.next_payment_at > now else now
+    now = utcnow()
+    current_paid_until = to_utc_naive(account.next_payment_at)
+    base = current_paid_until if current_paid_until and current_paid_until > now else now
     account.next_payment_at = base + timedelta(days=request_row.expected_days)
     if request_row.amount_rub:
         account.next_payment_amount = request_row.amount_rub
@@ -344,7 +395,7 @@ def reject_renewal_request(request_id: int, admin_user_id: int, reason: str | No
 
     request_row.status = "rejected"
     request_row.rejected_by_user_id = admin_user_id
-    request_row.rejected_at = datetime.utcnow()
+    request_row.rejected_at = utcnow()
     request_row.rejection_reason = reason or "Причина не указана"
 
     db.session.add(
@@ -399,6 +450,308 @@ def log_notification_result(
     db.session.commit()
 
 
+def create_notification_batch(
+    *,
+    user_id: int,
+    subscriber_id: int,
+    candidates: list[NotificationCandidate],
+) -> RenewalBatchRequest:
+    """Создаёт draft batch-заявку из набора уведомлённых ферм."""
+
+    if not candidates:
+        raise BatchValidationError("Нельзя создать batch без ферм.")
+
+    candidate_ids = {item.account.id for item in candidates}
+    active_batch = (
+        RenewalBatchRequest.query.filter_by(user_id=user_id, subscriber_id=subscriber_id)
+        .filter(RenewalBatchRequest.status.in_(BATCH_ACTIVE_STATUSES))
+        .order_by(RenewalBatchRequest.created_at.desc())
+        .first()
+    )
+    if active_batch:
+        existing_items = RenewalBatchItem.query.filter_by(batch_request_id=active_batch.id).all()
+        existing_ids = {item.account_id for item in existing_items}
+        if existing_ids == candidate_ids or active_batch.status in {
+            "payment_pending_confirmation",
+            "pending_manual_review",
+        }:
+            return active_batch
+
+        stale_items = [item for item in existing_items if item.account_id not in candidate_ids]
+        for item in stale_items:
+            db.session.delete(item)
+
+        for candidate in candidates:
+            item = RenewalBatchItem.query.filter_by(
+                batch_request_id=active_batch.id,
+                account_id=candidate.account.id,
+            ).first()
+            if not item:
+                db.session.add(
+                    RenewalBatchItem(
+                        batch_request_id=active_batch.id,
+                        account_id=candidate.account.id,
+                        account_name_snapshot=candidate.account.name,
+                        amount_rub_snapshot=candidate.account.next_payment_amount,
+                        tariff_snapshot=candidate.account.next_payment_tariff,
+                        due_at_snapshot=to_utc_naive(candidate.account.next_payment_at),
+                        is_active_snapshot=candidate.account.is_active,
+                        blocked_snapshot=candidate.account.blocked_for_payment,
+                    )
+                )
+                continue
+
+            item.account_name_snapshot = candidate.account.name
+            item.amount_rub_snapshot = candidate.account.next_payment_amount
+            item.tariff_snapshot = candidate.account.next_payment_tariff
+            item.due_at_snapshot = to_utc_naive(candidate.account.next_payment_at)
+            item.is_active_snapshot = candidate.account.is_active
+            item.blocked_snapshot = candidate.account.blocked_for_payment
+
+        active_batch.total_amount_rub = sum((item.account.next_payment_amount or 0) for item in candidates)
+        db.session.commit()
+        return active_batch
+
+    batch = RenewalBatchRequest(
+        batch_uid=str(uuid.uuid4()),
+        user_id=user_id,
+        subscriber_id=subscriber_id,
+        status="draft",
+        mode=None,
+        total_amount_rub=sum((item.account.next_payment_amount or 0) for item in candidates),
+    )
+    db.session.add(batch)
+    db.session.flush()
+
+    for candidate in candidates:
+        db.session.add(
+            RenewalBatchItem(
+                batch_request_id=batch.id,
+                account_id=candidate.account.id,
+                account_name_snapshot=candidate.account.name,
+                amount_rub_snapshot=candidate.account.next_payment_amount,
+                tariff_snapshot=candidate.account.next_payment_tariff,
+                due_at_snapshot=to_utc_naive(candidate.account.next_payment_at),
+                is_active_snapshot=candidate.account.is_active,
+                blocked_snapshot=candidate.account.blocked_for_payment,
+                selected_for_renewal=False,
+                result_status="pending",
+            )
+        )
+
+    db.session.commit()
+    return batch
+
+
+def get_batch_for_user(batch_id: int, user_id: int) -> RenewalBatchRequest:
+    """Возвращает batch-заявку клиента или поднимает доменную ошибку."""
+
+    batch = RenewalBatchRequest.query.get(batch_id)
+    if not batch or batch.user_id != user_id:
+        raise BatchValidationError("Платёжная сессия не найдена или недоступна.")
+    return batch
+
+
+def mark_batch_mode(batch: RenewalBatchRequest, mode: str) -> RenewalBatchRequest:
+    """Фиксирует режим обработки batch-заявки."""
+
+    if mode not in {"full", "partial", "manual_change"}:
+        raise BatchValidationError("Некорректный режим batch-заявки.")
+    if batch.status not in {"draft", "payment_data_collecting"}:
+        raise BatchValidationError("Эта batch-заявка уже закрыта.")
+
+    batch.mode = mode
+    batch.status = "payment_data_collecting"
+    db.session.commit()
+    return batch
+
+
+def ensure_batch_editable(batch: RenewalBatchRequest) -> None:
+    """Проверяет, что batch доступен для клиентского редактирования."""
+
+    if batch.status not in {"draft", "payment_data_collecting"}:
+        raise BatchValidationError("Эта batch-заявка уже отправлена и недоступна для редактирования.")
+
+
+def set_batch_selected_accounts(
+    *,
+    batch: RenewalBatchRequest,
+    selected_account_ids: set[int],
+) -> None:
+    """Обновляет выбранные фермы внутри batch-заявки."""
+
+    batch_items = RenewalBatchItem.query.filter_by(batch_request_id=batch.id).all()
+    allowed_ids = {item.account_id for item in batch_items}
+    unknown_ids = selected_account_ids - allowed_ids
+    if unknown_ids:
+        raise BatchValidationError("В batch переданы недопустимые фермы.")
+
+    for item in batch_items:
+        item.selected_for_renewal = item.account_id in selected_account_ids
+
+    db.session.commit()
+
+
+def submit_batch_request(
+    *,
+    batch: RenewalBatchRequest,
+    amount_rub: int | None,
+    payment_method: str | None,
+    comment: str | None,
+    receipt_file_id: str | None,
+) -> RenewalBatchRequest:
+    """Переводит batch в режим ожидания подтверждения админом."""
+
+    if batch.status in {"payment_pending_confirmation", "pending_manual_review", "payment_confirmed"}:
+        return batch
+    if batch.status not in {"draft", "payment_data_collecting"}:
+        raise BatchValidationError("Batch уже закрыт и не может быть отправлен повторно.")
+    if batch.mode not in {"full", "partial", "manual_change"}:
+        raise BatchValidationError("Сначала выберите сценарий оплаты.")
+
+    if batch.mode == "full":
+        set_batch_selected_accounts(
+            batch=batch,
+            selected_account_ids={item.account_id for item in batch.items},
+        )
+
+    items = RenewalBatchItem.query.filter_by(batch_request_id=batch.id).all()
+    selected_items = [item for item in items if item.selected_for_renewal]
+    selected_count = len(selected_items)
+    if batch.mode in {"full", "partial"} and selected_count == 0:
+        raise BatchValidationError("Выберите хотя бы одну ферму для продления.")
+
+    if batch.mode == "manual_change":
+        batch.total_amount_rub = amount_rub
+    elif batch.mode == "full":
+        batch.total_amount_rub = sum(item.amount_rub_snapshot or 0 for item in items)
+    else:
+        batch.total_amount_rub = sum(item.amount_rub_snapshot or 0 for item in selected_items)
+    batch.payment_method = payment_method
+    batch.comment = comment
+    batch.receipt_file_id = receipt_file_id
+    batch.status = "pending_manual_review" if batch.mode == "manual_change" else "payment_pending_confirmation"
+    db.session.commit()
+    return batch
+
+
+def confirm_batch_request(batch_id: int, admin_user_id: int) -> RenewalBatchRequest:
+    """Подтверждает batch-заявку и продлевает выбранные фермы."""
+
+    batch = RenewalBatchRequest.query.get(batch_id)
+    if not batch:
+        raise BatchValidationError("Batch-заявка не найдена.")
+    if batch.status == "payment_confirmed":
+        return batch
+    if batch.status in {"rejected", "cancelled"}:
+        raise BatchValidationError("Нельзя подтвердить отклонённую или отменённую batch-заявку.")
+
+    if batch.mode == "manual_change":
+        batch.status = "payment_confirmed"
+        batch.confirmed_by_user_id = admin_user_id
+        batch.confirmed_at = utcnow()
+        for item in RenewalBatchItem.query.filter_by(batch_request_id=batch.id).all():
+            if item.result_status == "pending":
+                item.result_status = "skipped"
+        db.session.add(
+            RenewalBatchAdminAction(
+                batch_request_id=batch.id,
+                actor_user_id=admin_user_id,
+                action_type="confirm_manual_change",
+                details_json=json.dumps({"mode": batch.mode}, ensure_ascii=False),
+            )
+        )
+        db.session.commit()
+        return batch
+
+    settings = get_bot_settings()
+    now = utcnow()
+    expected_days = max(1, settings.renew_duration_days)
+
+    for item in RenewalBatchItem.query.filter_by(batch_request_id=batch.id).all():
+        if not item.selected_for_renewal:
+            item.result_status = "skipped"
+            continue
+
+        account = Account.query.get(item.account_id)
+        if not account or account.owner_id != batch.user_id:
+            item.result_status = "rejected"
+            continue
+
+        current_paid_until = to_utc_naive(account.next_payment_at)
+        base = current_paid_until if current_paid_until and current_paid_until > now else now
+        account.next_payment_at = base + timedelta(days=expected_days)
+        if item.amount_rub_snapshot:
+            account.next_payment_amount = item.amount_rub_snapshot
+        item.result_status = "confirmed"
+
+    batch.status = "payment_confirmed"
+    batch.confirmed_by_user_id = admin_user_id
+    batch.confirmed_at = now
+
+    db.session.add(
+        RenewalBatchAdminAction(
+            batch_request_id=batch.id,
+            actor_user_id=admin_user_id,
+            action_type="confirm",
+            details_json=json.dumps(
+                {
+                    "mode": batch.mode,
+                    "selected_accounts": [
+                        item.account_id
+                        for item in RenewalBatchItem.query.filter_by(batch_request_id=batch.id).all()
+                        if item.selected_for_renewal
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.session.commit()
+    return batch
+
+
+def reject_batch_request(batch_id: int, admin_user_id: int, reason: str | None) -> RenewalBatchRequest:
+    """Отклоняет batch-заявку клиента."""
+
+    batch = RenewalBatchRequest.query.get(batch_id)
+    if not batch:
+        raise BatchValidationError("Batch-заявка не найдена.")
+    if batch.status == "payment_confirmed":
+        raise BatchValidationError("Batch уже подтверждён и не может быть отклонён.")
+
+    batch.status = "rejected"
+    batch.rejected_by_user_id = admin_user_id
+    batch.rejected_at = utcnow()
+    batch.rejection_reason = reason or "Причина не указана"
+
+    for item in RenewalBatchItem.query.filter_by(batch_request_id=batch.id).all():
+        if item.result_status == "pending":
+            item.result_status = "rejected"
+
+    db.session.add(
+        RenewalBatchAdminAction(
+            batch_request_id=batch.id,
+            actor_user_id=admin_user_id,
+            action_type="reject",
+            details_json=json.dumps({"reason": batch.rejection_reason}, ensure_ascii=False),
+        )
+    )
+    db.session.commit()
+    return batch
+
+
+def unresolved_batch_requests(limit: int = 50) -> list[RenewalBatchRequest]:
+    """Возвращает batch-заявки, ожидающие действий администратора."""
+
+    return (
+        RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(BATCH_PENDING_STATUSES))
+        .order_by(RenewalBatchRequest.created_at.asc())
+        .limit(limit)
+        .all()
+    )
+
+
 def unresolved_requests(limit: int = 50) -> list[RenewalRequest]:
     """Возвращает список ожидающих подтверждения заявок."""
 
@@ -421,6 +774,7 @@ def admin_dashboard_snapshot() -> dict[str, int]:
         .count()
     )
     pending = RenewalRequest.query.filter(RenewalRequest.status.in_(PENDING_STATUSES)).count()
+    pending += RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(BATCH_PENDING_STATUSES)).count()
 
     return {
         "linked_clients": linked,
