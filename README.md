@@ -158,7 +158,7 @@
 
 1. Выполните миграцию таблиц: `python UsersDash/migrate_add_rental_bot_tables.py`.
 2. Задайте переменные окружения:
-   - `TELEGRAM_BOT_TOKEN`
+   - `RENTAL_TELEGRAM_BOT_TOKEN` (отдельный токен только для rental-бота)
    - `TELEGRAM_ADMIN_CHAT_IDS=123456789,987654321`
    - `RENTAL_REMINDER_DAYS=3,1,0,-1`
 3. Запустите воркер бота: `python -m UsersDash.scripts.rental_telegram_bot`.
