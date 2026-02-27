@@ -162,6 +162,11 @@ def bind_telegram_chat(
 
     now = utcnow()
     if token.consumed_at:
+        profile = TelegramSubscriber.query.filter_by(user_id=token.user_id).first()
+        if profile and profile.chat_id == chat_id:
+            profile.last_interaction_at = now
+            db.session.commit()
+            return profile
         raise TokenValidationError("Токен уже использован.")
     token_expires_at = to_utc_naive(token.expires_at)
     if token_expires_at is None or token_expires_at < now:

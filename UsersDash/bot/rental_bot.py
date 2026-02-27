@@ -20,6 +20,7 @@ from flask import Flask
 from UsersDash.config import Config
 from UsersDash.models import (
     Account,
+    FarmData,
     RenewalBatchItem,
     RenewalBatchRequest,
     RenewalRequest,
@@ -122,6 +123,124 @@ def build_user_keyboard(batch_id: int, admin_contact: str | None) -> InlineKeybo
     if admin_contact:
         rows.append([InlineKeyboardButton(text="Связаться с администратором", url=admin_contact)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_dashboard_keyboard(admin_contact: str | None) -> InlineKeyboardMarkup:
+    """Компактное меню для уже привязанного клиента."""
+
+    rows = [
+        [InlineKeyboardButton(text="💳 Оплата", callback_data="menu:payment")],
+        [InlineKeyboardButton(text="✍️ Есть изменения", callback_data="menu:change")],
+        [InlineKeyboardButton(text="📄 Мои фермы", callback_data="menu:farms")],
+    ]
+    if admin_contact:
+        rows.append([InlineKeyboardButton(text="Связаться с администратором", url=admin_contact)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _account_status_label(account: Account) -> str:
+    if account.blocked_for_payment:
+        return "Заблокирована"
+    if not account.is_active:
+        return "Неактивна"
+    return "Активна"
+
+
+def _collect_user_accounts(user_id: int) -> list[tuple[Account, FarmData | None]]:
+    """Возвращает фермы пользователя вместе с FarmData."""
+
+    rows = (
+        Account.query.outerjoin(FarmData, FarmData.account_id == Account.id)
+        .filter(Account.owner_id == user_id)
+        .order_by(Account.name.asc())
+        .with_entities(Account, FarmData)
+        .all()
+    )
+    return rows
+
+
+def render_client_dashboard(profile: TelegramSubscriber) -> str:
+    """Краткая сводка клиента для /start без токена."""
+
+    accounts = _collect_user_accounts(profile.user_id)
+    if not accounts:
+        return (
+            "✅ Telegram уже привязан к вашему кабинету UsersDash.\n"
+            "Фермы пока не найдены. Когда администратор добавит фермы, они появятся здесь."
+        )
+
+    total = len(accounts)
+    active = 0
+    limited = 0
+    problematic = 0
+    due_candidates: list[tuple[datetime, Account, str]] = []
+
+    for account, _farm_data in accounts:
+        status = _account_status_label(account)
+        if status == "Активна":
+            active += 1
+        else:
+            limited += 1
+        if status == "Заблокирована":
+            problematic += 1
+
+        due_at = to_utc_naive(account.next_payment_at)
+        if due_at is not None:
+            due_candidates.append((due_at, account, status))
+
+    due_candidates.sort(key=lambda item: item[0])
+    nearest_due = due_candidates[0][0].strftime("%d.%m.%Y") if due_candidates else "—"
+
+    lines = [
+        "✅ Telegram уже привязан к вашему кабинету UsersDash.",
+        f"Ферм: {total} • Активных: {active} • Ограниченных: {limited} • Проблемных: {problematic}",
+        f"Ближайшая оплата: {nearest_due}",
+    ]
+    if not due_candidates:
+        lines.append("\nБлижайших оплат пока нет.")
+        return "\n".join(lines)
+
+    lines.append("\nБлижайшие к оплате фермы:")
+    for idx, (due_at, account, status) in enumerate(due_candidates[:5], start=1):
+        tariff_name = get_tariff_name_by_price(account.next_payment_tariff) if account.next_payment_tariff else None
+        amount = account.next_payment_amount if account.next_payment_amount is not None else "—"
+        lines.append(
+            f"{idx}. {account.name}\n"
+            f"   • Статус: {status}\n"
+            f"   • Тариф: {tariff_name or 'Не указан'}\n"
+            f"   • Оплатить до: {due_at.strftime('%d.%m.%Y')}\n"
+            f"   • Сумма: {amount} ₽"
+        )
+    return "\n".join(lines)
+
+
+def render_client_farms_list(profile: TelegramSubscriber, limit: int = 12) -> str:
+    """Возвращает компактный список ферм клиента."""
+
+    accounts = _collect_user_accounts(profile.user_id)
+    if not accounts:
+        return "Фермы пока не найдены."
+
+    lines = ["📄 Мои фермы:"]
+    for idx, (account, _farm_data) in enumerate(accounts[:limit], start=1):
+        status = _account_status_label(account)
+        tariff_name = get_tariff_name_by_price(account.next_payment_tariff) if account.next_payment_tariff else None
+        due_at = to_utc_naive(account.next_payment_at)
+        due_text = due_at.strftime("%d.%m.%Y") if due_at else "—"
+        amount = account.next_payment_amount if account.next_payment_amount is not None else "—"
+        lines.append(
+            f"{idx}. {account.name}\n"
+            f"   • Статус: {status}\n"
+            f"   • Тариф: {tariff_name or 'Не указан'}\n"
+            f"   • Оплатить до: {due_text}\n"
+            f"   • Сумма: {amount} ₽"
+        )
+
+    remaining = len(accounts) - min(len(accounts), limit)
+    if remaining > 0:
+        lines.append(f"… и ещё {remaining}")
+
+    return "\n".join(lines)
 
 
 def build_partial_selection_keyboard(batch: RenewalBatchRequest, page: int, page_size: int = 6) -> InlineKeyboardMarkup:
@@ -287,7 +406,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         token = deep_arg[1].replace("bind_", "", 1)
         with app.app_context():
             try:
-                bind_telegram_chat(
+                profile = bind_telegram_chat(
                     raw_token=token,
                     chat_id=str(message.chat.id),
                     username=message.from_user.username if message.from_user else None,
@@ -298,14 +417,124 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await message.answer(f"Не удалось привязать Telegram: {exc}")
                 return
 
+            settings = get_bot_settings()
+            dashboard_text = render_client_dashboard(profile)
+            keyboard = build_dashboard_keyboard(settings.admin_contact)
         await message.answer("✅ Telegram успешно привязан. Теперь вы будете получать напоминания об аренде.")
+        await message.answer(dashboard_text, reply_markup=keyboard)
 
     @router.message(CommandStart())
     async def on_start(message: Message) -> None:
-        await message.answer(
-            "Привет! Я бот продления аренды Viking Rise.\n"
-            "Для безопасной привязки используйте персональную ссылку из UsersDash."
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(message.chat.id)).first()
+            if not profile:
+                await message.answer(
+                    "Привет! Я бот продления аренды Viking Rise.\n"
+                    "Для безопасной привязки используйте персональную ссылку из UsersDash."
+                )
+                return
+
+            profile.last_interaction_at = utcnow()
+            db.session.commit()
+            settings = get_bot_settings()
+            await message.answer(
+                render_client_dashboard(profile),
+                reply_markup=build_dashboard_keyboard(settings.admin_contact),
+            )
+
+    @router.callback_query(F.data == "menu:farms")
+    async def on_menu_farms(callback: CallbackQuery) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            profile.last_interaction_at = utcnow()
+            db.session.commit()
+            await callback.message.answer(render_client_farms_list(profile))
+        await callback.answer()
+
+    @router.callback_query(F.data == "menu:payment")
+    async def on_menu_payment(callback: CallbackQuery) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+
+            accounts = Account.query.filter_by(owner_id=profile.user_id).filter(Account.next_payment_at.isnot(None)).all()
+            if not accounts:
+                await callback.message.answer("У вас пока нет ферм с указанной датой оплаты.")
+                await callback.answer()
+                return
+
+            owner = User.query.get(profile.user_id)
+            today = utcnow().date()
+            candidates: list[NotificationCandidate] = []
+            for account in accounts:
+                due_at = to_utc_naive(account.next_payment_at)
+                if due_at is None:
+                    continue
+                candidates.append(
+                    NotificationCandidate(
+                        account=account,
+                        user=owner,
+                        subscriber=profile,
+                        telegram_tag=None,
+                        days_left=(due_at.date() - today).days,
+                        due_on=due_at.date(),
+                    )
+                )
+            if not candidates:
+                await callback.message.answer("У вас пока нет ферм с корректной датой оплаты.")
+                await callback.answer()
+                return
+
+            candidates.sort(key=lambda item: to_utc_naive(item.account.next_payment_at) or datetime.max)
+            settings = get_bot_settings()
+            batch = create_notification_batch(user_id=profile.user_id, subscriber_id=profile.id, candidates=candidates)
+            await callback.message.answer(
+                render_batch_notification(batch),
+                reply_markup=build_user_keyboard(batch.id, settings.admin_contact),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data == "menu:change")
+    async def on_menu_change(callback: CallbackQuery, state: FSMContext) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+
+            accounts = Account.query.filter_by(owner_id=profile.user_id).all()
+            owner = User.query.get(profile.user_id)
+            candidates = [
+                NotificationCandidate(
+                    account=account,
+                    user=owner,
+                    subscriber=profile,
+                    telegram_tag=None,
+                    days_left=0,
+                    due_on=(to_utc_naive(account.next_payment_at) or utcnow()).date(),
+                )
+                for account in accounts
+            ]
+            if not candidates:
+                await callback.message.answer("Фермы пока не найдены. Опишите изменения администратору вручную.")
+                await callback.answer()
+                return
+
+            batch = create_notification_batch(user_id=profile.user_id, subscriber_id=profile.id, candidates=candidates)
+            ensure_batch_editable(batch)
+            mark_batch_mode(batch, "manual_change")
+
+        await state.set_data({"batch_id": batch.id, "mode": "manual_change"})
+        await state.set_state(BatchPaymentFSM.waiting_manual_comment)
+        await callback.message.answer(
+            "Опишите изменения: какие фермы продлеваете, какие отключить или что нужно скорректировать."
         )
+        await callback.answer()
 
     @router.message(Command("status"))
     async def on_status(message: Message) -> None:
@@ -336,17 +565,19 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer()
                 return
 
-            settings = get_bot_settings()
             account = Account.query.get(account_id)
             if not account or account.owner_id != profile.user_id:
                 await callback.message.answer("Ферма не найдена или недоступна для вашего аккаунта.")
                 await callback.answer()
                 return
 
+            amount = account.next_payment_amount if account.next_payment_amount is not None else "не указана"
+            settings = get_bot_settings()
+
             await callback.message.answer(
                 "💳 Продление аренды\n"
                 f"Ферма: {account.name}\n"
-                f"Стоимость: {account.next_payment_amount or settings.renewal_price_rub} ₽\n"
+                f"Стоимость: {amount} {'₽' if isinstance(amount, int) else ''}\n"
                 f"Срок продления: {settings.renew_duration_days} дней\n\n"
                 f"{settings.payment_instructions or 'Реквизиты уточняйте у администратора.'}"
             )

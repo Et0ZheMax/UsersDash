@@ -32,7 +32,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import joinedload
 
 from UsersDash.models import (
@@ -85,7 +85,13 @@ from UsersDash.services.info_message import (
     set_global_info_message_text,
 )
 from UsersDash.services.notifications import send_notification
-from UsersDash.services.rental_bot import admin_dashboard_snapshot, generate_link_token, get_bot_settings
+from UsersDash.services.rental_bot import (
+    admin_dashboard_snapshot,
+    generate_link_token,
+    get_bot_settings,
+    to_utc_naive,
+    utcnow,
+)
 
 
 admin_bp = Blueprint("admin", __name__)
@@ -3958,7 +3964,6 @@ def telegram_rental_settings_page():
         settings.bot_username = request.form.get('bot_username', '').strip() or None
         settings.default_timezone = request.form.get('default_timezone', 'Europe/Moscow').strip() or 'Europe/Moscow'
         settings.renew_duration_days = _safe_form_int(request.form.get('renew_duration_days'), default=30, minimum=1)
-        settings.renewal_price_rub = _safe_form_int(request.form.get('renewal_price_rub'), default=0, minimum=0)
         settings.payment_instructions = request.form.get('payment_instructions', '').strip() or None
         settings.admin_contact = request.form.get('admin_contact', '').strip() or None
         settings.template_reminder_3d = request.form.get('template_reminder_3d', '').strip() or None
@@ -3975,14 +3980,67 @@ def telegram_rental_settings_page():
         return redirect(url_for('admin.telegram_rental_settings_page'))
 
     stats = admin_dashboard_snapshot()
+    clients = User.query.filter_by(role='client').options(joinedload(User.telegram_profile)).order_by(User.username.asc()).all()
+    client_ids = [client.id for client in clients]
+    latest_tokens_by_user: dict[int, TelegramLinkToken] = {}
+    if client_ids:
+        ordered_tokens = (
+            TelegramLinkToken.query.filter(TelegramLinkToken.user_id.in_(client_ids))
+            .order_by(TelegramLinkToken.user_id.asc(), TelegramLinkToken.created_at.desc())
+            .all()
+        )
+        for token in ordered_tokens:
+            latest_tokens_by_user.setdefault(token.user_id, token)
+
+    clients_telegram_status = []
+    now = utcnow()
+    for client in clients:
+        profile = client.telegram_profile
+        latest_token = latest_tokens_by_user.get(client.id)
+        token_expires_at = to_utc_naive(latest_token.expires_at) if latest_token else None
+        token_waiting = bool(
+            latest_token
+            and latest_token.consumed_at is None
+            and token_expires_at
+            and token_expires_at > now
+        )
+        if profile and profile.chat_id and profile.is_active:
+            status_text = 'Привязан'
+        elif token_waiting:
+            status_text = 'Токен создан, ожидает привязки'
+        else:
+            status_text = 'Не привязан'
+
+        clients_telegram_status.append({
+            'client': client,
+            'status_text': status_text,
+            'profile': profile,
+            'latest_token': latest_token,
+        })
+
     unlinked_clients = (
         User.query.filter_by(role='client')
         .outerjoin(TelegramSubscriber, TelegramSubscriber.user_id == User.id)
-        .filter(TelegramSubscriber.id.is_(None))
+        .filter(
+            or_(
+                TelegramSubscriber.id.is_(None),
+                TelegramSubscriber.chat_id.is_(None),
+                TelegramSubscriber.chat_id == '',
+                TelegramSubscriber.is_active.is_(False),
+            )
+        )
         .order_by(User.username.asc())
         .all()
     )
     latest_tokens = TelegramLinkToken.query.order_by(TelegramLinkToken.created_at.desc()).limit(20).all()
+    generated_raw_token = (request.args.get('generated_token') or '').strip()
+    generated_user_id = (request.args.get('generated_user_id') or '').strip()
+    generated_user = None
+    if generated_user_id.isdigit():
+        generated_user = User.query.filter_by(id=int(generated_user_id), role='client').first()
+    generated_deep_link = None
+    if settings.bot_username and generated_raw_token:
+        generated_deep_link = f"https://t.me/{settings.bot_username}?start=bind_{generated_raw_token}"
 
     return render_template(
         'admin/telegram_rental_settings.html',
@@ -3990,6 +4048,9 @@ def telegram_rental_settings_page():
         stats=stats,
         unlinked_clients=unlinked_clients,
         latest_tokens=latest_tokens,
+        clients_telegram_status=clients_telegram_status,
+        generated_deep_link=generated_deep_link,
+        generated_user=generated_user,
     )
 
 
@@ -4013,7 +4074,20 @@ def telegram_generate_link_token():
         flash('Сначала укажите bot_username в настройках, чтобы формировать deep-link.', 'warning')
         return redirect(url_for('admin.telegram_rental_settings_page'))
 
+    stale_tokens = TelegramLinkToken.query.filter_by(user_id=target_user.id, consumed_at=None).all()
+    now = utcnow()
+    for token in stale_tokens:
+        token_expires_at = to_utc_naive(token.expires_at)
+        if token_expires_at and token_expires_at > now:
+            token.consumed_at = now
+    db.session.commit()
+
     raw_token = generate_link_token(user_id=target_user.id, created_by_user_id=current_user.id)
-    deep_link = f"https://t.me/{settings.bot_username}?start=bind_{raw_token}"
-    flash(f'Deep-link для {target_user.username}: {deep_link}', 'info')
-    return redirect(url_for('admin.telegram_rental_settings_page'))
+    flash(f'Новая deep-link ссылка сгенерирована для {target_user.username}.', 'success')
+    return redirect(
+        url_for(
+            'admin.telegram_rental_settings_page',
+            generated_user_id=target_user.id,
+            generated_token=raw_token,
+        )
+    )
