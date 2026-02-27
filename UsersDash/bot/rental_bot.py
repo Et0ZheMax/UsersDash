@@ -58,11 +58,12 @@ logger = logging.getLogger(__name__)
 def build_runtime_config() -> RuntimeConfig:
     """Собирает настройки запуска из ENV."""
 
-    token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    token = (os.environ.get("RENTAL_TELEGRAM_BOT_TOKEN") or "").strip()
     if not token:
-        token = Config.TELEGRAM_BOT_TOKEN
-    if not token:
-        raise RuntimeError("Не задан TELEGRAM_BOT_TOKEN")
+        raise RuntimeError(
+            "Не задан RENTAL_TELEGRAM_BOT_TOKEN. "
+            "Для rental-бота используйте отдельный токен, без fallback на TELEGRAM_BOT_TOKEN."
+        )
 
     raw_admin_ids = os.environ.get("TELEGRAM_ADMIN_CHAT_IDS", "")
     admin_ids: set[int] = set()
