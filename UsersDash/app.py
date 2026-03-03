@@ -5,6 +5,7 @@
 import os
 import sys
 import ctypes
+from ctypes import wintypes
 import signal
 import subprocess
 import traceback
@@ -143,19 +144,31 @@ def _process_is_alive(pid: int) -> bool:
             get_exit_code_process = kernel32.GetExitCodeProcess
             close_handle = kernel32.CloseHandle
 
-            open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-            open_process.restype = ctypes.c_void_p
-            get_exit_code_process.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
-            get_exit_code_process.restype = ctypes.c_int
-            close_handle.argtypes = [ctypes.c_void_p]
-            close_handle.restype = ctypes.c_int
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            get_exit_code_process.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+            get_exit_code_process.restype = wintypes.BOOL
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
 
             handle = open_process(_WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not handle:
-                return False
+                try:
+                    result = subprocess.run(
+                        ["tasklist", "/FI", f"PID eq {pid}"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    output = f"{result.stdout}\n{result.stderr}".lower()
+                    # Если tasklist нашёл процесс, в выводе есть строка с самим PID.
+                    return f" {pid} " in output
+                except Exception:
+                    return False
 
             try:
-                exit_code = ctypes.c_uint32(0)
+                exit_code = wintypes.DWORD(0)
                 if not get_exit_code_process(handle, ctypes.byref(exit_code)):
                     return False
                 return exit_code.value == _WIN_STILL_ACTIVE
@@ -178,15 +191,15 @@ def _process_is_alive(pid: int) -> bool:
 
 
 def _terminate_process(pid: int, timeout_sec: float = 5.0) -> bool:
-    """Аккуратно завершает процесс и при необходимости добивает принудительно."""
+    """Завершает процесс: на Windows принудительно (WinAPI/taskkill), на POSIX SIGTERM→SIGKILL."""
 
     try:
         pid = int(pid)
     except Exception:
-        return False
+        return True
 
     if pid <= 0:
-        return False
+        return True
 
     if not _process_is_alive(pid):
         return True
@@ -287,7 +300,8 @@ def _cleanup_previous_rental_bot_session() -> None:
                 previous_pid = 0
 
         if previous_pid <= 0:
-            pass
+            # Нечего завершать: PID отсутствует, битый или заведомо невалидный.
+            previous_pid = 0
         elif previous_pid == current_pid:
             print("[rental-bot] PID в файле совпадает с текущим процессом. Пропускаем очистку.")
         else:
