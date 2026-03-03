@@ -168,7 +168,8 @@
    - `RENTAL_TELEGRAM_BOT_TOKEN` (отдельный токен только для rental-бота)
    - `TELEGRAM_ADMIN_CHAT_IDS=123456789,987654321`
    - `RENTAL_REMINDER_DAYS=3,1,0,-1`
-3. Запустите воркер бота: `python -m UsersDash.scripts.rental_telegram_bot`.
+3. Запустите UsersDash (`python -m UsersDash.app`) — rental-бот поднимется автоматически в фоновом потоке.
+4. При необходимости можно запустить воркер отдельно: `python -m UsersDash.scripts.rental_telegram_bot`.
 
 ### Почему ручное подтверждение оплаты — оптимально
 

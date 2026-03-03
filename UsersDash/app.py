@@ -34,6 +34,9 @@ from UsersDash.services.farmdata_status import collect_farmdata_status
 from UsersDash.services.health_check import run_health_check
 
 
+_RENTAL_BOT_THREAD: threading.Thread | None = None
+
+
 # -------------------------------------------------
 # Функции для запуска с правами администратора (Windows)
 # -------------------------------------------------
@@ -343,6 +346,43 @@ def _run_midnight_backup(app: Flask):
     return thread
 
 
+def _run_rental_bot_worker() -> threading.Thread | None:
+    """Запускает rental Telegram-бота в отдельном daemon-потоке."""
+
+    global _RENTAL_BOT_THREAD
+
+    if _RENTAL_BOT_THREAD and _RENTAL_BOT_THREAD.is_alive():
+        return _RENTAL_BOT_THREAD
+
+    rental_token = (os.environ.get("RENTAL_TELEGRAM_BOT_TOKEN") or "").strip()
+    if not rental_token:
+        print("[rental-bot] Автозапуск пропущен: отсутствует RENTAL_TELEGRAM_BOT_TOKEN.")
+        return None
+
+    def worker():
+        try:
+            from UsersDash.bot.rental_bot import main as rental_bot_main
+
+            rental_bot_main()
+        except Exception as exc:
+            print(f"[rental-bot] Критическая ошибка фонового запуска: {exc}")
+            traceback.print_exc()
+
+    thread = threading.Thread(target=worker, daemon=True, name="usersdash-rental-bot")
+    thread.start()
+    _RENTAL_BOT_THREAD = thread
+    print("[rental-bot] Автозапуск выполнен вместе с UsersDash.")
+    return thread
+
+
+def _is_reloader_parent_process(app: Flask) -> bool:
+    """Возвращает True для родительского процесса Werkzeug-reloader в debug-режиме."""
+
+    if not app.debug:
+        return False
+    return os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+
+
 # -------------------------------------------------
 # Фабрика приложения
 # -------------------------------------------------
@@ -427,8 +467,11 @@ def create_app() -> Flask:
     # Выполняем health-check после инициализации
     run_health_check(app)
 
-    # Фоновый бэкап БД каждый день в 00:00
-    _run_midnight_backup(app)
+    if not _is_reloader_parent_process(app):
+        # Фоновый бэкап БД каждый день в 00:00
+        _run_midnight_backup(app)
+        # Автозапуск Telegram-бота продления аренды вместе с приложением
+        _run_rental_bot_worker()
 
     return app
 
