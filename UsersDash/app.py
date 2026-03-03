@@ -473,20 +473,12 @@ def _run_rental_bot_worker() -> threading.Thread | None:
     return thread
 
 
-def _is_reloader_parent_process(app: Flask) -> bool:
-    """Возвращает True для родительского процесса Werkzeug-reloader в debug-режиме."""
-
-    if not app.debug:
-        return False
-    return os.environ.get("WERKZEUG_RUN_MAIN") != "true"
-
-
 # -------------------------------------------------
 # Фабрика приложения
 # -------------------------------------------------
 
 
-def create_app() -> Flask:
+def create_app(enable_background_workers: bool = True) -> Flask:
     """
     Фабрика Flask-приложения.
     """
@@ -565,7 +557,7 @@ def create_app() -> Flask:
     # Выполняем health-check после инициализации
     run_health_check(app)
 
-    if not _is_reloader_parent_process(app):
+    if enable_background_workers:
         # Фоновый бэкап БД каждый день в 00:00
         _run_midnight_backup(app)
         # Автозапуск Telegram-бота продления аренды вместе с приложением
@@ -585,7 +577,10 @@ if __name__ == "__main__":
     relaunch_as_admin_if_needed()
 
     # Создаём и запускаем Flask-приложение
-    app = create_app()
+    # В debug-режиме Werkzeug создаёт родительский и дочерний процессы.
+    # Фоновые потоки запускаем только в дочернем, чтобы не плодить дубли.
+    run_background_workers = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    app = create_app(enable_background_workers=run_background_workers)
     # Для разработки — debug=True. В проде лучше выключить.
     app.run(host="0.0.0.0", port=5555, debug=True)
 else:
