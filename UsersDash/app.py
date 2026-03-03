@@ -5,8 +5,8 @@
 import os
 import sys
 import ctypes
-import errno
 import signal
+import subprocess
 import traceback
 import threading
 import time
@@ -40,6 +40,12 @@ from UsersDash.services.health_check import run_health_check
 
 _RENTAL_BOT_THREAD: threading.Thread | None = None
 _RENTAL_BOT_PID_FILE = Path(tempfile.gettempdir()) / "usersdash_rental_bot.pid"
+
+# Константы WinAPI для управления процессами.
+_WIN_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WIN_PROCESS_TERMINATE = 0x0001
+_WIN_SYNCHRONIZE = 0x00100000
+_WIN_STILL_ACTIVE = 259
 
 
 # -------------------------------------------------
@@ -120,23 +126,53 @@ def load_user(user_id: str):
 def _process_is_alive(pid: int) -> bool:
     """Проверяет, существует ли процесс с заданным PID."""
 
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+
     if pid <= 0:
         return False
+
+    # На Windows os.kill(pid, 0) часто ведёт себя нестабильно (например, WinError 87),
+    # поэтому используем WinAPI: OpenProcess + GetExitCodeProcess + CloseHandle.
+    if os.name == "nt":
+        try:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel32.OpenProcess
+            get_exit_code_process = kernel32.GetExitCodeProcess
+            close_handle = kernel32.CloseHandle
+
+            open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            open_process.restype = ctypes.c_void_p
+            get_exit_code_process.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+            get_exit_code_process.restype = ctypes.c_int
+            close_handle.argtypes = [ctypes.c_void_p]
+            close_handle.restype = ctypes.c_int
+
+            handle = open_process(_WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return False
+
+            try:
+                exit_code = ctypes.c_uint32(0)
+                if not get_exit_code_process(handle, ctypes.byref(exit_code)):
+                    return False
+                return exit_code.value == _WIN_STILL_ACTIVE
+            finally:
+                close_handle(handle)
+        except Exception:
+            return False
+
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    except OSError as exc:
-        # На Windows для «мертвого» PID иногда прилетает WinError 87
-        # ("Параметр задан неверно") вместо ProcessLookupError.
-        if getattr(exc, "winerror", None) == 87:
-            return False
-        if exc.errno == errno.ESRCH:
-            return False
-        if exc.errno == errno.EPERM:
-            return True
+    except OSError:
+        return False
+    except Exception:
         return False
     return True
 
@@ -144,8 +180,66 @@ def _process_is_alive(pid: int) -> bool:
 def _terminate_process(pid: int, timeout_sec: float = 5.0) -> bool:
     """Аккуратно завершает процесс и при необходимости добивает принудительно."""
 
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+
+    if pid <= 0:
+        return False
+
     if not _process_is_alive(pid):
         return True
+
+    if os.name == "nt":
+        try:
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            open_process = kernel32.OpenProcess
+            terminate_process = kernel32.TerminateProcess
+            close_handle = kernel32.CloseHandle
+
+            open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+            open_process.restype = ctypes.c_void_p
+            terminate_process.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            terminate_process.restype = ctypes.c_int
+            close_handle.argtypes = [ctypes.c_void_p]
+            close_handle.restype = ctypes.c_int
+
+            handle = open_process(_WIN_PROCESS_TERMINATE | _WIN_SYNCHRONIZE, False, pid)
+            if handle:
+                try:
+                    if not terminate_process(handle, 1):
+                        print(f"[rental-bot] Не удалось завершить процесс {pid} через WinAPI.")
+                    else:
+                        deadline = time.time() + max(0.1, timeout_sec)
+                        while time.time() < deadline:
+                            if not _process_is_alive(pid):
+                                return True
+                            time.sleep(0.2)
+                finally:
+                    close_handle(handle)
+            else:
+                print(f"[rental-bot] OpenProcess не открыл PID {pid}, пробуем taskkill.")
+        except Exception as exc:
+            print(f"[rental-bot] Ошибка WinAPI при завершении PID {pid}: {exc}")
+
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if result.returncode not in (0,):
+                stderr = (result.stderr or "").strip()
+                stdout = (result.stdout or "").strip()
+                details = stderr or stdout or "без деталей"
+                print(f"[rental-bot] taskkill вернул код {result.returncode} для PID {pid}: {details}")
+        except Exception as exc:
+            print(f"[rental-bot] Не удалось запустить taskkill для PID {pid}: {exc}")
+
+        return not _process_is_alive(pid)
 
     try:
         os.kill(pid, signal.SIGTERM)
@@ -177,23 +271,50 @@ def _cleanup_previous_rental_bot_session() -> None:
 
     current_pid = os.getpid()
     if _RENTAL_BOT_PID_FILE.exists():
-        try:
-            previous_pid = int(_RENTAL_BOT_PID_FILE.read_text(encoding="utf-8").strip())
-        except Exception:
-            previous_pid = 0
+        previous_pid_raw = ""
+        previous_pid = 0
 
-        if previous_pid and previous_pid != current_pid and _process_is_alive(previous_pid):
-            print(
-                "[rental-bot] Обнаружена предыдущая сессия UsersDash "
-                f"(PID {previous_pid}). Завершаем её перед автозапуском бота."
-            )
-            if _terminate_process(previous_pid):
-                print(f"[rental-bot] Предыдущая сессия PID {previous_pid} завершена.")
-            else:
+        try:
+            previous_pid_raw = _RENTAL_BOT_PID_FILE.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            print(f"[rental-bot] Не удалось прочитать PID-файл {_RENTAL_BOT_PID_FILE}: {exc}")
+
+        if previous_pid_raw:
+            try:
+                previous_pid = int(previous_pid_raw)
+            except Exception:
+                print(f"[rental-bot] Некорректный PID в файле: {previous_pid_raw!r}. Пропускаем очистку.")
+                previous_pid = 0
+
+        if previous_pid <= 0:
+            pass
+        elif previous_pid == current_pid:
+            print("[rental-bot] PID в файле совпадает с текущим процессом. Пропускаем очистку.")
+        else:
+            try:
+                previous_alive = _process_is_alive(previous_pid)
+            except Exception as exc:
+                print(f"[rental-bot] Ошибка проверки предыдущего PID {previous_pid}: {exc}")
+                previous_alive = False
+
+            if previous_alive:
                 print(
-                    "[rental-bot] Не удалось завершить предыдущую сессию. "
-                    "Возможен конфликт polling у Telegram."
+                    "[rental-bot] Обнаружена предыдущая сессия UsersDash "
+                    f"(PID {previous_pid}). Завершаем её перед автозапуском бота."
                 )
+                try:
+                    terminated = _terminate_process(previous_pid)
+                except Exception as exc:
+                    print(f"[rental-bot] Ошибка завершения предыдущего PID {previous_pid}: {exc}")
+                    terminated = False
+
+                if terminated:
+                    print(f"[rental-bot] Предыдущая сессия PID {previous_pid} завершена.")
+                else:
+                    print(
+                        "[rental-bot] Не удалось завершить предыдущую сессию. "
+                        "Возможен конфликт polling у Telegram."
+                    )
 
     try:
         _RENTAL_BOT_PID_FILE.write_text(str(current_pid), encoding="utf-8")
