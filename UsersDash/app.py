@@ -5,6 +5,7 @@
 import os
 import sys
 import ctypes
+import errno
 import signal
 import traceback
 import threading
@@ -127,6 +128,16 @@ def _process_is_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+    except OSError as exc:
+        # На Windows для «мертвого» PID иногда прилетает WinError 87
+        # ("Параметр задан неверно") вместо ProcessLookupError.
+        if getattr(exc, "winerror", None) == 87:
+            return False
+        if exc.errno == errno.ESRCH:
+            return False
+        if exc.errno == errno.EPERM:
+            return True
+        return False
     return True
 
 
