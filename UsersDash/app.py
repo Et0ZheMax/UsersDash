@@ -4,6 +4,8 @@
 
 import os
 import sys
+import re
+import hashlib
 import ctypes
 from ctypes import wintypes
 import signal
@@ -25,7 +27,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from flask import Flask, g, redirect, send_from_directory, url_for
 from flask_login import LoginManager, current_user
-from flask_sqlalchemy import SQLAlchemy  # только для типов, основная инстанция в models.py
 from sqlalchemy import inspect, text
 
 from UsersDash.config import Config
@@ -40,7 +41,129 @@ from UsersDash.services.health_check import run_health_check
 
 
 _RENTAL_BOT_THREAD: threading.Thread | None = None
-_RENTAL_BOT_PID_FILE = Path(tempfile.gettempdir()) / "usersdash_rental_bot.pid"
+_RENTAL_BOT_LOCK_HANDLE = None
+
+
+def _build_rental_bot_pid_file() -> Path:
+    """Формирует путь к PID-файлу бота с учётом пользователя ОС."""
+
+    username = (
+        (os.environ.get("USERNAME") or "").strip()
+        or (os.environ.get("USER") or "").strip()
+        or (os.environ.get("LOGNAME") or "").strip()
+    )
+
+    if not username:
+        try:
+            username = (os.getlogin() or "").strip()
+        except Exception:
+            username = ""
+
+    safe_username = re.sub(r"[^A-Za-z0-9_.-]+", "_", username).strip("_.-")
+    if safe_username:
+        filename = f"usersdash_rental_bot_{safe_username}.pid"
+    else:
+        filename = "usersdash_rental_bot.pid"
+
+    return Path(tempfile.gettempdir()) / filename
+
+
+_RENTAL_BOT_PID_FILE = _build_rental_bot_pid_file()
+
+
+def _build_rental_bot_lock_file(rental_token: str) -> Path:
+    """Формирует путь к lock-файлу бота по хэшу токена без утечки секрета."""
+
+    token_hash = hashlib.sha256(rental_token.encode("utf-8")).hexdigest()[:12]
+    filename = f"usersdash_rental_bot_{token_hash}.lock"
+    return Path(tempfile.gettempdir()) / filename
+
+
+def _acquire_rental_bot_lock(rental_token: str) -> bool:
+    """Пытается захватить межпроцессный lock для единственного polling-инстанса."""
+
+    global _RENTAL_BOT_LOCK_HANDLE
+
+    if _RENTAL_BOT_LOCK_HANDLE is not None:
+        return True
+
+    lock_file = _build_rental_bot_lock_file(rental_token)
+
+    lock_handle = None
+    try:
+        lock_handle = open(lock_file, "a+b")
+        lock_handle.seek(0)
+
+        if os.name == "nt":
+            import msvcrt
+
+            lock_handle.seek(0, os.SEEK_END)
+            if lock_handle.tell() == 0:
+                lock_handle.write(b"\0")
+                lock_handle.flush()
+            lock_handle.seek(0)
+
+            try:
+                msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                winerror = getattr(exc, "winerror", None)
+                if winerror in (32, 33):
+                    return False
+                print(f"[rental-bot] Ошибка захвата lock-файла {lock_file}: {exc}")
+                return False
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+            except OSError as exc:
+                print(f"[rental-bot] Ошибка захвата lock-файла {lock_file}: {exc}")
+                return False
+
+        _RENTAL_BOT_LOCK_HANDLE = lock_handle
+        return True
+    except Exception as exc:
+        print(f"[rental-bot] Ошибка захвата lock-файла {lock_file}: {exc}")
+        return False
+    finally:
+        if _RENTAL_BOT_LOCK_HANDLE is None and lock_handle is not None:
+            try:
+                lock_handle.close()
+            except Exception:
+                pass
+
+
+def _release_rental_bot_lock() -> None:
+    """Освобождает межпроцессный lock rental-бота, если он захвачен текущим процессом."""
+
+    global _RENTAL_BOT_LOCK_HANDLE
+
+    lock_handle = _RENTAL_BOT_LOCK_HANDLE
+    _RENTAL_BOT_LOCK_HANDLE = None
+    if lock_handle is None:
+        return
+
+    try:
+        lock_handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        pass
+    finally:
+        try:
+            lock_handle.close()
+        except Exception:
+            pass
+
+
 
 # Константы WinAPI для управления процессами.
 _WIN_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -224,17 +347,17 @@ def _terminate_process(pid: int, timeout_sec: float = 5.0) -> bool:
             terminate_process = kernel32.TerminateProcess
             close_handle = kernel32.CloseHandle
 
-            open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-            open_process.restype = ctypes.c_void_p
-            terminate_process.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-            terminate_process.restype = ctypes.c_int
-            close_handle.argtypes = [ctypes.c_void_p]
-            close_handle.restype = ctypes.c_int
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            terminate_process.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            terminate_process.restype = wintypes.BOOL
+            close_handle.argtypes = [wintypes.HANDLE]
+            close_handle.restype = wintypes.BOOL
 
             handle = open_process(_WIN_PROCESS_TERMINATE | _WIN_SYNCHRONIZE, False, pid)
             if handle:
                 try:
-                    if not terminate_process(handle, 1):
+                    if not terminate_process(handle, wintypes.DWORD(1)):
                         print(f"[rental-bot] Не удалось завершить процесс {pid} через WinAPI.")
                     else:
                         deadline = time.time() + max(0.1, timeout_sec)
@@ -314,7 +437,7 @@ def _cleanup_previous_rental_bot_session() -> None:
 
         if previous_pid <= 0:
             # Нечего завершать: PID отсутствует, битый или заведомо невалидный.
-            previous_pid = 0
+            pass
         elif previous_pid == current_pid:
             print("[rental-bot] PID в файле совпадает с текущим процессом. Пропускаем очистку.")
         else:
@@ -366,6 +489,7 @@ def _clear_rental_bot_pid_file() -> None:
 
 
 atexit.register(_clear_rental_bot_pid_file)
+atexit.register(_release_rental_bot_lock)
 
 
 # -------------------------------------------------
@@ -614,6 +738,10 @@ def _run_rental_bot_worker() -> threading.Thread | None:
         print("[rental-bot] Автозапуск пропущен: отсутствует RENTAL_TELEGRAM_BOT_TOKEN.")
         return None
 
+    if not _acquire_rental_bot_lock(rental_token):
+        print("[rental-bot] Автозапуск пропущен: уже есть активный инстанс на этом хосте (lock занят).")
+        return None
+
     _cleanup_previous_rental_bot_session()
 
     def worker():
@@ -624,9 +752,16 @@ def _run_rental_bot_worker() -> threading.Thread | None:
         except Exception as exc:
             print(f"[rental-bot] Критическая ошибка фонового запуска: {exc}")
             traceback.print_exc()
+        finally:
+            _release_rental_bot_lock()
 
     thread = threading.Thread(target=worker, daemon=True, name="usersdash-rental-bot")
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:
+        _release_rental_bot_lock()
+        print(f"[rental-bot] Не удалось запустить поток бота: {exc}")
+        return None
     _RENTAL_BOT_THREAD = thread
     print("[rental-bot] Автозапуск выполнен вместе с UsersDash.")
     return thread
@@ -744,4 +879,4 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5555, debug=True)
 else:
     # Экземпляр для WSGI/CLI-запуска (gunicorn, flask run --app UsersDash.app и т.п.)
-    app = create_app()
+    app = create_app(enable_background_workers=False)
