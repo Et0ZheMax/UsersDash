@@ -154,16 +154,29 @@ def _process_is_alive(pid: int) -> bool:
             handle = open_process(_WIN_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
             if not handle:
                 try:
+                    import csv
+                    from io import StringIO
+
                     result = subprocess.run(
-                        ["tasklist", "/FI", f"PID eq {pid}"],
+                        ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                         capture_output=True,
                         text=True,
                         timeout=10,
                         check=False,
                     )
-                    output = f"{result.stdout}\n{result.stderr}".lower()
-                    # Если tasklist нашёл процесс, в выводе есть строка с самим PID.
-                    return f" {pid} " in output
+                    stdout = (result.stdout or "").strip()
+                    if not stdout or "no tasks are running" in stdout.lower():
+                        return False
+
+                    for row in csv.reader(StringIO(stdout)):
+                        if len(row) < 2:
+                            continue
+                        try:
+                            if int(row[1].strip()) == pid:
+                                return True
+                        except Exception:
+                            continue
+                    return False
                 except Exception:
                     return False
 
