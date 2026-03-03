@@ -5,9 +5,12 @@
 import os
 import sys
 import ctypes
+import signal
 import traceback
 import threading
 import time
+import atexit
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -35,6 +38,7 @@ from UsersDash.services.health_check import run_health_check
 
 
 _RENTAL_BOT_THREAD: threading.Thread | None = None
+_RENTAL_BOT_PID_FILE = Path(tempfile.gettempdir()) / "usersdash_rental_bot.pid"
 
 
 # -------------------------------------------------
@@ -106,11 +110,103 @@ def load_user(user_id: str):
     if not user_id:
         return None
     try:
-        # SQLAlchemy 2.x по-прежнему поддерживает User.query.get, но можно и через сессию
-        return User.query.get(int(user_id))
+        return db.session.get(User, int(user_id))
     except Exception as exc:
         print(f"[login_manager.user_loader] ERROR: {exc}")
         return None
+
+
+def _process_is_alive(pid: int) -> bool:
+    """Проверяет, существует ли процесс с заданным PID."""
+
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_process(pid: int, timeout_sec: float = 5.0) -> bool:
+    """Аккуратно завершает процесс и при необходимости добивает принудительно."""
+
+    if not _process_is_alive(pid):
+        return True
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except Exception as exc:
+        print(f"[rental-bot] Не удалось отправить SIGTERM процессу {pid}: {exc}")
+        return False
+
+    deadline = time.time() + max(0.1, timeout_sec)
+    while time.time() < deadline:
+        if not _process_is_alive(pid):
+            return True
+        time.sleep(0.2)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    except Exception as exc:
+        print(f"[rental-bot] Не удалось принудительно завершить процесс {pid}: {exc}")
+        return False
+
+    return not _process_is_alive(pid)
+
+
+def _cleanup_previous_rental_bot_session() -> None:
+    """Закрывает предыдущую сессию rental-бота по PID-файлу и фиксирует текущий PID."""
+
+    current_pid = os.getpid()
+    if _RENTAL_BOT_PID_FILE.exists():
+        try:
+            previous_pid = int(_RENTAL_BOT_PID_FILE.read_text(encoding="utf-8").strip())
+        except Exception:
+            previous_pid = 0
+
+        if previous_pid and previous_pid != current_pid and _process_is_alive(previous_pid):
+            print(
+                "[rental-bot] Обнаружена предыдущая сессия UsersDash "
+                f"(PID {previous_pid}). Завершаем её перед автозапуском бота."
+            )
+            if _terminate_process(previous_pid):
+                print(f"[rental-bot] Предыдущая сессия PID {previous_pid} завершена.")
+            else:
+                print(
+                    "[rental-bot] Не удалось завершить предыдущую сессию. "
+                    "Возможен конфликт polling у Telegram."
+                )
+
+    try:
+        _RENTAL_BOT_PID_FILE.write_text(str(current_pid), encoding="utf-8")
+    except Exception as exc:
+        print(f"[rental-bot] Не удалось обновить PID-файл {_RENTAL_BOT_PID_FILE}: {exc}")
+
+
+def _clear_rental_bot_pid_file() -> None:
+    """Удаляет PID-файл, если он принадлежит текущему процессу."""
+
+    if not _RENTAL_BOT_PID_FILE.exists():
+        return
+    try:
+        pid = int(_RENTAL_BOT_PID_FILE.read_text(encoding="utf-8").strip())
+    except Exception:
+        pid = 0
+    if pid == os.getpid():
+        try:
+            _RENTAL_BOT_PID_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+atexit.register(_clear_rental_bot_pid_file)
 
 
 # -------------------------------------------------
@@ -358,6 +454,8 @@ def _run_rental_bot_worker() -> threading.Thread | None:
     if not rental_token:
         print("[rental-bot] Автозапуск пропущен: отсутствует RENTAL_TELEGRAM_BOT_TOKEN.")
         return None
+
+    _cleanup_previous_rental_bot_session()
 
     def worker():
         try:
