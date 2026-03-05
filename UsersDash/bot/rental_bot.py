@@ -6,16 +6,21 @@ import asyncio
 import logging
 import os
 from collections import defaultdict
+import json
+import time
+from pathlib import Path
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.filters import Command, CommandStart
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from flask import Flask
+from sqlalchemy import inspect, text
 
 from UsersDash.config import Config
 from UsersDash.models import (
@@ -23,7 +28,10 @@ from UsersDash.models import (
     FarmData,
     RenewalBatchItem,
     RenewalBatchRequest,
+    RenewalAdminAction,
     RenewalRequest,
+    RenewalRequestMessage,
+    RentalNotificationLog,
     TelegramSubscriber,
     User,
     db,
@@ -47,6 +55,7 @@ from UsersDash.services.rental_bot import (
     mark_batch_mode,
     reject_batch_request,
     reject_renewal_request,
+    notification_stage,
     set_batch_selected_accounts,
     submit_batch_request,
     to_utc_naive,
@@ -66,12 +75,31 @@ class PaymentFSM(StatesGroup):
 
 
 class BatchPaymentFSM(StatesGroup):
-    """FSM для batch-сценариев оплаты."""
+    """FSM для сценариев оплаты по нескольким фермам."""
 
     waiting_amount = State()
     waiting_method = State()
     waiting_comment = State()
     waiting_manual_comment = State()
+
+
+
+class AdminClarifyFSM(StatesGroup):
+    """FSM для вопроса администратора по заявке."""
+
+    waiting_question = State()
+
+
+class ClientClarifyFSM(StatesGroup):
+    """FSM для ответа клиента на уточнение."""
+
+    waiting_answer = State()
+
+
+class AdminSettingsFSM(StatesGroup):
+    """FSM редактирования настроек бота администратором."""
+
+    waiting_value = State()
 
 
 @dataclass(slots=True)
@@ -113,7 +141,7 @@ def build_runtime_config() -> RuntimeConfig:
 
 
 def build_user_keyboard(batch_id: int, admin_contact: str | None) -> InlineKeyboardMarkup:
-    """Кнопки для batch-сценариев клиента."""
+    """Кнопки для сценариев оплаты по нескольким фермам клиента."""
 
     rows = [
         [InlineKeyboardButton(text="✅ Я оплатил всё", callback_data=f"batch_full:{batch_id}")],
@@ -130,8 +158,12 @@ def build_dashboard_keyboard(admin_contact: str | None) -> InlineKeyboardMarkup:
 
     rows = [
         [InlineKeyboardButton(text="💳 Оплата", callback_data="menu:payment")],
+        [InlineKeyboardButton(text="🔁 Реквизиты и как оплатить", callback_data="menu:payment_info")],
+        [InlineKeyboardButton(text="🧾 Мои заявки", callback_data="menu:my_requests")],
+        [InlineKeyboardButton(text="⏸ Пауза напоминаний", callback_data="menu:pause")],
         [InlineKeyboardButton(text="✍️ Есть изменения", callback_data="menu:change")],
         [InlineKeyboardButton(text="📄 Мои фермы", callback_data="menu:farms")],
+        [InlineKeyboardButton(text="🆘 Поддержка", callback_data="menu:support")],
     ]
     if admin_contact:
         rows.append([InlineKeyboardButton(text="Связаться с администратором", url=admin_contact)])
@@ -244,7 +276,7 @@ def render_client_farms_list(profile: TelegramSubscriber, limit: int = 12) -> st
 
 
 def build_partial_selection_keyboard(batch: RenewalBatchRequest, page: int, page_size: int = 6) -> InlineKeyboardMarkup:
-    """Рисует страницу multi-select по фермам batch-заявки."""
+    """Рисует страницу multi-select по фермам заявки по нескольким фермам."""
 
     items = list(batch.items.order_by("id").all())
     total_pages = max(1, (len(items) + page_size - 1) // page_size)
@@ -363,7 +395,7 @@ def build_admin_keyboard(request_id: int) -> InlineKeyboardMarkup:
 
 
 def build_admin_batch_keyboard(batch_id: int, mode: str | None) -> InlineKeyboardMarkup:
-    """Кнопки подтверждения batch-заявки для админа."""
+    """Кнопки подтверждения заявки по нескольким фермам для админа."""
 
     if mode == "full":
         confirm_text = "✅ Подтвердить всё"
@@ -387,6 +419,236 @@ def create_flask_context() -> Flask:
     app.config.from_object(Config)
     db.init_app(app)
     return app
+
+
+
+INLINE_RATE_LIMIT_SECONDS = 1.2
+_inline_hits: dict[tuple[int, str], float] = {}
+
+
+def _is_admin(chat_id: int, cfg: RuntimeConfig) -> bool:
+    return chat_id in cfg.admin_chat_ids
+
+
+def _safe_callback_int(callback_data: str, index: int, sep: str = ":") -> int | None:
+    parts = callback_data.split(sep)
+    if len(parts) <= index:
+        return None
+    try:
+        return int(parts[index])
+    except (TypeError, ValueError):
+        return None
+
+
+def _admin_actor_id() -> int | None:
+    admin_user = User.query.filter_by(role="admin", is_active=True).order_by(User.id.asc()).first()
+    return admin_user.id if admin_user else None
+
+
+def _resolve_audit_request_id(target_user_id: int | None = None) -> int | None:
+    query = RenewalRequest.query
+    if target_user_id is not None:
+        target = query.filter_by(user_id=target_user_id).order_by(RenewalRequest.created_at.desc()).first()
+        if target:
+            return target.id
+    fallback = query.order_by(RenewalRequest.created_at.desc()).first()
+    return fallback.id if fallback else None
+
+
+def _append_admin_audit(action_type: str, *, actor_user_id: int | None, request_id: int | None = None, details: dict | None = None) -> None:
+    if not actor_user_id:
+        logger.warning("Не удалось записать audit %s: actor_user_id отсутствует", action_type)
+        return
+    if not request_id:
+        logger.warning("Не удалось записать audit %s: renewal_request_id отсутствует", action_type)
+        return
+    db.session.add(
+        RenewalAdminAction(
+            renewal_request_id=request_id,
+            actor_user_id=actor_user_id,
+            action_type=action_type,
+            details_json=json.dumps(details or {}, ensure_ascii=False),
+        )
+    )
+
+
+def _status_after_clarify(row: RenewalRequest) -> str:
+    prev = (row.status_before_needs_info or "").strip()
+    if prev and prev != "needs_info":
+        return prev
+    if row.request_type == "change":
+        return "payment_data_collecting"
+    return "payment_pending_confirmation"
+
+
+def _is_duplicate_notification(candidate: NotificationCandidate) -> bool:
+    stage = notification_stage(candidate.days_left)
+    return (
+        RentalNotificationLog.query.filter_by(
+            account_id=candidate.account.id,
+            user_id=candidate.user.id,
+            due_on=candidate.due_on,
+            stage=stage,
+        )
+        .filter(RentalNotificationLog.status.in_(["sent", "delivered"]))
+        .first()
+        is not None
+    )
+
+
+def _limit_inline(chat_id: int, action: str) -> bool:
+    now_ts = time.monotonic()
+    key = (chat_id, action)
+    prev = _inline_hits.get(key)
+    if prev and now_ts - prev < INLINE_RATE_LIMIT_SECONDS:
+        return True
+    _inline_hits[key] = now_ts
+    return False
+
+
+def _request_type_label(row: RenewalRequest) -> str:
+    mapping = {
+        "payment": "оплата",
+        "change": "изменение",
+    }
+    request_type = (row.request_type or "").strip().lower()
+    return mapping.get(request_type, "другое")
+
+
+def _status_label(status: str) -> str:
+    mapping = {
+        "payment_pending_confirmation": "на проверке",
+        "payment_data_collecting": "на проверке",
+        "payment_confirmed": "подтверждено",
+        "rejected": "отклонено",
+        "needs_info": "нужно уточнение",
+    }
+    return mapping.get(status, status)
+
+
+def parse_reminder_days(raw: str) -> list[int]:
+    days = []
+    for item in raw.split(','):
+        part = item.strip()
+        if not part:
+            continue
+        days.append(int(part))
+    if not days:
+        raise ValueError("Список дней пуст")
+    return sorted(set(days), reverse=True)
+
+
+def _settings_payment_details(settings) -> str:
+    return (settings.payment_details_text or "").strip() or "Реквизиты пока не заданы."
+
+
+def _settings_payment_instruction(settings) -> str:
+    return (settings.payment_instruction_text or settings.payment_instructions or "").strip() or "Инструкция пока не задана."
+
+
+def _pause_text(profile: TelegramSubscriber) -> str:
+    pause_until = to_utc_naive(profile.pause_until)
+    if pause_until and pause_until > utcnow():
+        return f"пауза до {pause_until:%d.%m.%Y %H:%M}"
+    if not profile.reminders_enabled:
+        return "выключены"
+    return "активны"
+
+
+def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
+    print("===== RENTAL BOT HEALTH-CHECK =====")
+    critical_ok = True
+
+    if not cfg.token:
+        print("[CRITICAL] Не задан RENTAL_TELEGRAM_BOT_TOKEN")
+        critical_ok = False
+    else:
+        print("[OK] Токен бота задан")
+
+    if not cfg.admin_chat_ids:
+        print("[WARN] TELEGRAM_ADMIN_CHAT_IDS пуст")
+    else:
+        print(f"[OK] ADMIN_IDS: {len(cfg.admin_chat_ids)}")
+
+    with app.app_context():
+        try:
+            db.session.execute(text("SELECT 1"))
+            print("[OK] Подключение к БД")
+        except Exception as exc:  # pragma: no cover
+            print(f"[CRITICAL] Ошибка подключения к БД: {exc}")
+            critical_ok = False
+            print("===================================")
+            return
+
+        inspector = inspect(db.engine)
+        critical_tables = [
+            "telegram_subscribers",
+            "telegram_bot_settings",
+            "renewal_requests",
+            "rental_notification_logs",
+        ]
+        for table_name in critical_tables:
+            if inspector.has_table(table_name):
+                print(f"[OK] Таблица {table_name} есть")
+            else:
+                print(f"[CRITICAL] Нет таблицы {table_name}")
+                critical_ok = False
+
+        optional_warnings: list[str] = []
+        if not inspector.has_table("renewal_request_messages"):
+            optional_warnings.append("Нет таблицы renewal_request_messages")
+
+        if inspector.has_table("telegram_subscribers"):
+            subscriber_columns = {item['name'] for item in inspector.get_columns("telegram_subscribers")}
+            for col in ("reminders_enabled", "pause_until"):
+                if col not in subscriber_columns:
+                    optional_warnings.append(f"Нет колонки telegram_subscribers.{col}")
+
+        if inspector.has_table("telegram_bot_settings"):
+            settings_columns = {item['name'] for item in inspector.get_columns("telegram_bot_settings")}
+            for col in ("payment_details_text", "payment_instruction_text", "support_contact", "reminder_days", "reminders_enabled"):
+                if col not in settings_columns:
+                    optional_warnings.append(f"Нет колонки telegram_bot_settings.{col}")
+
+        if inspector.has_table("renewal_requests"):
+            request_columns = {item['name'] for item in inspector.get_columns("renewal_requests")}
+            for col in ("request_type", "status_before_needs_info"):
+                if col not in request_columns:
+                    optional_warnings.append(f"Нет колонки renewal_requests.{col}")
+
+        for warning in optional_warnings:
+            print(f"[WARN] {warning}. Подсказка: запустите migrate_add_rental_bot_admin_features.py")
+
+    logs_dir = Path("logs")
+    try:
+        logs_dir.mkdir(exist_ok=True)
+        check_file = logs_dir / "rental_bot_health.log"
+        check_file.write_text(f"health-check {utcnow().isoformat()}\n", encoding="utf-8")
+        print(f"[OK] Проверка записи логов: {check_file}")
+    except Exception as exc:  # pragma: no cover
+        print(f"[WARN] Нет доступа на запись логов: {exc}")
+
+    print("[OK] CRITICAL проверки пройдены" if critical_ok else "[WARN] Есть ошибки в CRITICAL проверках")
+    print("===================================")
+
+
+def _admin_request_keyboard(request_id: int, include_open: bool = True) -> InlineKeyboardMarkup:
+    rows = [[
+        InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin_confirm:{request_id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_reject:{request_id}"),
+    ], [InlineKeyboardButton(text="❓ Уточнить", callback_data=f"admin_clarify:{request_id}")]]
+    if include_open:
+        rows.append([InlineKeyboardButton(text="🔎 Открыть", callback_data=f"admin_open:{request_id}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _pause_keyboard(is_active_pause: bool) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"{days} дн.", callback_data=f"pause_set:{days}") for days in (1, 3, 7)],
+            [InlineKeyboardButton(text=f"{days} дн.", callback_data=f"pause_set:{days}") for days in (14, 30)]]
+    if is_active_pause:
+        rows.append([InlineKeyboardButton(text="▶️ Снять паузу", callback_data="pause_clear")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 
 def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
@@ -536,6 +798,159 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         )
         await callback.answer()
 
+    @router.callback_query(F.data == "menu:payment_info")
+    async def on_menu_payment_info(callback: CallbackQuery) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            settings = get_bot_settings()
+            text = (
+                "🔁 Реквизиты и как оплатить\n\n"
+                f"{_settings_payment_details(settings)}\n\n"
+                f"{_settings_payment_instruction(settings)}\n\n"
+                "Если вы оплатили — нажмите «Я оплатил(а)» и прикрепите чек/скрин."
+            )
+            await callback.message.answer(text)
+        await callback.answer()
+
+    @router.callback_query(F.data == "menu:my_requests")
+    async def on_menu_my_requests(callback: CallbackQuery) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            rows = (
+                RenewalRequest.query.filter_by(user_id=profile.user_id)
+                .order_by(RenewalRequest.created_at.desc())
+                .limit(5)
+                .all()
+            )
+            if not rows:
+                await callback.message.answer("У вас пока нет заявок.")
+                await callback.answer()
+                return
+            lines = ["🧾 Ваши последние заявки:"]
+            kb = InlineKeyboardBuilder()
+            has_buttons = False
+            for row in rows:
+                kb.button(text=f"🔎 Открыть #{row.id}", callback_data=f"myreq_open:{row.id}")
+                has_buttons = True
+                lines.append(
+                    f"#{row.id} • {_request_type_label(row)} • {_status_label(row.status)} • {row.created_at:%d.%m.%Y %H:%M}"
+                )
+                if row.status == "needs_info":
+                    kb.button(text=f"✍️ Ответить #{row.id}", callback_data=f"client_reply:{row.id}")
+            kb.adjust(1)
+            await callback.message.answer("\n".join(lines), reply_markup=kb.as_markup() if has_buttons else None)
+        await callback.answer()
+
+    @router.callback_query(F.data == "menu:pause")
+    async def on_menu_pause(callback: CallbackQuery) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            pause_until = to_utc_naive(profile.pause_until)
+            active_pause = bool(pause_until and pause_until > utcnow())
+            await callback.message.answer(
+                f"Текущий статус напоминаний: {_pause_text(profile)}.\nВыберите паузу:",
+                reply_markup=_pause_keyboard(active_pause),
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("pause_set:"))
+    async def on_pause_set(callback: CallbackQuery) -> None:
+        days = _safe_callback_int(callback.data or "", 1)
+        if days is None:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        if _limit_inline(callback.message.chat.id, f"pause_set:{days}"):
+            await callback.answer("Слишком часто. Попробуйте через секунду.", show_alert=True)
+            return
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            profile.pause_until = utcnow() + timedelta(days=days)
+            db.session.commit()
+            await callback.message.answer(f"Ок, напоминания на паузе до {profile.pause_until:%d.%m.%Y %H:%M}.")
+        await callback.answer("Пауза включена")
+
+    @router.callback_query(F.data == "pause_clear")
+    async def on_pause_clear(callback: CallbackQuery) -> None:
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            profile.pause_until = None
+            db.session.commit()
+            await callback.message.answer("Пауза снята. Напоминания снова активны.")
+        await callback.answer("Готово")
+
+    @router.callback_query(F.data == "menu:support")
+    async def on_menu_support(callback: CallbackQuery) -> None:
+        with app.app_context():
+            settings = get_bot_settings()
+            contact = (settings.support_contact or settings.admin_contact or "").strip()
+            if not contact:
+                await callback.message.answer("Контакт поддержки пока не настроен. Напишите администратору UsersDash.")
+            else:
+                await callback.message.answer(f"🆘 Поддержка: {contact}")
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("client_reply:"))
+    async def on_client_reply(callback: CallbackQuery, state: FSMContext) -> None:
+        request_id = _safe_callback_int(callback.data or "", 1)
+        if request_id is None:
+            await callback.answer("Некорректный request_id", show_alert=True)
+            return
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            row = RenewalRequest.query.get(request_id)
+            if not profile or not row or row.user_id != profile.user_id:
+                await callback.answer("Заявка недоступна", show_alert=True)
+                return
+        await state.set_state(ClientClarifyFSM.waiting_answer)
+        await state.set_data({"clarify_request_id": request_id, "clarify_messages_count": 0})
+        await callback.message.answer("Напишите ответ одним сообщением. Можно приложить скрин в следующем сообщении.")
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("myreq_open:"))
+    async def on_myreq_open(callback: CallbackQuery) -> None:
+        request_id = _safe_callback_int(callback.data or "", 1)
+        if request_id is None:
+            await callback.answer("Некорректный запрос", show_alert=True)
+            return
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            row = RenewalRequest.query.get(request_id)
+            if not profile or not row or row.user_id != profile.user_id:
+                await callback.answer("Заявка недоступна", show_alert=True)
+                return
+            last_msg = (
+                RenewalRequestMessage.query.filter_by(renewal_request_id=row.id)
+                .order_by(RenewalRequestMessage.created_at.desc())
+                .first()
+            )
+            details = [
+                f"🔎 Заявка #{row.id}",
+                f"Тип: {row.request_type or _request_type_label(row)}",
+                f"Статус: {_status_label(row.status)}",
+                f"Сумма: {row.amount_rub or '—'}",
+                f"Метод: {row.payment_method or '—'}",
+                f"Комментарий: {row.comment or '—'}",
+            ]
+            if last_msg:
+                details.append(f"Последнее уточнение: {last_msg.message_text or 'вложение'}")
+            await callback.message.answer("\n".join(details))
+        await callback.answer()
+
     @router.message(Command("status"))
     async def on_status(message: Message) -> None:
         with app.app_context():
@@ -554,6 +969,167 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 due = account.next_payment_at.strftime("%d.%m.%Y") if account.next_payment_at else "не задано"
                 lines.append(f"• {account.name} — оплачено до {due}")
             await message.answer("\n".join(lines))
+
+    @router.message(Command("admin_pending"))
+    @router.message(Command("admin_user"))
+    @router.message(Command("admin_settings"))
+    @router.message(Command("admin_audit"))
+    @router.message(Command("admin"))
+    async def on_admin_command(message: Message, state: FSMContext) -> None:
+        if not _is_admin(message.chat.id, cfg):
+            await message.answer("Недостаточно прав.")
+            return
+        parts = (message.text or "").split()
+        cmd = ((parts[0] or "") if parts else "").split("@")[0].lower()
+
+        if cmd == "/admin_pending":
+            subcmd = "pending"
+            args = parts[1:]
+        elif cmd == "/admin_user":
+            subcmd = "user"
+            args = parts[1:]
+        elif cmd == "/admin_settings":
+            subcmd = "settings"
+            args = parts[1:]
+        elif cmd == "/admin_audit":
+            subcmd = "audit"
+            args = parts[1:]
+        else:
+            if len(parts) < 2:
+                await message.answer(
+                    "Команды: /admin_pending [N], /admin_user <id|@username>, /admin_settings, /admin_audit <user_id>"
+                )
+                return
+            subcmd = parts[1].lower()
+            args = parts[2:]
+
+        with app.app_context():
+            if subcmd == "pending":
+                limit = 20
+                if args and args[0].isdigit():
+                    limit = max(1, min(int(args[0]), 50))
+                rows = (
+                    RenewalRequest.query.filter(RenewalRequest.status.in_(["payment_pending_confirmation", "payment_data_collecting", "needs_info"]))
+                    .order_by(RenewalRequest.created_at.desc())
+                    .limit(limit)
+                    .all()
+                )
+                if not rows:
+                    await message.answer("Нет заявок на проверке.")
+                    return
+                for row in rows:
+                    user_label = f"{row.user_id}"
+                    if row.subscriber and row.subscriber.username:
+                        user_label = f"@{row.subscriber.username} ({row.user_id})"
+                    text = (
+                        f"Заявка #{row.id}\n"
+                        f"Пользователь: {user_label}\n"
+                        f"Сумма: {row.amount_rub or '—'}\n"
+                        f"Дата: {row.created_at:%d.%m.%Y %H:%M}\n"
+                        f"Тип: {_request_type_label(row)}\n"
+                        f"Статус: {_status_label(row.status)}\n"
+                        f"Описание: {(row.comment or '—')[:180]}"
+                    )
+                    await message.answer(text, reply_markup=_admin_request_keyboard(row.id))
+                return
+
+            if subcmd == "user" and len(args) >= 1:
+                lookup = args[0].strip()
+                user = None
+                if lookup.startswith("@"):
+                    username = lookup[1:]
+                    profile = TelegramSubscriber.query.filter_by(username=username).first()
+                    if profile:
+                        user = User.query.get(profile.user_id)
+                elif lookup.isdigit():
+                    user = User.query.get(int(lookup))
+                if not user:
+                    await message.answer("Пользователь не найден.")
+                    return
+                profile = TelegramSubscriber.query.filter_by(user_id=user.id).first()
+                reqs = RenewalRequest.query.filter_by(user_id=user.id).order_by(RenewalRequest.created_at.desc()).limit(5).all()
+                lines = [
+                    f"👤 Пользователь #{user.id}",
+                    f"Контакт: @{profile.username if profile and profile.username else '—'}",
+                    f"Напоминания: {_pause_text(profile) if profile else 'Telegram не привязан'}",
+                    "Последние заявки:",
+                ]
+                lines.extend([f"• #{r.id} {_status_label(r.status)} ({r.created_at:%d.%m %H:%M})" for r in reqs] or ["• нет"])
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="Напоминания ON/OFF", callback_data=f"admin_user_toggle:{user.id}")],
+                    [InlineKeyboardButton(text="Пауза 7 дней", callback_data=f"admin_user_pause:{user.id}:7")],
+                    [InlineKeyboardButton(text="Снять паузу", callback_data=f"admin_user_unpause:{user.id}")],
+                ])
+                await message.answer("\n".join(lines), reply_markup=kb)
+                return
+
+            if subcmd == "settings":
+                settings = get_bot_settings()
+                days = settings.reminder_days or ",".join(str(x) for x in cfg.reminder_days)
+                text = (
+                    "⚙️ Настройки бота:\n"
+                    f"Реквизиты: {(_settings_payment_details(settings))[:120]}\n"
+                    f"Инструкция: {(_settings_payment_instruction(settings))[:120]}\n"
+                    f"Дни напоминаний: {days}\n"
+                    f"Напоминания: {'ON' if settings.reminders_enabled else 'OFF'}\n"
+                    f"Поддержка: {settings.support_contact or settings.admin_contact or '—'}"
+                )
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✏️ Реквизиты", callback_data="admin_settings:payment_details_text")],
+                    [InlineKeyboardButton(text="✏️ Инструкция", callback_data="admin_settings:payment_instruction_text")],
+                    [InlineKeyboardButton(text="⏰ Дни напоминаний", callback_data="admin_settings:reminder_days")],
+                    [InlineKeyboardButton(text="🔔 Напоминания ON/OFF", callback_data="admin_settings_toggle_reminders")],
+                ])
+                await message.answer(text, reply_markup=kb)
+                return
+
+            if subcmd == "audit" and len(args) >= 1 and args[0].isdigit():
+                user_id = int(args[0])
+                rows = (
+                    RenewalAdminAction.query.join(RenewalRequest, RenewalRequest.id == RenewalAdminAction.renewal_request_id)
+                    .filter(RenewalRequest.user_id == user_id)
+                    .order_by(RenewalAdminAction.created_at.desc())
+                    .limit(10)
+                    .all()
+                )
+                if not rows:
+                    await message.answer("Действий админа по пользователю пока нет.")
+                    return
+                lines = [f"Audit по user_id={user_id}:"]
+                for row in rows:
+                    actor = User.query.get(row.actor_user_id)
+                    lines.append(f"• {row.created_at:%d.%m %H:%M} — {row.action_type} (admin={actor.username if actor else row.actor_user_id})")
+                await message.answer("\n".join(lines))
+                return
+
+        await message.answer("Неизвестная команда. Используйте: /admin_pending | /admin_user | /admin_settings | /admin_audit")
+
+    @router.callback_query(F.data.startswith("admin_open:"))
+    async def on_admin_open(callback: CallbackQuery) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        request_id = _safe_callback_int(callback.data or "", 1)
+        if request_id is None:
+            await callback.answer("Некорректный request_id", show_alert=True)
+            return
+        with app.app_context():
+            row = RenewalRequest.query.get(request_id)
+            if not row:
+                await callback.answer("Заявка не найдена", show_alert=True)
+                return
+            last_msg = (
+                RenewalRequestMessage.query.filter_by(renewal_request_id=row.id)
+                .order_by(RenewalRequestMessage.created_at.desc())
+                .first()
+            )
+            extra = f"\nПоследнее уточнение: {last_msg.message_text or 'вложение'}" if last_msg else ""
+            await callback.message.answer(
+                f"🔎 Заявка #{row.id}\nСтатус: {_status_label(row.status)}\n"
+                f"Сумма: {row.amount_rub or '—'}\nМетод: {row.payment_method or '—'}\nКомментарий: {row.comment or '—'}{extra}",
+                reply_markup=_admin_request_keyboard(row.id, include_open=False),
+            )
+        await callback.answer()
 
     @router.callback_query(F.data.startswith("renew:"))
     async def on_renew_click(callback: CallbackQuery) -> None:
@@ -601,7 +1177,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("batch_full:"))
     async def on_batch_full(callback: CallbackQuery, state: FSMContext) -> None:
-        batch_id = int(callback.data.split(":", 1)[1])
+        batch_id = _safe_callback_int(callback.data or "", 1)
+        if batch_id is None:
+            await callback.answer("Некорректный id", show_alert=True)
+            return
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -628,9 +1207,16 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("batch_partial:"))
     async def on_batch_partial(callback: CallbackQuery) -> None:
-        _, raw_batch_id, raw_page = callback.data.split(":", 2)
-        batch_id = int(raw_batch_id)
-        page = int(raw_page)
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        try:
+            batch_id = int(parts[1])
+            page = int(parts[2])
+        except ValueError:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -659,10 +1245,17 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("batch_toggle:"))
     async def on_batch_toggle(callback: CallbackQuery) -> None:
-        _, raw_batch_id, raw_item_id, raw_page = callback.data.split(":", 3)
-        batch_id = int(raw_batch_id)
-        item_id = int(raw_item_id)
-        page = int(raw_page)
+        parts = (callback.data or "").split(":", 3)
+        if len(parts) != 4:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        try:
+            batch_id = int(parts[1])
+            item_id = int(parts[2])
+            page = int(parts[3])
+        except ValueError:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -698,9 +1291,16 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("batch_select_page:"))
     async def on_batch_select_page(callback: CallbackQuery) -> None:
-        _, raw_batch_id, raw_page = callback.data.split(":", 2)
-        batch_id = int(raw_batch_id)
-        page = int(raw_page)
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        try:
+            batch_id = int(parts[1])
+            page = int(parts[2])
+        except ValueError:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -744,7 +1344,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("batch_partial_done:"))
     async def on_batch_partial_done(callback: CallbackQuery, state: FSMContext) -> None:
-        batch_id = int(callback.data.split(":", 1)[1])
+        batch_id = _safe_callback_int(callback.data or "", 1)
+        if batch_id is None:
+            await callback.answer("Некорректный id", show_alert=True)
+            return
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -772,7 +1375,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("batch_change:"))
     async def on_batch_change(callback: CallbackQuery, state: FSMContext) -> None:
-        batch_id = int(callback.data.split(":", 1)[1])
+        batch_id = _safe_callback_int(callback.data or "", 1)
+        if batch_id is None:
+            await callback.answer("Некорректный id", show_alert=True)
+            return
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -792,6 +1398,11 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             "Опишите изменения: какие фермы продлеваете, какие отключить или что нужно скорректировать."
         )
         await callback.answer()
+
+    @router.message(Command("cancel"))
+    async def on_cancel(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Действие отменено.")
 
     @router.message(PaymentFSM.waiting_amount)
     async def on_payment_amount(message: Message, state: FSMContext) -> None:
@@ -840,6 +1451,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 payment_method=str(data.get("payment_method") or "") or None,
                 comment=(message.text or "").strip() or None,
                 receipt_file_id=data.get("receipt_file_id"),
+                request_type="payment",
             )
             sent_to_admin = await notify_admins_about_request(bot, cfg.admin_chat_ids, request_row.id)
             if not cfg.admin_chat_ids:
@@ -905,7 +1517,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     receipt_file_id=data.get("receipt_file_id"),
                 )
             except BatchValidationError as exc:
-                await message.answer(f"Не удалось отправить batch-заявку: {exc}")
+                await message.answer(f"Не удалось отправить заявку: {exc}")
                 await state.clear()
                 return
 
@@ -913,15 +1525,15 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             if not cfg.admin_chat_ids:
                 logger.warning(
                     "Список TELEGRAM_ADMIN_CHAT_IDS пуст. "
-                    "Batch-заявка %s сохранена без Telegram-уведомления админам.",
+                    "Заявка по нескольким фермам %s сохранена без Telegram-уведомления админам.",
                     batch.id,
                 )
-                await message.answer("✅ Batch-заявка сохранена и будет обработана через UsersDash.")
+                await message.answer("✅ Заявка по нескольким фермам сохранена и будет обработана через UsersDash.")
             elif sent_to_admin:
-                await message.answer("✅ Batch-заявка отправлена администратору на подтверждение.")
+                await message.answer("✅ Заявка по нескольким фермам отправлена администратору на подтверждение.")
             else:
                 await message.answer(
-                    "✅ Batch-заявка сохранена. Сейчас не удалось уведомить администраторов в Telegram, "
+                    "✅ Заявка по нескольким фермам сохранена. Сейчас не удалось уведомить администраторов в Telegram, "
                     "заявка доступна в UsersDash."
                 )
         await state.clear()
@@ -946,7 +1558,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     receipt_file_id=None,
                 )
             except BatchValidationError as exc:
-                await message.answer(f"Не удалось отправить batch-заявку: {exc}")
+                await message.answer(f"Не удалось отправить заявку: {exc}")
                 await state.clear()
                 return
 
@@ -964,6 +1576,294 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         await state.set_data(data)
         await message.answer("Скрин сохранён. Теперь отправьте комментарий или '-' для завершения заявки.")
 
+    @router.callback_query(F.data.startswith("admin_user_toggle:"))
+    async def on_admin_user_toggle(callback: CallbackQuery) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        user_id = _safe_callback_int(callback.data or "", 1)
+        if user_id is None:
+            await callback.answer("Некорректный user_id", show_alert=True)
+            return
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(user_id=user_id).first()
+            if not profile:
+                await callback.answer("Telegram не привязан", show_alert=True)
+                return
+            old_value = profile.reminders_enabled
+            profile.reminders_enabled = not profile.reminders_enabled
+            actor_user_id = _admin_actor_id()
+            recent_request = RenewalRequest.query.filter_by(user_id=user_id).order_by(RenewalRequest.created_at.desc()).first()
+            _append_admin_audit(
+                "user_toggle",
+                actor_user_id=actor_user_id,
+                request_id=(recent_request.id if recent_request else _resolve_audit_request_id(int(user_id))),
+                details={"user_id": user_id, "old": old_value, "new": profile.reminders_enabled},
+            )
+            db.session.commit()
+            await callback.message.answer(f"Напоминания для user_id={user_id}: {'ON' if profile.reminders_enabled else 'OFF'}")
+        await callback.answer("Готово")
+
+    @router.callback_query(F.data.startswith("admin_user_pause:"))
+    async def on_admin_user_pause(callback: CallbackQuery) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        _, user_id, days = parts
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(user_id=int(user_id)).first()
+            if not profile:
+                await callback.answer("Telegram не привязан", show_alert=True)
+                return
+            profile.pause_until = utcnow() + timedelta(days=int(days))
+            actor_user_id = _admin_actor_id()
+            recent_request = RenewalRequest.query.filter_by(user_id=int(user_id)).order_by(RenewalRequest.created_at.desc()).first()
+            _append_admin_audit(
+                "user_pause",
+                actor_user_id=actor_user_id,
+                request_id=(recent_request.id if recent_request else _resolve_audit_request_id(int(user_id))),
+                details={"user_id": int(user_id), "pause_until": profile.pause_until.isoformat()},
+            )
+            db.session.commit()
+            await callback.message.answer(f"Пауза установлена до {profile.pause_until:%d.%m.%Y %H:%M}")
+        await callback.answer("Готово")
+
+    @router.callback_query(F.data.startswith("admin_user_unpause:"))
+    async def on_admin_user_unpause(callback: CallbackQuery) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        user_id = _safe_callback_int(callback.data or "", 1)
+        if user_id is None:
+            await callback.answer("Некорректный user_id", show_alert=True)
+            return
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(user_id=user_id).first()
+            if not profile:
+                await callback.answer("Telegram не привязан", show_alert=True)
+                return
+            profile.pause_until = None
+            actor_user_id = _admin_actor_id()
+            recent_request = RenewalRequest.query.filter_by(user_id=user_id).order_by(RenewalRequest.created_at.desc()).first()
+            _append_admin_audit(
+                "user_unpause",
+                actor_user_id=actor_user_id,
+                request_id=(recent_request.id if recent_request else _resolve_audit_request_id(int(user_id))),
+                details={"user_id": user_id},
+            )
+            db.session.commit()
+            await callback.message.answer("Пауза снята")
+        await callback.answer("Готово")
+
+    @router.callback_query(F.data.startswith("admin_settings:"))
+    async def on_admin_settings_edit(callback: CallbackQuery, state: FSMContext) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        parts = (callback.data or "").split(":", 1)
+        if len(parts) != 2:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        field = parts[1]
+        await state.set_state(AdminSettingsFSM.waiting_value)
+        await state.set_data({"settings_field": field})
+        await callback.message.answer("Введите новое значение одним сообщением. Для отмены: /cancel")
+        await callback.answer()
+
+    @router.callback_query(F.data == "admin_settings_toggle_reminders")
+    async def on_admin_settings_toggle_reminders(callback: CallbackQuery) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        with app.app_context():
+            settings = get_bot_settings()
+            old_value = settings.reminders_enabled
+            settings.reminders_enabled = not settings.reminders_enabled
+            actor_user_id = _admin_actor_id()
+            recent_request = RenewalRequest.query.order_by(RenewalRequest.created_at.desc()).first()
+            _append_admin_audit(
+                "settings_toggle",
+                actor_user_id=actor_user_id,
+                request_id=(recent_request.id if recent_request else _resolve_audit_request_id()),
+                details={"old": old_value, "new": settings.reminders_enabled},
+            )
+            db.session.commit()
+            await callback.message.answer(f"Глобальные напоминания: {'ON' if settings.reminders_enabled else 'OFF'}")
+        await callback.answer("Сохранено")
+
+    @router.message(AdminSettingsFSM.waiting_value)
+    async def on_admin_settings_value(message: Message, state: FSMContext) -> None:
+        if not _is_admin(message.chat.id, cfg):
+            await message.answer("Недостаточно прав.")
+            await state.clear()
+            return
+        raw = (message.text or "").strip()
+        data = await state.get_data()
+        field = data.get("settings_field")
+        if not field:
+            await state.clear()
+            return
+        with app.app_context():
+            settings = get_bot_settings()
+            if field == "reminder_days":
+                try:
+                    days = parse_reminder_days(raw)
+                except Exception:
+                    await message.answer("Формат неверный. Пример: 3,1,0,-1")
+                    return
+                settings.reminder_days = ",".join(str(x) for x in days)
+            elif field in {"payment_details_text", "payment_instruction_text"}:
+                setattr(settings, field, raw)
+            else:
+                await message.answer("Это поле нельзя редактировать через бот.")
+                await state.clear()
+                return
+            actor_user_id = _admin_actor_id()
+            recent_request = RenewalRequest.query.order_by(RenewalRequest.created_at.desc()).first()
+            _append_admin_audit(
+                "settings_update",
+                actor_user_id=actor_user_id,
+                request_id=(recent_request.id if recent_request else _resolve_audit_request_id()),
+                details={"field": field, "value": raw[:300]},
+            )
+            db.session.commit()
+        await state.clear()
+        await message.answer("Сохранено.")
+
+    @router.callback_query(F.data.startswith("admin_clarify:"))
+    async def on_admin_clarify(callback: CallbackQuery, state: FSMContext) -> None:
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        request_id = _safe_callback_int(callback.data or "", 1)
+        if request_id is None:
+            await callback.answer("Некорректный request_id", show_alert=True)
+            return
+        await state.set_state(AdminClarifyFSM.waiting_question)
+        await state.set_data({"clarify_request_id": request_id, "clarify_messages_count": 0})
+        await callback.message.answer(f"Введите вопрос для клиента по заявке #{request_id}.")
+        await callback.answer()
+
+    @router.message(AdminClarifyFSM.waiting_question)
+    async def on_admin_clarify_question(message: Message, state: FSMContext) -> None:
+        if not _is_admin(message.chat.id, cfg):
+            await message.answer("Недостаточно прав.")
+            await state.clear()
+            return
+        question = (message.text or "").strip()
+        data = await state.get_data()
+        request_id = int(data.get("clarify_request_id", 0))
+        with app.app_context():
+            row = RenewalRequest.query.get(request_id)
+            if not row:
+                await message.answer("Заявка не найдена.")
+                await state.clear()
+                return
+            if row.status != "needs_info":
+                row.status_before_needs_info = row.status
+            row.status = "needs_info"
+            actor_user_id = _admin_actor_id()
+            _append_admin_audit(
+                "clarify",
+                actor_user_id=actor_user_id,
+                request_id=row.id,
+                details={"question": question},
+            )
+            db.session.add(RenewalRequestMessage(
+                renewal_request_id=row.id,
+                sender_role="admin",
+                sender_user_id=None,
+                message_text=question,
+            ))
+            db.session.commit()
+            if row.subscriber and row.subscriber.chat_id:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="✍️ Ответить", callback_data=f"client_reply:{row.id}")],
+                    [InlineKeyboardButton(text="📎 Прикрепить чек/скрин", callback_data=f"client_reply:{row.id}")],
+                ])
+                await bot.send_message(int(row.subscriber.chat_id), f"Админ просит уточнить: {question}", reply_markup=kb)
+        await state.clear()
+        await message.answer("Вопрос отправлен клиенту.")
+
+    async def _finalize_client_clarify(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        request_id = int(data.get("clarify_request_id", 0))
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(message.chat.id)).first()
+            row = RenewalRequest.query.get(request_id)
+            if not profile or not row or row.user_id != profile.user_id:
+                await message.answer("Заявка не найдена или недоступна.")
+                await state.clear()
+                return
+
+            row.status = _status_after_clarify(row)
+            row.status_before_needs_info = None
+            db.session.commit()
+            last_msg = (
+                RenewalRequestMessage.query.filter_by(renewal_request_id=row.id, sender_role="client")
+                .order_by(RenewalRequestMessage.created_at.desc())
+                .first()
+            )
+            admin_text = f"✍️ Уточнение по заявке #{row.id} от клиента\n{(last_msg.message_text if last_msg else None) or 'Приложен файл.'}"
+            for admin_chat_id in cfg.admin_chat_ids:
+                try:
+                    await bot.send_message(
+                        admin_chat_id,
+                        admin_text,
+                        reply_markup=InlineKeyboardMarkup(
+                            inline_keyboard=[[
+                                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin_confirm:{row.id}"),
+                                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"admin_reject:{row.id}"),
+                                InlineKeyboardButton(text="🔎 Открыть", callback_data=f"admin_open:{row.id}"),
+                            ]]
+                        ),
+                    )
+                except Exception as exc:
+                    logger.warning("Не удалось отправить уточнение админу %s: %s", admin_chat_id, exc)
+        await state.clear()
+        await message.answer("Спасибо! Уточнение отправлено администратору.")
+
+    @router.message(Command("done"), ClientClarifyFSM.waiting_answer)
+    async def on_client_clarify_done(message: Message, state: FSMContext) -> None:
+        await _finalize_client_clarify(message, state)
+
+    @router.message(ClientClarifyFSM.waiting_answer)
+    async def on_client_clarify_answer(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        request_id = int(data.get("clarify_request_id", 0))
+        text_value = (message.text or message.caption or "").strip()
+        attachment_file_id = (message.photo[-1].file_id if message.photo else None)
+        if not attachment_file_id and message.document:
+            attachment_file_id = message.document.file_id
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(message.chat.id)).first()
+            row = RenewalRequest.query.get(request_id)
+            if not profile or not row or row.user_id != profile.user_id:
+                await message.answer("Заявка не найдена или недоступна.")
+                await state.clear()
+                return
+            db.session.add(RenewalRequestMessage(
+                renewal_request_id=row.id,
+                sender_role="client",
+                sender_user_id=row.user_id,
+                message_text=text_value or None,
+                attachment_file_id=attachment_file_id,
+            ))
+            db.session.commit()
+
+        count = int(data.get("clarify_messages_count", 0)) + 1
+        data["clarify_messages_count"] = count
+        await state.set_data(data)
+        if count >= 2 or attachment_file_id:
+            await _finalize_client_clarify(message, state)
+            return
+        await message.answer("Ответ сохранён. Прикрепите чек/скрин (фото или файл) или отправьте /done.")
+
+
     @router.message(F.text)
     async def on_text_shortcuts(message: Message, state: FSMContext) -> None:
         normalized = (message.text or "").strip().lower()
@@ -975,9 +1875,15 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("admin_confirm:"))
     async def on_admin_confirm(callback: CallbackQuery) -> None:
-        request_id = int(callback.data.split(":", 1)[1])
+        request_id = _safe_callback_int(callback.data or "", 1)
+        if request_id is None:
+            await callback.answer("Некорректный request_id", show_alert=True)
+            return
         if callback.message.chat.id not in cfg.admin_chat_ids:
             await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        if _limit_inline(callback.message.chat.id, f"{(callback.data or '').split(':', 1)[0]}:{request_id}"):
+            await callback.answer("Слишком часто. Подождите секунду.", show_alert=True)
             return
 
         with app.app_context():
@@ -987,6 +1893,13 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 return
             try:
                 row = confirm_renewal_request(request_id, admin_user.id)
+                _append_admin_audit(
+                    "confirm",
+                    actor_user_id=admin_user.id,
+                    request_id=row.id,
+                    details={"status": row.status},
+                )
+                db.session.commit()
             except RentalBotError as exc:
                 await callback.message.answer(f"Не удалось подтвердить заявку: {exc}")
                 await callback.answer("Ошибка")
@@ -1008,9 +1921,15 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("admin_reject:"))
     async def on_admin_reject(callback: CallbackQuery) -> None:
-        request_id = int(callback.data.split(":", 1)[1])
+        request_id = _safe_callback_int(callback.data or "", 1)
+        if request_id is None:
+            await callback.answer("Некорректный request_id", show_alert=True)
+            return
         if callback.message.chat.id not in cfg.admin_chat_ids:
             await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        if _limit_inline(callback.message.chat.id, f"admin_reject:{request_id}"):
+            await callback.answer("Слишком часто. Подождите секунду.", show_alert=True)
             return
 
         with app.app_context():
@@ -1019,11 +1938,19 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.message.answer("В UsersDash не найден активный администратор.")
                 return
             try:
+                reject_reason = "Проверьте реквизиты и пришлите корректные данные"
                 row = reject_renewal_request(
                     request_id,
                     admin_user.id,
-                    reason="Проверьте реквизиты и пришлите корректные данные",
+                    reason=reject_reason,
                 )
+                _append_admin_audit(
+                    "reject",
+                    actor_user_id=admin_user.id,
+                    request_id=row.id,
+                    details={"reason": reject_reason},
+                )
+                db.session.commit()
             except RentalBotError as exc:
                 await callback.message.answer(f"Не удалось отклонить заявку: {exc}")
                 await callback.answer("Ошибка")
@@ -1042,7 +1969,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("admin_batch_confirm:"))
     async def on_admin_batch_confirm(callback: CallbackQuery) -> None:
-        batch_id = int(callback.data.split(":", 1)[1])
+        batch_id = _safe_callback_int(callback.data or "", 1)
+        if batch_id is None:
+            await callback.answer("Некорректный id", show_alert=True)
+            return
         if callback.message.chat.id not in cfg.admin_chat_ids:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -1055,7 +1985,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             try:
                 row = confirm_batch_request(batch_id, admin_user.id)
             except BatchValidationError as exc:
-                await callback.message.answer(f"Не удалось подтвердить batch-заявку: {exc}")
+                await callback.message.answer(f"Не удалось подтвердить заявку: {exc}")
                 await callback.answer("Ошибка")
                 return
 
@@ -1064,13 +1994,13 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 result_status="confirmed",
             ).count()
             await callback.message.answer(
-                f"Batch-заявка #{row.id} подтверждена. Продлено ферм: {confirmed_items}."
+                f"Заявка по нескольким фермам #{row.id} подтверждена. Продлено ферм: {confirmed_items}."
             )
             if row.subscriber and row.subscriber.chat_id:
                 await bot.send_message(
                     chat_id=int(row.subscriber.chat_id),
                     text=(
-                        f"✅ Batch-заявка #{row.id} подтверждена. "
+                        f"✅ Заявка по нескольким фермам #{row.id} подтверждена. "
                         f"Продлено ферм: {confirmed_items}."
                     ),
                 )
@@ -1078,7 +2008,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("admin_batch_reject:"))
     async def on_admin_batch_reject(callback: CallbackQuery) -> None:
-        batch_id = int(callback.data.split(":", 1)[1])
+        batch_id = _safe_callback_int(callback.data or "", 1)
+        if batch_id is None:
+            await callback.answer("Некорректный id", show_alert=True)
+            return
         if callback.message.chat.id not in cfg.admin_chat_ids:
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -1095,16 +2028,16 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     reason="Проверьте данные платежа и отправьте уточнение",
                 )
             except BatchValidationError as exc:
-                await callback.message.answer(f"Не удалось отклонить batch-заявку: {exc}")
+                await callback.message.answer(f"Не удалось отклонить заявку: {exc}")
                 await callback.answer("Ошибка")
                 return
 
-            await callback.message.answer(f"Batch-заявка #{row.id} отклонена.")
+            await callback.message.answer(f"Заявка по нескольким фермам #{row.id} отклонена.")
             if row.subscriber and row.subscriber.chat_id:
                 await bot.send_message(
                     chat_id=int(row.subscriber.chat_id),
                     text=(
-                        f"❌ Batch-заявка #{row.id} отклонена: {row.rejection_reason}. "
+                        f"❌ Заявка по нескольким фермам #{row.id} отклонена: {row.rejection_reason}. "
                         "Пожалуйста, отправьте корректные данные повторно."
                     ),
                 )
@@ -1153,14 +2086,14 @@ async def notify_admins_about_request(bot: Bot, admin_chat_ids: set[int], reques
 
 
 async def notify_admins_about_batch_request(bot: Bot, admin_chat_ids: set[int], batch_id: int) -> bool:
-    """Уведомляет админов о новой batch-заявке."""
+    """Уведомляет админов о новой заявке по нескольким фермам."""
 
     row = RenewalBatchRequest.query.get(batch_id)
     if not row:
         return False
 
     if not admin_chat_ids:
-        logger.warning("Список admin_chat_ids пуст, batch-заявка %s не будет отправлена в Telegram.", batch_id)
+        logger.warning("Список admin_chat_ids пуст, заявка по нескольким фермам %s не будет отправлена в Telegram.", batch_id)
         return False
 
     selected_items = [item for item in row.items if item.selected_for_renewal]
@@ -1171,7 +2104,7 @@ async def notify_admins_about_batch_request(bot: Bot, admin_chat_ids: set[int], 
     skipped_text = "\n".join(skipped_lines) if skipped_lines else "—"
 
     text = (
-        f"🧾 Новая batch-заявка #{row.id}\n"
+        f"🧾 Новая заявка по нескольким фермам #{row.id}\n"
         f"Клиент ID: {row.user_id}\n"
         f"Режим: {row.mode or 'не выбран'}\n"
         f"Сумма: {row.total_amount_rub or 'не указана'}\n"
@@ -1189,7 +2122,7 @@ async def notify_admins_about_batch_request(bot: Bot, admin_chat_ids: set[int], 
             delivered = True
         except Exception as exc:  # pragma: no cover
             logger.warning(
-                "Не удалось отправить batch-заявку %s админу %s: %s",
+                "Не удалось отправить заявку %s админу %s: %s",
                 row.id,
                 admin_chat_id,
                 exc,
@@ -1207,7 +2140,22 @@ async def run_notifications_job(app: Flask, bot: Bot, cfg: RuntimeConfig) -> Non
 
     with app.app_context():
         settings = get_bot_settings()
-        candidates = collect_notification_candidates(cfg.reminder_days)
+        if not settings.reminders_enabled:
+            logger.info("Глобальные напоминания выключены в настройках.")
+            return
+        reminder_days = cfg.reminder_days
+        if settings.reminder_days:
+            try:
+                reminder_days = parse_reminder_days(settings.reminder_days)
+            except ValueError:
+                logger.warning("Некорректные reminder_days в настройках: %s", settings.reminder_days)
+        candidates = collect_notification_candidates(reminder_days)
+        candidates = [
+            item for item in candidates
+            if item.subscriber.reminders_enabled and not (
+                to_utc_naive(item.subscriber.pause_until) and to_utc_naive(item.subscriber.pause_until) > utcnow()
+            )
+        ]
         grouped: dict[tuple[int, str], list[NotificationCandidate]] = defaultdict(list)
         for candidate in candidates:
             key = (candidate.user.id, candidate.subscriber.chat_id)
@@ -1215,6 +2163,9 @@ async def run_notifications_job(app: Flask, bot: Bot, cfg: RuntimeConfig) -> Non
 
         for group_candidates in grouped.values():
             group_candidates.sort(key=lambda item: (item.due_on, item.account.id))
+            group_candidates = [candidate for candidate in group_candidates if not _is_duplicate_notification(candidate)]
+            if not group_candidates:
+                continue
             account_ids = [item.account.id for item in group_candidates]
             try:
                 batch = create_notification_batch(
@@ -1303,6 +2254,7 @@ async def run_bot() -> None:
 
     app = create_flask_context()
     cfg = build_runtime_config()
+    run_startup_health_check(app, cfg)
     bot = Bot(token=cfg.token)
     dispatcher = create_dispatcher(app, cfg, bot)
 

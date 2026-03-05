@@ -189,6 +189,8 @@ class TelegramSubscriber(db.Model):
     last_name = db.Column(db.String(128), nullable=True)
     timezone = db.Column(db.String(64), nullable=True)
     allow_broadcasts = db.Column(db.Boolean, default=True, nullable=False)
+    reminders_enabled = db.Column(db.Boolean, default=True, nullable=False)
+    pause_until = db.Column(db.DateTime, nullable=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -234,7 +236,12 @@ class TelegramBotSettings(db.Model):
     renew_duration_days = db.Column(db.Integer, nullable=False, default=30)
     renewal_price_rub = db.Column(db.Integer, nullable=False, default=0)
     payment_instructions = db.Column(db.Text, nullable=True)
+    payment_details_text = db.Column(db.Text, nullable=True)
+    payment_instruction_text = db.Column(db.Text, nullable=True)
     admin_contact = db.Column(db.String(255), nullable=True)
+    support_contact = db.Column(db.String(255), nullable=True)
+    reminder_days = db.Column(db.String(64), nullable=False, default="3,1,0,-1")
+    reminders_enabled = db.Column(db.Boolean, default=True, nullable=False)
     template_reminder_3d = db.Column(db.Text, nullable=True)
     template_reminder_1d = db.Column(db.Text, nullable=True)
     template_reminder_0d = db.Column(db.Text, nullable=True)
@@ -266,7 +273,7 @@ class RentalNotificationLog(db.Model):
     subscriber = db.relationship("TelegramSubscriber")
 
     __table_args__ = (
-        db.UniqueConstraint("account_id", "stage", "due_on", name="uq_rental_notification_stage"),
+        db.UniqueConstraint("account_id", "user_id", "stage", "due_on", name="uq_rental_notification_stage"),
     )
 
 
@@ -281,6 +288,8 @@ class RenewalRequest(db.Model):
     account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False, index=True)
     subscriber_id = db.Column(db.Integer, db.ForeignKey("telegram_subscribers.id"), nullable=True, index=True)
     status = db.Column(db.String(32), nullable=False, default="payment_pending_confirmation", index=True)
+    request_type = db.Column(db.String(24), nullable=False, default="payment", index=True)
+    status_before_needs_info = db.Column(db.String(32), nullable=True)
     amount_rub = db.Column(db.Integer, nullable=True)
     payment_method = db.Column(db.String(64), nullable=True)
     comment = db.Column(db.Text, nullable=True)
@@ -319,6 +328,23 @@ class RenewalAdminAction(db.Model):
 
     renewal_request = db.relationship("RenewalRequest")
     actor = db.relationship("User")
+
+
+class RenewalRequestMessage(db.Model):
+    """Сообщения по заявке на оплату (уточнения и ответы клиента)."""
+
+    __tablename__ = "renewal_request_messages"
+
+    id = db.Column(db.Integer, primary_key=True)
+    renewal_request_id = db.Column(db.Integer, db.ForeignKey("renewal_requests.id"), nullable=False, index=True)
+    sender_role = db.Column(db.String(16), nullable=False, index=True)
+    sender_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    message_text = db.Column(db.Text, nullable=True)
+    attachment_file_id = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    renewal_request = db.relationship("RenewalRequest")
+    sender = db.relationship("User")
 
 
 class RenewalBatchRequest(db.Model):

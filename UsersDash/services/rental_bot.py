@@ -119,6 +119,10 @@ def get_bot_settings() -> TelegramBotSettings:
         renewal_price_rub=0,
         renew_duration_days=30,
         payment_instructions="Уточните реквизиты у администратора.",
+        payment_details_text="Реквизиты уточните у администратора.",
+        payment_instruction_text="После оплаты нажмите «Я оплатил(а)» и приложите чек.",
+        reminder_days="3,1,0,-1",
+        reminders_enabled=True,
         template_reminder_3d=default_template(3),
         template_reminder_1d=default_template(1),
         template_reminder_0d=default_template(0),
@@ -232,7 +236,7 @@ def collect_notification_candidates(reminder_days: Iterable[int]) -> list[Notifi
         days_left = (due - now.date()).days
         if days_left not in days_set:
             continue
-        if has_notification_log(account.id, due, days_left):
+        if has_notification_log(account.id, user.id, due, days_left):
             continue
         candidates.append(
             NotificationCandidate(
@@ -248,12 +252,12 @@ def collect_notification_candidates(reminder_days: Iterable[int]) -> list[Notifi
     return candidates
 
 
-def has_notification_log(account_id: int, due_on: date, days_left: int) -> bool:
+def has_notification_log(account_id: int, user_id: int, due_on: date, days_left: int) -> bool:
     """Проверяет, отправлялось ли напоминание на конкретный этап."""
 
     stage = notification_stage(days_left)
     return (
-        RentalNotificationLog.query.filter_by(account_id=account_id, due_on=due_on, stage=stage)
+        RentalNotificationLog.query.filter_by(account_id=account_id, user_id=user_id, due_on=due_on, stage=stage)
         .filter(RentalNotificationLog.status.in_(["sent", "delivered"]))
         .first()
         is not None
@@ -300,6 +304,7 @@ def create_renewal_request(
     payment_method: str | None,
     comment: str | None,
     receipt_file_id: str | None,
+    request_type: str = "payment",
 ) -> RenewalRequest:
     """Создаёт заявку на подтверждение оплаты и защищает от дублей."""
 
@@ -335,6 +340,7 @@ def create_renewal_request(
         comment=comment,
         receipt_file_id=receipt_file_id,
         status="payment_pending_confirmation",
+        request_type=request_type or "payment",
         expected_days=expected_days,
         previous_paid_until=previous_paid_until,
         requested_paid_until=base_date + timedelta(days=expected_days),
@@ -432,6 +438,7 @@ def log_notification_result(
     stage = notification_stage(days_left)
     record = RentalNotificationLog.query.filter_by(
         account_id=account_id,
+        user_id=user_id,
         stage=stage,
         due_on=due_on,
     ).first()
