@@ -79,6 +79,7 @@ def _rebuild_rental_notification_logs(cur: sqlite3.Cursor) -> None:
             message_id VARCHAR(64),
             payload_json TEXT,
             error_text TEXT,
+            acked_at DATETIME,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(account_id, user_id, stage, due_on)
         )
@@ -87,9 +88,9 @@ def _rebuild_rental_notification_logs(cur: sqlite3.Cursor) -> None:
     cur.execute(
         """
         INSERT OR REPLACE INTO rental_notification_logs_new(
-            id, account_id, user_id, subscriber_id, stage, due_on, status, message_id, payload_json, error_text, created_at
+            id, account_id, user_id, subscriber_id, stage, due_on, status, message_id, payload_json, error_text, acked_at, created_at
         )
-        SELECT id, account_id, user_id, subscriber_id, stage, due_on, status, message_id, payload_json, error_text, created_at
+        SELECT id, account_id, user_id, subscriber_id, stage, due_on, status, message_id, payload_json, error_text, NULL, created_at
         FROM rental_notification_logs
         """
     )
@@ -102,6 +103,7 @@ def _rebuild_rental_notification_logs(cur: sqlite3.Cursor) -> None:
     cur.execute("CREATE INDEX idx_rental_notification_due_on ON rental_notification_logs(due_on)")
     cur.execute("CREATE INDEX idx_rental_notification_status ON rental_notification_logs(status)")
     cur.execute("CREATE INDEX idx_rental_notification_created_at ON rental_notification_logs(created_at)")
+    cur.execute("CREATE INDEX idx_rental_notification_acked_at ON rental_notification_logs(acked_at)")
     print("[MIGRATE] Таблица rental_notification_logs пересобрана с UNIQUE(account_id, user_id, stage, due_on)")
 
 
@@ -127,6 +129,7 @@ def main() -> None:
 
     _ensure_column(cur, "renewal_requests", "request_type", "VARCHAR(24) NOT NULL DEFAULT 'payment'")
     _ensure_column(cur, "renewal_requests", "status_before_needs_info", "VARCHAR(32)")
+    _ensure_column(cur, "rental_notification_logs", "acked_at", "DATETIME")
 
     cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='renewal_request_messages'")
     if not cur.fetchone():

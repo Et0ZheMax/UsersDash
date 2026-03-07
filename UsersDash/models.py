@@ -266,6 +266,7 @@ class RentalNotificationLog(db.Model):
     message_id = db.Column(db.String(64), nullable=True)
     payload_json = db.Column(db.Text, nullable=True)
     error_text = db.Column(db.Text, nullable=True)
+    acked_at = db.Column(db.DateTime, nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 
     account = db.relationship("Account")
