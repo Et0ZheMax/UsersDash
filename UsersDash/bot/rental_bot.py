@@ -17,7 +17,14 @@ from aiogram.filters import Command, CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from flask import Flask
 from sqlalchemy import inspect, text
@@ -147,6 +154,7 @@ def build_user_keyboard(batch_id: int, admin_contact: str | None) -> InlineKeybo
         [InlineKeyboardButton(text="✅ Я оплатил всё", callback_data=f"batch_full:{batch_id}")],
         [InlineKeyboardButton(text="☑️ Я оплатил часть", callback_data=f"batch_partial:{batch_id}:0")],
         [InlineKeyboardButton(text="✍️ Есть изменения", callback_data=f"batch_change:{batch_id}")],
+        [InlineKeyboardButton(text="✅ Ок, увидел(а)", callback_data="notif_ack")],
     ]
     if admin_contact:
         rows.append([InlineKeyboardButton(text="Связаться с администратором", url=admin_contact)])
@@ -169,6 +177,35 @@ def build_dashboard_keyboard(admin_contact: str | None) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(text="Связаться с администратором", url=admin_contact)])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+
+
+
+def build_reply_keyboard(is_admin: bool) -> ReplyKeyboardMarkup:
+    """Возвращает постоянную Reply-клавиатуру внизу чата."""
+
+    rows = [[KeyboardButton(text="🏠 Меню")]]
+    if is_admin:
+        rows = [
+            [KeyboardButton(text="🛠 Админ-меню")],
+            [KeyboardButton(text="📥 Очередь оплат"), KeyboardButton(text="📣 Отправки")],
+            [KeyboardButton(text="🏠 Меню")],
+        ]
+    return ReplyKeyboardMarkup(
+        keyboard=rows,
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выберите действие",
+    )
+
+
+def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
+    """Inline-панель быстрого доступа к админ-разделам."""
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Очередь оплат", callback_data="admin_menu:pending")],
+        [InlineKeyboardButton(text="📣 Отправки уведомлений", callback_data="admin_menu:sent")],
+        [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_menu:settings")],
+    ])
 
 def _account_status_label(account: Account) -> str:
     if account.blocked_for_payment:
@@ -658,11 +695,153 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
     dp = Dispatcher()
     dp.include_router(router)
 
+    async def _admin_show_pending(message: Message, limit: int = 20) -> None:
+        """Показывает администратору очередь заявок с приоритетом по сроку оплаты."""
+
+        try:
+            prepared_rows: list[tuple[str, InlineKeyboardMarkup]] = []
+            with app.app_context():
+                rows = (
+                    db.session.query(RenewalRequest, Account, TelegramSubscriber)
+                    .outerjoin(Account, Account.id == RenewalRequest.account_id)
+                    .outerjoin(TelegramSubscriber, TelegramSubscriber.id == RenewalRequest.subscriber_id)
+                    .filter(
+                        RenewalRequest.status.in_(
+                            ["payment_pending_confirmation", "payment_data_collecting", "needs_info"]
+                        )
+                    )
+                    .order_by(
+                        Account.next_payment_at.is_(None),
+                        Account.next_payment_at.asc(),
+                        RenewalRequest.created_at.desc(),
+                    )
+                    .limit(limit)
+                    .all()
+                )
+                if not rows:
+                    await message.answer("Нет заявок на проверке.")
+                    return
+
+                for request_row, account, subscriber in rows:
+                    # Важно: account может отсутствовать, поэтому все значения формируем безопасно.
+                    farm_name = account.name if account and account.name else "—"
+                    due_at = to_utc_naive(account.next_payment_at) if account else None
+                    due_text = due_at.strftime("%d.%m.%Y") if due_at else "—"
+                    amount_due = (
+                        f"{account.next_payment_amount} ₽"
+                        if account and account.next_payment_amount is not None
+                        else "—"
+                    )
+                    user_label = str(request_row.user_id)
+                    username = (subscriber.username or "").strip() if subscriber else ""
+                    if username:
+                        user_label = f"@{username} ({request_row.user_id})"
+
+                    comment = (request_row.comment or "—").strip()
+                    if len(comment) > 220:
+                        comment = f"{comment[:220]}…"
+
+                    text = (
+                        f"Заявка #{request_row.id}\n"
+                        f"Ферма: {farm_name}\n"
+                        f"Оплатить до: {due_text}\n"
+                        f"Сумма к оплате: {amount_due}\n"
+                        f"Клиент: {user_label}\n"
+                        f"Тип: {_request_type_label(request_row)}\n"
+                        f"Статус: {_status_label(request_row.status)}\n"
+                        f"Клиент указал сумму: {request_row.amount_rub if request_row.amount_rub is not None else '—'}\n"
+                        f"Метод: {request_row.payment_method or '—'}\n"
+                        f"Дата заявки: {request_row.created_at:%d.%m.%Y %H:%M}\n"
+                        f"Комментарий: {comment}"
+                    )
+                    prepared_rows.append((text, _admin_request_keyboard(request_row.id)))
+
+            for row_text, row_keyboard in prepared_rows:
+                await message.answer(row_text, reply_markup=row_keyboard)
+        except Exception:
+            logger.exception("Ошибка формирования очереди оплат для chat_id=%s", message.chat.id)
+            await message.answer("Не удалось показать очередь оплат.")
+
+    async def _admin_show_notifications(message: Message, limit: int = 30) -> None:
+        """Показывает отчёт по отправкам уведомлений без N+1 запросов."""
+
+        try:
+            lines: list[str] = []
+            with app.app_context():
+                logs = (
+                    RentalNotificationLog.query.order_by(RentalNotificationLog.created_at.desc())
+                    .limit(limit)
+                    .all()
+                )
+                if not logs:
+                    await message.answer("Отправок пока нет.")
+                    return
+
+                account_ids = {row.account_id for row in logs if row.account_id}
+                subscriber_ids = {row.subscriber_id for row in logs if row.subscriber_id}
+                user_ids = {row.user_id for row in logs if row.user_id}
+
+                accounts_by_id: dict[int, Account] = {}
+                if account_ids:
+                    accounts_by_id = {
+                        row.id: row for row in Account.query.filter(Account.id.in_(account_ids)).all()
+                    }
+
+                subs_by_id: dict[int, TelegramSubscriber] = {}
+                subs_by_user_id: dict[int, TelegramSubscriber] = {}
+                subscribers: list[TelegramSubscriber] = []
+                if subscriber_ids:
+                    subscribers.extend(
+                        TelegramSubscriber.query.filter(TelegramSubscriber.id.in_(subscriber_ids)).all()
+                    )
+                if user_ids:
+                    subscribers.extend(
+                        TelegramSubscriber.query.filter(TelegramSubscriber.user_id.in_(user_ids)).all()
+                    )
+                for sub in subscribers:
+                    if sub.id and sub.id not in subs_by_id:
+                        subs_by_id[sub.id] = sub
+                    if sub.user_id and sub.user_id not in subs_by_user_id:
+                        subs_by_user_id[sub.user_id] = sub
+
+                # Формируем готовые строки внутри app_context, чтобы снаружи только отправлять чанки.
+                lines = ["📣 Последние отправки уведомлений:"]
+                for row in logs:
+                    account_name = accounts_by_id.get(row.account_id).name if row.account_id in accounts_by_id else "—"
+                    due_on = row.due_on.strftime("%d.%m.%Y") if row.due_on else "—"
+                    created_at = row.created_at.strftime("%d.%m %H:%M") if row.created_at else "—"
+                    subscriber = subs_by_id.get(row.subscriber_id) or subs_by_user_id.get(row.user_id)
+                    username = (subscriber.username or "").strip() if subscriber else ""
+                    user_label = f"@{username} ({row.user_id})" if username else str(row.user_id or "—")
+                    ack = f"✅ увидел ({row.acked_at:%d.%m %H:%M})" if row.acked_at else "—"
+                    lines.append(
+                        f"• {created_at} | {user_label} | {account_name} | due {due_on} "
+                        f"| stage={row.stage or '—'} | status={row.status or 'sent'} | ack={ack}"
+                    )
+
+            chunk: list[str] = []
+            chunk_chars = 0
+            for line in lines:
+                if chunk and chunk_chars + len(line) + 1 > 3500:
+                    await message.answer("\n".join(chunk))
+                    chunk = []
+                    chunk_chars = 0
+                chunk.append(line)
+                chunk_chars += len(line) + 1
+            if chunk:
+                await message.answer("\n".join(chunk))
+        except Exception:
+            logger.exception("Ошибка формирования отчёта отправок для chat_id=%s", message.chat.id)
+            await message.answer("Не удалось показать отчёт по отправкам.")
+
     @router.message(CommandStart(deep_link=True))
     async def on_start_with_token(message: Message) -> None:
         deep_arg = (message.text or "").split(maxsplit=1)
         if len(deep_arg) < 2 or not deep_arg[1].startswith("bind_"):
-            await message.answer("Привет! Для привязки перейдите по персональной ссылке из UsersDash.")
+            await message.answer(
+                "Привет! Для привязки перейдите по персональной ссылке из UsersDash.",
+                reply_markup=build_reply_keyboard(is_admin=_is_admin(message.chat.id, cfg)),
+            )
             return
 
         token = deep_arg[1].replace("bind_", "", 1)
@@ -676,13 +855,20 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     last_name=message.from_user.last_name if message.from_user else None,
                 )
             except TokenValidationError as exc:
-                await message.answer(f"Не удалось привязать Telegram: {exc}")
+                await message.answer(
+                    f"Не удалось привязать Telegram: {exc}",
+                    reply_markup=build_reply_keyboard(is_admin=_is_admin(message.chat.id, cfg)),
+                )
                 return
 
             settings = get_bot_settings()
             dashboard_text = render_client_dashboard(profile)
             keyboard = build_dashboard_keyboard(settings.admin_contact)
         await message.answer("✅ Telegram успешно привязан. Теперь вы будете получать напоминания об аренде.")
+        await message.answer(
+            "Меню доступно по кнопке «🏠 Меню».",
+            reply_markup=build_reply_keyboard(is_admin=_is_admin(message.chat.id, cfg)),
+        )
         await message.answer(dashboard_text, reply_markup=keyboard)
 
     @router.message(CommandStart())
@@ -692,7 +878,8 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             if not profile:
                 await message.answer(
                     "Привет! Я бот продления аренды Viking Rise.\n"
-                    "Для безопасной привязки используйте персональную ссылку из UsersDash."
+                    "Для безопасной привязки используйте персональную ссылку из UsersDash.",
+                    reply_markup=build_reply_keyboard(is_admin=_is_admin(message.chat.id, cfg)),
                 )
                 return
 
@@ -700,9 +887,82 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             db.session.commit()
             settings = get_bot_settings()
             await message.answer(
+                "Меню доступно по кнопке «🏠 Меню».",
+                reply_markup=build_reply_keyboard(is_admin=_is_admin(message.chat.id, cfg)),
+            )
+            await message.answer(
                 render_client_dashboard(profile),
                 reply_markup=build_dashboard_keyboard(settings.admin_contact),
             )
+
+
+
+    @router.message(F.text == "🏠 Меню")
+    async def on_reply_menu(message: Message) -> None:
+        """Открывает клиентский dashboard по постоянной кнопке Reply-клавиатуры."""
+
+        try:
+            with app.app_context():
+                is_admin = _is_admin(message.chat.id, cfg)
+                profile = TelegramSubscriber.query.filter_by(chat_id=str(message.chat.id)).first()
+                if not profile:
+                    await message.answer(
+                        "Чат пока не привязан к UsersDash. Откройте персональную ссылку из кабинета, "
+                        "после этого меню заработает полностью.",
+                        reply_markup=build_reply_keyboard(is_admin=is_admin),
+                    )
+                    return
+
+                profile.last_interaction_at = utcnow()
+                db.session.commit()
+                settings = get_bot_settings()
+                dashboard_text = admin_dashboard_snapshot(profile.user_id)
+                await message.answer(dashboard_text, reply_markup=build_dashboard_keyboard(settings.admin_contact))
+                await message.answer(
+                    "Выберите действие:",
+                    reply_markup=build_reply_keyboard(is_admin=is_admin),
+                )
+        except Exception:
+            logger.exception("Ошибка обработки Reply-кнопки меню для chat_id=%s", message.chat.id)
+            await message.answer(
+                "Не удалось открыть меню. Попробуйте чуть позже.",
+                reply_markup=build_reply_keyboard(is_admin=_is_admin(message.chat.id, cfg)),
+            )
+
+    @router.message(F.text == "🛠 Админ-меню")
+    async def on_reply_admin_menu(message: Message) -> None:
+        """Открывает inline-меню администратора по Reply-кнопке."""
+
+        if not _is_admin(message.chat.id, cfg):
+            await message.answer("Эта кнопка доступна только администраторам.")
+            return
+        try:
+            await message.answer("🛠 Админ-меню:", reply_markup=build_admin_menu_keyboard())
+            await message.answer(
+                "Быстрые кнопки снизу тоже доступны.",
+                reply_markup=build_reply_keyboard(is_admin=True),
+            )
+        except Exception:
+            logger.exception("Ошибка открытия Reply админ-меню для chat_id=%s", message.chat.id)
+            await message.answer("Не удалось открыть админ-меню. Попробуйте позже.")
+
+    @router.message(F.text == "📥 Очередь оплат")
+    async def on_reply_admin_pending(message: Message) -> None:
+        """Показывает очередь оплат по Reply-кнопке администратора."""
+
+        if not _is_admin(message.chat.id, cfg):
+            await message.answer("Недостаточно прав.")
+            return
+        await _admin_show_pending(message)
+
+    @router.message(F.text == "📣 Отправки")
+    async def on_reply_admin_sent(message: Message) -> None:
+        """Показывает отчёт по отправкам по Reply-кнопке администратора."""
+
+        if not _is_admin(message.chat.id, cfg):
+            await message.answer("Недостаточно прав.")
+            return
+        await _admin_show_notifications(message)
 
     @router.callback_query(F.data == "menu:farms")
     async def on_menu_farms(callback: CallbackQuery) -> None:
@@ -904,6 +1164,83 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.message.answer(f"🆘 Поддержка: {contact}")
         await callback.answer()
 
+
+
+    @router.callback_query(F.data == "notif_ack")
+    async def on_notif_ack(callback: CallbackQuery) -> None:
+        """Фиксирует ACK клиента для уведомления по message_id."""
+
+        try:
+            if not callback.message:
+                await callback.answer("Не удалось определить сообщение.", show_alert=True)
+                return
+            message_id = str(callback.message.message_id)
+            updated = 0
+            with app.app_context():
+                profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+                if not profile:
+                    await callback.answer("Чат не привязан", show_alert=True)
+                    return
+                updated = (
+                    RentalNotificationLog.query.filter_by(subscriber_id=profile.id, message_id=message_id)
+                    .filter(RentalNotificationLog.acked_at.is_(None))
+                    .update({"acked_at": utcnow()}, synchronize_session=False)
+                )
+                db.session.commit()
+            if updated == 0:
+                await callback.answer("Уже отмечено или запись не найдена")
+                return
+            await callback.answer("Отмечено 👍")
+        except Exception:
+            logger.exception(
+                "Ошибка ACK уведомления для chat_id=%s",
+                callback.message.chat.id if callback.message else "?",
+            )
+            await callback.answer("Не удалось сохранить отметку", show_alert=True)
+
+    @router.callback_query(F.data.startswith("admin_menu:"))
+    async def on_admin_menu_callback(callback: CallbackQuery) -> None:
+        """Обрабатывает быстрые кнопки inline админ-меню."""
+
+        if not callback.message:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
+        if not _is_admin(callback.message.chat.id, cfg):
+            await callback.answer("Недостаточно прав", show_alert=True)
+            return
+        action = (callback.data or "").split(":", 1)[1] if ":" in (callback.data or "") else ""
+        try:
+            with app.app_context():
+                if action == "pending":
+                    await _admin_show_pending(callback.message)
+                elif action == "sent":
+                    await _admin_show_notifications(callback.message)
+                elif action == "settings":
+                    settings = get_bot_settings()
+                    days = settings.reminder_days or ",".join(str(x) for x in cfg.reminder_days)
+                    text = (
+                        "⚙️ Настройки бота\n"
+                        f"Реквизиты: {(_settings_payment_details(settings))[:120]}\n"
+                        f"Инструкция: {(_settings_payment_instruction(settings))[:120]}\n"
+                        f"Дни напоминаний: {days}\n"
+                        f"Напоминания: {'ON' if settings.reminders_enabled else 'OFF'}\n"
+                        f"Поддержка: {settings.support_contact or settings.admin_contact or '—'}"
+                    )
+                    kb = InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="✏️ Реквизиты", callback_data="admin_settings:payment_details_text")],
+                        [InlineKeyboardButton(text="✏️ Инструкция", callback_data="admin_settings:payment_instruction_text")],
+                        [InlineKeyboardButton(text="⏰ Дни напоминаний", callback_data="admin_settings:reminder_days")],
+                        [InlineKeyboardButton(text="🔔 Напоминания ON/OFF", callback_data="admin_settings_toggle_reminders")],
+                    ])
+                    await callback.message.answer(text, reply_markup=kb)
+                else:
+                    await callback.answer("Неизвестный пункт меню", show_alert=True)
+                    return
+            await callback.answer()
+        except Exception:
+            logger.exception("Ошибка обработки admin_menu callback=%s", callback.data)
+            await callback.answer("Не удалось выполнить действие", show_alert=True)
+
     @router.callback_query(F.data.startswith("client_reply:"))
     async def on_client_reply(callback: CallbackQuery, state: FSMContext) -> None:
         request_id = _safe_callback_int(callback.data or "", 1)
@@ -997,7 +1334,8 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         else:
             if len(parts) < 2:
                 await message.answer(
-                    "Команды: /admin_pending [N], /admin_user <id|@username>, /admin_settings, /admin_audit <user_id>"
+                    "Команды: /admin_pending [N], /admin_user <id|@username>, /admin_settings, /admin_audit <user_id>",
+                    reply_markup=build_admin_menu_keyboard(),
                 )
                 return
             subcmd = parts[1].lower()
@@ -1008,29 +1346,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 limit = 20
                 if args and args[0].isdigit():
                     limit = max(1, min(int(args[0]), 50))
-                rows = (
-                    RenewalRequest.query.filter(RenewalRequest.status.in_(["payment_pending_confirmation", "payment_data_collecting", "needs_info"]))
-                    .order_by(RenewalRequest.created_at.desc())
-                    .limit(limit)
-                    .all()
-                )
-                if not rows:
-                    await message.answer("Нет заявок на проверке.")
-                    return
-                for row in rows:
-                    user_label = f"{row.user_id}"
-                    if row.subscriber and row.subscriber.username:
-                        user_label = f"@{row.subscriber.username} ({row.user_id})"
-                    text = (
-                        f"Заявка #{row.id}\n"
-                        f"Пользователь: {user_label}\n"
-                        f"Сумма: {row.amount_rub or '—'}\n"
-                        f"Дата: {row.created_at:%d.%m.%Y %H:%M}\n"
-                        f"Тип: {_request_type_label(row)}\n"
-                        f"Статус: {_status_label(row.status)}\n"
-                        f"Описание: {(row.comment or '—')[:180]}"
-                    )
-                    await message.answer(text, reply_markup=_admin_request_keyboard(row.id))
+                await _admin_show_pending(message, limit=limit)
                 return
 
             if subcmd == "user" and len(args) >= 1:
