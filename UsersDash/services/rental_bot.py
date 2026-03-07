@@ -11,7 +11,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Iterable
 
 from flask import current_app
-from sqlalchemy import and_
+from sqlalchemy import and_, distinct
+from sqlalchemy.orm import joinedload
 
 from UsersDash.models import (
     Account,
@@ -42,6 +43,19 @@ BATCH_ACTIVE_STATUSES = {
     "payment_pending_confirmation",
     "pending_manual_review",
 }
+ADMIN_SINGLE_PENDING_STATUSES = (
+    "payment_pending_confirmation",
+    "payment_data_collecting",
+    "needs_info",
+)
+ADMIN_MULTI_PENDING_STATUS_CANDIDATES = (
+    "submitted",
+    "pending",
+    "payment_pending_confirmation",
+    "payment_data_collecting",
+    "pending_manual_review",
+    "needs_info",
+)
 
 
 @dataclass(slots=True)
@@ -754,25 +768,92 @@ def reject_batch_request(batch_id: int, admin_user_id: int, reason: str | None) 
 
 
 def unresolved_batch_requests(limit: int = 50) -> list[RenewalBatchRequest]:
-    """Возвращает batch-заявки, ожидающие действий администратора."""
+    """Возвращает заявки по нескольким фермам, ожидающие действий администратора."""
 
-    return (
-        RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(BATCH_PENDING_STATUSES))
-        .order_by(RenewalBatchRequest.created_at.asc())
-        .limit(limit)
-        .all()
+    overview = get_admin_pending_overview(limit_single=0, limit_multi=limit)
+    return overview["multi"]
+
+
+def get_multi_pending_statuses() -> list[str]:
+    """Определяет pending-статусы заявок по нескольким фермам на основе реальных данных."""
+
+    actual_statuses = {
+        (row[0] or "").strip()
+        for row in db.session.query(distinct(RenewalBatchRequest.status)).all()
+        if row and row[0]
+    }
+    if not actual_statuses:
+        return list(BATCH_PENDING_STATUSES)
+
+    selected = [
+        status for status in ADMIN_MULTI_PENDING_STATUS_CANDIDATES if status in actual_statuses
+    ]
+    if selected:
+        return selected
+
+    fallback = [status for status in BATCH_PENDING_STATUSES if status in actual_statuses]
+    return fallback or list(BATCH_PENDING_STATUSES)
+
+
+def get_admin_pending_overview(limit_single: int = 50, limit_multi: int = 50) -> dict[str, object]:
+    """Возвращает общую очередь подтверждений как для сайта, так и для Telegram-бота."""
+
+    single_query = (
+        RenewalRequest.query.options(
+            joinedload(RenewalRequest.account),
+            joinedload(RenewalRequest.subscriber),
+        )
+        .filter(RenewalRequest.status.in_(ADMIN_SINGLE_PENDING_STATUSES))
+        .outerjoin(Account, Account.id == RenewalRequest.account_id)
+        .order_by(
+            Account.next_payment_at.is_(None),
+            Account.next_payment_at.asc(),
+            RenewalRequest.created_at.desc(),
+        )
     )
+    if limit_single > 0:
+        single = single_query.limit(limit_single).all()
+    else:
+        single = []
+
+    multi_statuses = get_multi_pending_statuses()
+    multi_query = (
+        RenewalBatchRequest.query.options(
+            joinedload(RenewalBatchRequest.subscriber),
+            joinedload(RenewalBatchRequest.items).joinedload(RenewalBatchItem.account),
+        )
+        .filter(RenewalBatchRequest.status.in_(multi_statuses))
+        .order_by(RenewalBatchRequest.created_at.desc())
+    )
+    if limit_multi > 0:
+        multi = multi_query.limit(limit_multi).all()
+    else:
+        multi = []
+
+    single_count = RenewalRequest.query.filter(
+        RenewalRequest.status.in_(ADMIN_SINGLE_PENDING_STATUSES)
+    ).count()
+    multi_count = RenewalBatchRequest.query.filter(
+        RenewalBatchRequest.status.in_(multi_statuses)
+    ).count()
+    return {
+        "single": single,
+        "multi": multi,
+        "counts": {
+            "single": single_count,
+            "multi": multi_count,
+            "total": single_count + multi_count,
+            "single_statuses": list(ADMIN_SINGLE_PENDING_STATUSES),
+            "multi_statuses": multi_statuses,
+        },
+    }
 
 
 def unresolved_requests(limit: int = 50) -> list[RenewalRequest]:
     """Возвращает список ожидающих подтверждения заявок."""
 
-    return (
-        RenewalRequest.query.filter(RenewalRequest.status.in_(PENDING_STATUSES))
-        .order_by(RenewalRequest.created_at.asc())
-        .limit(limit)
-        .all()
-    )
+    overview = get_admin_pending_overview(limit_single=limit, limit_multi=0)
+    return overview["single"]
 
 
 def admin_dashboard_snapshot() -> dict[str, int]:
@@ -785,8 +866,8 @@ def admin_dashboard_snapshot() -> dict[str, int]:
         .filter(TelegramSubscriber.id.is_(None))
         .count()
     )
-    pending = RenewalRequest.query.filter(RenewalRequest.status.in_(PENDING_STATUSES)).count()
-    pending += RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(BATCH_PENDING_STATUSES)).count()
+    overview = get_admin_pending_overview(limit_single=0, limit_multi=0)
+    pending = int(overview["counts"]["total"])
 
     return {
         "linked_clients": linked,

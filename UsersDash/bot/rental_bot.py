@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
@@ -48,7 +49,6 @@ from UsersDash.services.rental_bot import (
     NotificationCandidate,
     RentalBotError,
     TokenValidationError,
-    admin_dashboard_snapshot,
     bind_telegram_chat,
     collect_notification_candidates,
     confirm_batch_request,
@@ -58,6 +58,8 @@ from UsersDash.services.rental_bot import (
     create_renewal_request,
     get_batch_for_user,
     get_bot_settings,
+    get_multi_pending_statuses,
+    get_admin_pending_overview,
     log_notification_result,
     mark_batch_mode,
     reject_batch_request,
@@ -206,6 +208,54 @@ def build_admin_menu_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📣 Отправки уведомлений", callback_data="admin_menu:sent")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_menu:settings")],
     ])
+
+
+
+async def safe_send_text(target: Message, text: str, *, reply_markup=None, chunk_limit: int = 3500) -> None:
+    """Безопасно отправляет длинный текст в Telegram с разбиением на части."""
+
+    payload = text or ""
+    if len(payload) <= chunk_limit:
+        try:
+            await target.answer(payload, reply_markup=reply_markup)
+        except TelegramBadRequest as exc:
+            logger.warning("Не удалось отправить сообщение: %s", exc)
+            await target.answer("Не удалось отправить сообщение: текст слишком длинный для Telegram.")
+        return
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in payload.splitlines() or [payload]:
+        piece = line if line else " "
+        line_len = len(piece) + 1
+        if current and current_len + line_len > chunk_limit:
+            chunks.append("\n".join(current))
+            current = [piece]
+            current_len = line_len
+            continue
+        if not current and line_len > chunk_limit:
+            for idx in range(0, len(piece), chunk_limit):
+                chunks.append(piece[idx:idx + chunk_limit])
+            current = []
+            current_len = 0
+            continue
+        current.append(piece)
+        current_len += line_len
+    if current:
+        chunks.append("\n".join(current))
+
+    if not chunks:
+        chunks = [payload[:chunk_limit]]
+
+    for idx, chunk in enumerate(chunks):
+        try:
+            await target.answer(chunk, reply_markup=reply_markup if idx == 0 else None)
+        except TelegramBadRequest as exc:
+            logger.warning("Не удалось отправить chunk %s/%s: %s", idx + 1, len(chunks), exc)
+            await target.answer("Не удалось отправить сообщение: текст слишком длинный для Telegram.")
+            break
+
 
 def _account_status_label(account: Account) -> str:
     if account.blocked_for_payment:
@@ -607,6 +657,17 @@ def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
     else:
         print(f"[OK] ADMIN_IDS: {len(cfg.admin_chat_ids)}")
 
+    db_uri = app.config.get("SQLALCHEMY_DATABASE_URI", "")
+    print(f"[INFO] SQLALCHEMY_DATABASE_URI: {db_uri}")
+    if db_uri.startswith("sqlite:///"):
+        db_rel_path = db_uri.replace("sqlite:///", "", 1)
+        db_abs_path = Path(db_rel_path)
+        if not db_abs_path.is_absolute():
+            db_abs_path = (Path.cwd() / db_abs_path).resolve()
+        exists = db_abs_path.exists()
+        print(f"[INFO] SQLite path: {db_abs_path}")
+        print(f"[INFO] SQLite exists: {'yes' if exists else 'no'}")
+
     with app.app_context():
         try:
             db.session.execute(text("SELECT 1"))
@@ -643,7 +704,13 @@ def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
 
         if inspector.has_table("telegram_bot_settings"):
             settings_columns = {item['name'] for item in inspector.get_columns("telegram_bot_settings")}
-            for col in ("payment_details_text", "payment_instruction_text", "support_contact", "reminder_days", "reminders_enabled"):
+            for col in (
+                "payment_details_text",
+                "payment_instruction_text",
+                "support_contact",
+                "reminder_days",
+                "reminders_enabled",
+            ):
                 if col not in settings_columns:
                     optional_warnings.append(f"Нет колонки telegram_bot_settings.{col}")
 
@@ -656,6 +723,47 @@ def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
         for warning in optional_warnings:
             print(f"[WARN] {warning}. Подсказка: запустите migrate_add_rental_bot_admin_features.py")
 
+        single_statuses = ["payment_pending_confirmation", "payment_data_collecting", "needs_info"]
+        multi_statuses = get_multi_pending_statuses()
+        single_count = RenewalRequest.query.filter(RenewalRequest.status.in_(single_statuses)).count()
+        multi_count = RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(multi_statuses)).count()
+        site_like_count = single_count + multi_count
+        print(f"[INFO] Pending RenewalRequest: {single_count} (statuses={single_statuses})")
+        print(f"[INFO] Pending заявки по нескольким фермам: {multi_count} (statuses={multi_statuses})")
+        print(f"[INFO] Site-like pending total: {site_like_count}")
+
+        if single_count > 0:
+            sample_single = (
+                RenewalRequest.query.filter(RenewalRequest.status.in_(single_statuses))
+                .order_by(RenewalRequest.created_at.desc())
+                .limit(2)
+                .all()
+            )
+            for row in sample_single:
+                print(f"[INFO] RenewalRequest sample: id={row.id}, status={row.status}, created_at={row.created_at}")
+
+        if multi_count > 0:
+            sample_multi = (
+                RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(multi_statuses))
+                .order_by(RenewalBatchRequest.created_at.desc())
+                .limit(2)
+                .all()
+            )
+            for row in sample_multi:
+                print(
+                    f"[INFO] Заявка по нескольким фермам sample: "
+                    f"id={row.id}, status={row.status}, created_at={row.created_at}"
+                )
+
+        bot_like_count = RenewalRequest.query.filter(
+            RenewalRequest.status.in_(["payment_pending_confirmation", "payment_data_collecting", "needs_info"])
+        ).count()
+        if bot_like_count == 0 and site_like_count > 0:
+            print(
+                "[HINT] В очереди сайта есть заявки, но одиночных заявок нет: "
+                "вероятно, раньше бот не учитывал заявки по нескольким фермам или статусы отличаются."
+            )
+
     logs_dir = Path("logs")
     try:
         logs_dir.mkdir(exist_ok=True)
@@ -667,7 +775,6 @@ def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
 
     print("[OK] CRITICAL проверки пройдены" if critical_ok else "[WARN] Есть ошибки в CRITICAL проверках")
     print("===================================")
-
 
 def _admin_request_keyboard(request_id: int, include_open: bool = True) -> InlineKeyboardMarkup:
     rows = [[
@@ -696,34 +803,20 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
     dp.include_router(router)
 
     async def _admin_show_pending(message: Message, limit: int = 20) -> None:
-        """Показывает администратору очередь заявок с приоритетом по сроку оплаты."""
+        """Показывает администратору общую очередь подтверждений как на сайте."""
 
         try:
-            prepared_rows: list[tuple[str, InlineKeyboardMarkup]] = []
+            prepared_single: list[tuple[str, InlineKeyboardMarkup]] = []
+            prepared_multi: list[tuple[str, InlineKeyboardMarkup]] = []
             with app.app_context():
-                rows = (
-                    db.session.query(RenewalRequest, Account, TelegramSubscriber)
-                    .outerjoin(Account, Account.id == RenewalRequest.account_id)
-                    .outerjoin(TelegramSubscriber, TelegramSubscriber.id == RenewalRequest.subscriber_id)
-                    .filter(
-                        RenewalRequest.status.in_(
-                            ["payment_pending_confirmation", "payment_data_collecting", "needs_info"]
-                        )
-                    )
-                    .order_by(
-                        Account.next_payment_at.is_(None),
-                        Account.next_payment_at.asc(),
-                        RenewalRequest.created_at.desc(),
-                    )
-                    .limit(limit)
-                    .all()
-                )
-                if not rows:
-                    await message.answer("Нет заявок на проверке.")
-                    return
+                overview = get_admin_pending_overview(limit_single=limit, limit_multi=limit)
+                single_rows = overview["single"]
+                multi_rows = overview["multi"]
+                counts = overview["counts"]
 
-                for request_row, account, subscriber in rows:
-                    # Важно: account может отсутствовать, поэтому все значения формируем безопасно.
+                for request_row in single_rows:
+                    account = request_row.account
+                    subscriber = request_row.subscriber
                     farm_name = account.name if account and account.name else "—"
                     due_at = to_utc_naive(account.next_payment_at) if account else None
                     due_text = due_at.strftime("%d.%m.%Y") if due_at else "—"
@@ -741,22 +834,77 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     if len(comment) > 220:
                         comment = f"{comment[:220]}…"
 
-                    text = (
+                    row_text = (
                         f"Заявка #{request_row.id}\n"
                         f"Ферма: {farm_name}\n"
                         f"Оплатить до: {due_text}\n"
                         f"Сумма к оплате: {amount_due}\n"
                         f"Клиент: {user_label}\n"
-                        f"Тип: {_request_type_label(request_row)}\n"
                         f"Статус: {_status_label(request_row.status)}\n"
                         f"Клиент указал сумму: {request_row.amount_rub if request_row.amount_rub is not None else '—'}\n"
                         f"Метод: {request_row.payment_method or '—'}\n"
                         f"Дата заявки: {request_row.created_at:%d.%m.%Y %H:%M}\n"
                         f"Комментарий: {comment}"
                     )
-                    prepared_rows.append((text, _admin_request_keyboard(request_row.id)))
+                    prepared_single.append((row_text, _admin_request_keyboard(request_row.id)))
 
-            for row_text, row_keyboard in prepared_rows:
+                for batch in multi_rows:
+                    subscriber = batch.subscriber
+                    user_label = str(batch.user_id)
+                    username = (subscriber.username or "").strip() if subscriber else ""
+                    if username:
+                        user_label = f"@{username} ({batch.user_id})"
+
+                    mode_map = {
+                        "full": "оплачено всё",
+                        "partial": "оплачена часть",
+                        "manual_change": "есть изменения",
+                    }
+                    mode_text = mode_map.get((batch.mode or "").strip(), batch.mode or "—")
+                    method = (batch.payment_method or "—").strip() or "—"
+                    comment = (batch.comment or "—").strip()
+                    if len(comment) > 220:
+                        comment = f"{comment[:220]}…"
+
+                    items_lines: list[str] = []
+                    for item in batch.items.order_by(RenewalBatchItem.id.asc()).all()[:10]:
+                        selected = "✅" if item.selected_for_renewal else "▫️"
+                        due_at = to_utc_naive(item.due_at_snapshot)
+                        due_text = due_at.strftime("%d.%m.%Y") if due_at else "—"
+                        amount = f"{item.amount_rub_snapshot} ₽" if item.amount_rub_snapshot is not None else "—"
+                        items_lines.append(f"{selected} {item.account_name_snapshot} • до {due_text} • {amount}")
+                    if not items_lines:
+                        items_lines.append("—")
+
+                    row_text = (
+                        f"Заявка #{batch.id}\n"
+                        f"Клиент: {user_label}\n"
+                        f"Режим: {mode_text}\n"
+                        f"Сумма: {batch.total_amount_rub if batch.total_amount_rub is not None else '—'} ₽\n"
+                        f"Метод: {method}\n"
+                        f"Комментарий: {comment}\n"
+                        f"Дата заявки: {batch.created_at:%d.%m.%Y %H:%M}\n"
+                        f"Выбранные фермы:\n" + "\n".join(items_lines)
+                    )
+                    prepared_multi.append((row_text, build_admin_batch_keyboard(batch.id, batch.mode)))
+
+            await message.answer(
+                "📥 Очередь подтверждений\n"
+                f"Заявки (1 ферма): {counts['single']}\n"
+                f"Заявки (несколько ферм): {counts['multi']}\n"
+                f"Итого: {counts['total']}"
+            )
+
+            await message.answer("🧾 Заявки (1 ферма)")
+            if not prepared_single:
+                await message.answer("Нет заявок на проверке.")
+            for row_text, row_keyboard in prepared_single:
+                await message.answer(row_text, reply_markup=row_keyboard)
+
+            await message.answer("🧾 Заявки (несколько ферм)")
+            if not prepared_multi:
+                await message.answer("Нет заявок на проверке.")
+            for row_text, row_keyboard in prepared_multi:
                 await message.answer(row_text, reply_markup=row_keyboard)
         except Exception:
             logger.exception("Ошибка формирования очереди оплат для chat_id=%s", message.chat.id)
@@ -916,12 +1064,25 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 profile.last_interaction_at = utcnow()
                 db.session.commit()
                 settings = get_bot_settings()
-                dashboard_text = admin_dashboard_snapshot(profile.user_id)
-                await message.answer(dashboard_text, reply_markup=build_dashboard_keyboard(settings.admin_contact))
-                await message.answer(
-                    "Выберите действие:",
-                    reply_markup=build_reply_keyboard(is_admin=is_admin),
+                dashboard_text = render_client_dashboard(profile)
+                logger.info(
+                    "Reply меню chat_id=%s, user_id=%s, dashboard_len=%s",
+                    message.chat.id,
+                    profile.user_id,
+                    len(dashboard_text),
                 )
+                dashboard_keyboard = build_dashboard_keyboard(settings.admin_contact)
+
+            await safe_send_text(
+                message,
+                dashboard_text,
+                reply_markup=dashboard_keyboard,
+                chunk_limit=3500,
+            )
+            await message.answer(
+                "Выберите действие:",
+                reply_markup=build_reply_keyboard(is_admin=is_admin),
+            )
         except Exception:
             logger.exception("Ошибка обработки Reply-кнопки меню для chat_id=%s", message.chat.id)
             await message.answer(
