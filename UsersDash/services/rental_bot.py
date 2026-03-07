@@ -820,7 +820,6 @@ def get_admin_pending_overview(limit_single: int = 50, limit_multi: int = 50) ->
     multi_query = (
         RenewalBatchRequest.query.options(
             joinedload(RenewalBatchRequest.subscriber),
-            joinedload(RenewalBatchRequest.items).joinedload(RenewalBatchItem.account),
         )
         .filter(RenewalBatchRequest.status.in_(multi_statuses))
         .order_by(RenewalBatchRequest.created_at.desc())
