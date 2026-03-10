@@ -805,7 +805,8 @@
     </div>
     <div class="table-responsive">
         <table class="table" data-role="accounts-table"
-               data-resources-endpoint="{{ url_for('admin.api_account_resources') }}">
+               data-resources-endpoint="{{ url_for('admin.api_account_resources') }}"
+               data-logs-endpoint="{{ url_for('admin.api_account_logs_view') }}">
             <thead>
             <tr>
                 <th>Имя фермы</th>
@@ -823,6 +824,9 @@
                 <tr
                     data-account-id="{{ acc.id }}"
                     data-account-row
+                    data-account-name="{{ acc.name }}"
+                    data-owner-name="{{ acc.owner.username if acc.owner else '—' }}"
+                    data-server-name="{{ acc.server.name if acc.server else 'N/A' }}"
                     data-search-text="{{ (acc.name ~ ' ' ~ (acc.server.name if acc.server else '') ~ ' ' ~ (acc.owner.username if acc.owner else ''))|trim }}"
                 >
                     <td>{{ acc.name }}</td>
@@ -843,6 +847,13 @@
                             <span class="btn-text">Обновить</span>
                             <span class="btn-spinner" hidden></span>
                         </button>
+
+                        <button class="action-pill action-pill--ghost"
+                                data-action="open-account-logs"
+                                data-account-id="{{ acc.id }}">
+                            <span class="btn-text">Логи</span>
+                            <span class="btn-spinner" hidden></span>
+                        </button>
                     </td>
                 </tr>
             {% endfor %}
@@ -855,6 +866,24 @@
 {% else %}
     <p>Активные фермы не найдены.</p>
 {% endif %}
+
+<div class="farm-logs-modal" data-role="farm-logs-modal" hidden>
+    <div class="farm-logs-modal__dialog">
+        <button class="farm-logs-modal__close" type="button" data-role="farm-logs-close" aria-label="Закрыть">×</button>
+        <div class="farm-logs-modal__header">
+            <div class="farm-logs-modal__title">Логи</div>
+            <div class="farm-logs-modal__subtitle" data-role="farm-logs-subtitle">—</div>
+        </div>
+
+        <div class="farm-logs-modal__summary" data-role="farm-logs-summary"></div>
+
+        <div class="farm-logs-modal__state" data-role="farm-logs-loading" hidden>Загружаем логи…</div>
+        <div class="farm-logs-modal__state" data-role="farm-logs-error" hidden>Не удалось загрузить логи.</div>
+        <div class="farm-logs-modal__state" data-role="farm-logs-empty" hidden>Логи пока не найдены.</div>
+
+        <div class="farm-logs-modal__list" data-role="farm-logs-list"></div>
+    </div>
+</div>
 
 {% if payment_cards %}
 <script>

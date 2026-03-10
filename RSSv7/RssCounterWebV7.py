@@ -1729,6 +1729,218 @@ def transformLogLine(dt_part, line_str):
     return f"{short} {rest}"
 
 
+_LOG_LEVEL_RE = re.compile(r"\[(DBG|INF|WRN|ERR)\]", re.IGNORECASE)
+_LOG_INFO_PREFIX_RE = re.compile(r"^(?:INFO|WARN|WARNING|ERROR|ERR|DEBUG)\|", re.IGNORECASE)
+_LOG_SESSION_PREFIX_RE = re.compile(r"^[0-9a-f]{8,64}\|", re.IGNORECASE)
+_LOG_SAWMILL_LEVEL_RE = re.compile(r"^Gather:\s*Sawmill\s+Level\s+(\d+)\s*$", re.IGNORECASE)
+_LOG_MARCHES_PROGRESS_RE = re.compile(r"^Marches:\s*(\d+)\s*/\s*(\d+)\s*$", re.IGNORECASE)
+
+
+def _format_log_time(dt_part: str) -> str:
+    """Возвращает время HH:MM:SS для строкового dt; при ошибке — исходное значение."""
+
+    value = (dt_part or "").strip()
+    if not value:
+        return ""
+
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(value, fmt).strftime("%H:%M:%S")
+        except Exception:
+            continue
+
+    hms_match = re.search(r"(\d{2}:\d{2}:\d{2})", value)
+    return hms_match.group(1) if hms_match else value
+
+
+def _extract_log_level(raw_line: str) -> str:
+    """Определяет уровень логирования, если он явно указан в raw_line."""
+
+    marker = _LOG_LEVEL_RE.search(raw_line or "")
+    if not marker:
+        return "info"
+
+    level_map = {
+        "DBG": "debug",
+        "INF": "info",
+        "WRN": "warning",
+        "ERR": "error",
+    }
+    return level_map.get(marker.group(1).upper(), "info")
+
+
+def _clean_log_message(raw_line: str) -> str:
+    """Убирает служебный префикс ([INF], INFO|session|...) и оставляет только текст события."""
+
+    if not raw_line:
+        return ""
+
+    text = (raw_line or "").strip()
+
+    if re.match(r"^\d{4}-\d{2}-\d{2}\s", text):
+        text = re.sub(
+            r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s+[+-]\d{2}:\d{2})?\s*",
+            "",
+            text,
+            count=1,
+        ).strip()
+
+    text = _LOG_LEVEL_RE.sub("", text).strip()
+    text = _LOG_INFO_PREFIX_RE.sub("", text).strip()
+    text = _LOG_SESSION_PREFIX_RE.sub("", text).strip()
+    return text
+
+
+def parse_human_log_line(dt_part: str, raw_line: str, account_name: t.Optional[str] = None):
+    """Нормализует строку лога в человекочитаемый объект для UI/API."""
+
+    if not raw_line:
+        return None
+
+    level = _extract_log_level(raw_line)
+    if level == "debug":
+        return None
+
+    cleaned = _clean_log_message(raw_line)
+    if not cleaned:
+        return None
+
+    item = {
+        "time": _format_log_time(dt_part),
+        "level": level,
+        "group": "system",
+        "group_label": "Система",
+        "event_code": "system_message",
+        "event_text": cleaned,
+        "raw_text": cleaned,
+    }
+
+    mapping = {
+        "Gather: Open Vip Menu": ("gather", "Сбор", "open_vip_menu", "Открыто VIP-меню"),
+        "Gather: Select Sawmill": ("gather", "Сбор", "select_sawmill", "Выбрана лесопилка"),
+        "March: Create March Troop": ("march", "Марш", "create_march_troop", "Собран марш"),
+        "March: Send Troops": ("march", "Марш", "send_troops", "Отряд отправлен"),
+        "Marches: Reached Maximum of Marches": (
+            "warning",
+            "Предупреждение",
+            "reached_max_marches",
+            "Достигнут лимит маршей",
+        ),
+        "gathervip Finished": ("finished", "Готово", "gathervip_finished", "Сценарий сбора завершён"),
+    }
+
+    preset = mapping.get(cleaned)
+    if preset:
+        item["group"], item["group_label"], item["event_code"], item["event_text"] = preset
+        if item["group"] == "warning" and item["level"] == "info":
+            item["level"] = "warning"
+        return item
+
+    sawmill_match = _LOG_SAWMILL_LEVEL_RE.match(cleaned)
+    if sawmill_match:
+        level_num = sawmill_match.group(1)
+        item.update(
+            {
+                "group": "gather",
+                "group_label": "Сбор",
+                "event_code": "sawmill_level",
+                "event_text": f"Выбрана лесопилка уровня {level_num}",
+            }
+        )
+        return item
+
+    marches_match = _LOG_MARCHES_PROGRESS_RE.match(cleaned)
+    if marches_match:
+        used, total = marches_match.groups()
+        item.update(
+            {
+                "group": "march",
+                "group_label": "Марш",
+                "event_code": "marches_progress",
+                "event_text": f"Маршей занято: {used} из {total}",
+            }
+        )
+        return item
+
+    lower_cleaned = cleaned.lower()
+    if "finished" in lower_cleaned:
+        item.update(
+            {
+                "group": "finished",
+                "group_label": "Готово",
+                "event_code": "finished",
+                "event_text": "Сценарий завершён",
+            }
+        )
+    elif any(token in lower_cleaned for token in ("error", "exception", "failed", "traceback")):
+        item.update(
+            {
+                "group": "system",
+                "group_label": "Система",
+                "event_code": "error",
+                "level": "error",
+            }
+        )
+    elif "update the game" in lower_cleaned:
+        item.update(
+            {
+                "group": "warning",
+                "group_label": "Предупреждение",
+                "event_code": "update_game_required",
+                "event_text": "Требуется обновление игры",
+                "level": "warning",
+            }
+        )
+
+    if account_name and item["event_text"]:
+        item["account_name"] = account_name
+
+    return item
+
+
+def build_human_logs_summary(items):
+    """Строит компактную сводку по нормализованным логам."""
+
+    warnings_count = 0
+    errors_count = 0
+    finished = False
+    reached_max_marches = False
+
+    for item in items or []:
+        level = (item.get("level") or "").lower()
+        code = (item.get("event_code") or "").lower()
+        text = (item.get("raw_text") or item.get("event_text") or "").lower()
+
+        if level == "warning" or code in {"reached_max_marches", "update_game_required"}:
+            warnings_count += 1
+        if level == "error" or any(token in text for token in ("error", "exception", "failed", "traceback")):
+            errors_count += 1
+        if code in {"gathervip_finished", "finished"} or "finished" in text:
+            finished = True
+        if code == "reached_max_marches" or "reached maximum of marches" in text:
+            reached_max_marches = True
+
+    return {
+        "total": len(items or []),
+        "warnings": warnings_count,
+        "errors": errors_count,
+        "finished": finished,
+        "reached_max_marches": reached_max_marches,
+    }
+
+
+def _resolve_account_name_for_logs(acc_id: str) -> str:
+    """Пытается определить имя аккаунта для acc_id через profiles.json, иначе возвращает acc_id."""
+
+    try:
+        for profile in load_profiles() or []:
+            if str(profile.get("Id") or "").strip() == str(acc_id).strip():
+                return str(profile.get("Name") or acc_id)
+    except Exception as exc:
+        print(f"[logs/view] warning: failed to resolve account name for {acc_id}: {exc}")
+    return str(acc_id)
+
+
 ##############################
 # BACKUP
 ##############################
@@ -4977,6 +5189,76 @@ def api_logs():
     if len(lines)>290:
         lines= lines[-290:]
     return {"acc_id":acc_id,"logs": lines}
+
+
+@app.route("/api/logs/view")
+def api_logs_view():
+    """Новый структурированный API логов для UI/ботов (без поломки старого /api/logs)."""
+
+    acc_id = (request.args.get("acc_id") or "").strip()
+    if not acc_id:
+        return jsonify({"ok": False, "error": "acc_id is required"}), 400
+
+    limit_raw = (request.args.get("limit") or "200").strip()
+    try:
+        limit = int(limit_raw)
+    except Exception:
+        return jsonify({"ok": False, "error": "limit must be integer"}), 400
+
+    limit = max(1, min(limit, 500))
+
+    conn = None
+    try:
+        conn = open_db(LOGS_DB)
+        c = conn.cursor()
+
+        exists = c.execute(
+            "SELECT 1 FROM cached_logs WHERE acc_id=? LIMIT 1",
+            (acc_id,),
+        ).fetchone()
+        if not exists:
+            return jsonify({"ok": False, "error": "acc_id not found"}), 404
+
+        rows = c.execute(
+            """
+            SELECT dt, raw_line
+            FROM cached_logs
+            WHERE acc_id=?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (acc_id, limit),
+        ).fetchall()
+    except Exception as exc:
+        print(f"[api/logs/view] failed for {acc_id}: {exc}")
+        return jsonify({"ok": False, "error": "Не удалось загрузить логи"}), 500
+    finally:
+        try:
+            if conn:
+                conn.close()
+        except Exception:
+            pass
+
+    account_name = _resolve_account_name_for_logs(acc_id)
+    items = []
+    for dt_part, raw_line in rows:
+        if "[DBG]" in (raw_line or ""):
+            continue
+        normalized = parse_human_log_line(dt_part or "", raw_line or "", account_name=account_name)
+        if normalized:
+            items.append(normalized)
+
+    items.reverse()
+
+    return jsonify(
+        {
+            "ok": True,
+            "acc_id": acc_id,
+            "account_name": account_name,
+            "items": items,
+            "summary": build_human_logs_summary(items),
+        }
+    )
 
 @app.route("/api/schema", methods=["GET"])
 def api_get_schema():
