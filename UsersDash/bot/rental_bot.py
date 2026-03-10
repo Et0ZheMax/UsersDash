@@ -123,6 +123,20 @@ class RuntimeConfig:
 logger = logging.getLogger(__name__)
 
 
+STAGE_LABELS: dict[str, str] = {
+    "before_3d": "за 3 дня",
+    "before_1d": "за 1 день",
+    "on_expiry": "в день окончания",
+    "expired_plus": "просрочено+",
+}
+
+STATUS_LABELS: dict[str, str] = {
+    "sent": "отправлено",
+    "delivered": "доставлено",
+    "failed": "ошибка",
+}
+
+
 def build_runtime_config() -> RuntimeConfig:
     """Собирает настройки запуска из ENV."""
 
@@ -961,10 +975,13 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     subscriber = subs_by_id.get(row.subscriber_id) or subs_by_user_id.get(row.user_id)
                     username = (subscriber.username or "").strip() if subscriber else ""
                     user_label = f"@{username} ({row.user_id})" if username else str(row.user_id or "—")
-                    ack = f"✅ увидел ({row.acked_at:%d.%m %H:%M})" if row.acked_at else "—"
+                    stage_label = STAGE_LABELS.get(row.stage or "", row.stage or "—")
+                    status_code = row.status or "sent"
+                    status_label = STATUS_LABELS.get(status_code, status_code)
+                    ack = f"подтверждено ({row.acked_at:%d.%m %H:%M})" if row.acked_at else "нет"
                     lines.append(
-                        f"• {created_at} | {user_label} | {account_name} | due {due_on} "
-                        f"| stage={row.stage or '—'} | status={row.status or 'sent'} | ack={ack}"
+                        f"• {created_at} | {user_label} | {account_name} | срок: {due_on} "
+                        f"| этап: {stage_label} | доставка: {status_label} | подтверждение: {ack}"
                     )
 
             chunk: list[str] = []
