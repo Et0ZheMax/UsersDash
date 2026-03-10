@@ -1289,3 +1289,68 @@ def fetch_server_cycle_time(
                 pass
 
     return data, ""
+
+
+def fetch_account_logs_view(account, *, limit: int = 200) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Получает нормализованные логи аккаунта с удалённого RSSv7 `/api/logs/view`."""
+
+    server = getattr(account, "server", None)
+    if not server:
+        return None, "У фермы не назначен сервер"
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return None, "api_base_url не задан"
+
+    safe_limit = max(1, min(int(limit or 200), 500))
+
+    server_resources = fetch_resources_for_server(server)
+    remote = _resolve_remote_account(account, server_resources)
+    remote_acc_id = str((remote or {}).get("id") or "").strip()
+    if not remote_acc_id:
+        return None, "Не удалось определить acc_id на удалённом сервере"
+
+    url = f"{base}/logs/view?acc_id={quote(remote_acc_id, safe='')}&limit={safe_limit}"
+
+    try:
+        resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
+    except Timeout:
+        return None, f"Таймаут при запросе логов ({server.name})"
+    except RequestException as exc:
+        return None, f"Ошибка сети при запросе логов: {exc}"
+
+    if not resp.ok:
+        return None, _format_http_error(resp)
+
+    try:
+        data = resp.json()
+    except ValueError:
+        return None, "Удалённый сервер вернул невалидный JSON логов"
+
+    if not isinstance(data, dict):
+        return None, "Некорректный формат ответа логов"
+
+    if not data.get("ok", True):
+        return None, str(data.get("error") or "Удалённый сервер вернул ошибку")
+
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+
+    owner = getattr(getattr(account, "owner", None), "username", None)
+    payload = {
+        "ok": True,
+        "account_id": account.id,
+        "acc_id": data.get("acc_id") or remote_acc_id,
+        "account_name": data.get("account_name") or getattr(account, "name", ""),
+        "owner_name": owner,
+        "server_name": getattr(server, "name", None),
+        "items": items,
+        "summary": {
+            "total": int(summary.get("total") or len(items)),
+            "warnings": int(summary.get("warnings") or 0),
+            "errors": int(summary.get("errors") or 0),
+            "finished": bool(summary.get("finished")),
+            "reached_max_marches": bool(summary.get("reached_max_marches")),
+        },
+    }
+    return payload, ""

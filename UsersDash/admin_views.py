@@ -64,6 +64,7 @@ from UsersDash.services.remote_api import (
     fetch_server_self_status,
     fetch_server_cycle_time,
     fetch_watch_summary,
+    fetch_account_logs_view,
     rename_template_payload,
     save_template_payload,
     update_account_active,
@@ -1319,6 +1320,46 @@ def api_watch_cards():
         "items": watch_cards,
         "generated_at": datetime.utcnow().isoformat(),
     })
+
+
+@admin_bp.route("/api/account-logs-view", methods=["GET"])
+@login_required
+def api_account_logs_view():
+    """Возвращает нормализованные логи выбранной фермы для модалки админ-дэшборда."""
+
+    admin_required()
+
+    account_id_raw = (request.args.get("account_id") or "").strip()
+    if not account_id_raw:
+        return jsonify({"ok": False, "error": "account_id is required"}), 400
+
+    try:
+        account_id = int(account_id_raw)
+    except ValueError:
+        return jsonify({"ok": False, "error": "account_id must be integer"}), 400
+
+    limit_raw = (request.args.get("limit") or "200").strip()
+    try:
+        limit = int(limit_raw)
+    except ValueError:
+        return jsonify({"ok": False, "error": "limit must be integer"}), 400
+
+    limit = max(1, min(limit, 500))
+
+    account = (
+        Account.query.options(joinedload(Account.server), joinedload(Account.owner))
+        .filter(Account.id == account_id)
+        .first()
+    )
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    payload, error = fetch_account_logs_view(account, limit=limit)
+    if error:
+        status = 404 if _is_remote_account_missing(error) else 502
+        return jsonify({"ok": False, "error": error}), status
+
+    return jsonify(payload or {"ok": True, "items": [], "summary": {}})
 
 
 @admin_bp.route("/api/incomplete-farm-data", methods=["GET"])

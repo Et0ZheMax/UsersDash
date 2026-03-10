@@ -677,6 +677,169 @@
         }
     }
 
+    function escapeHtml(value) {
+        const text = String(value ?? "");
+        return text
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+    }
+
+    function setupAccountLogsModal() {
+        const table = document.querySelector('[data-role="accounts-table"]');
+        const modal = document.querySelector('[data-role="farm-logs-modal"]');
+        if (!table || !modal) return;
+
+        const endpoint = table.dataset.logsEndpoint;
+        if (!endpoint) return;
+
+        const closeButtons = modal.querySelectorAll('[data-role="farm-logs-close"]');
+        const subtitleEl = modal.querySelector('[data-role="farm-logs-subtitle"]');
+        const summaryEl = modal.querySelector('[data-role="farm-logs-summary"]');
+        const loadingEl = modal.querySelector('[data-role="farm-logs-loading"]');
+        const errorEl = modal.querySelector('[data-role="farm-logs-error"]');
+        const emptyEl = modal.querySelector('[data-role="farm-logs-empty"]');
+        const listEl = modal.querySelector('[data-role="farm-logs-list"]');
+
+        let currentRequestId = 0;
+
+        const setState = ({ loading = false, error = false, empty = false } = {}) => {
+            if (loadingEl) loadingEl.hidden = !loading;
+            if (errorEl) errorEl.hidden = !error;
+            if (emptyEl) emptyEl.hidden = !empty;
+            if (listEl) listEl.hidden = loading || error || empty;
+        };
+
+        const closeModal = () => {
+            modal.hidden = true;
+            modal.classList.remove('is-open');
+        };
+
+        const openModal = () => {
+            modal.hidden = false;
+            modal.classList.add('is-open');
+        };
+
+        const renderSummary = (summary) => {
+            const total = Number(summary && summary.total) || 0;
+            const warnings = Number(summary && summary.warnings) || 0;
+            const finished = Boolean(summary && summary.finished);
+            const maxMarches = Boolean(summary && summary.reached_max_marches);
+
+            summaryEl.innerHTML = [
+                `<span class="farm-logs-chip">Всего: ${total}</span>`,
+                `<span class="farm-logs-chip">Предупреждения: ${warnings}</span>`,
+                `<span class="farm-logs-chip">Сценарий: ${finished ? 'завершён' : 'не завершён'}</span>`,
+                `<span class="farm-logs-chip">Лимит маршей: ${maxMarches ? 'достигнут' : 'нет'}</span>`,
+            ].join('');
+        };
+
+        const renderItems = (items) => {
+            if (!listEl) return;
+
+            listEl.innerHTML = (items || []).map((item) => {
+                const time = escapeHtml(item.time || '--:--:--');
+                const groupLabel = escapeHtml(item.group_label || 'Система');
+                const text = escapeHtml(item.event_text || item.raw_text || '—');
+                const groupClass = `farm-logs-group--${escapeHtml(item.group || 'system')}`;
+
+                return `
+                    <div class="farm-logs-item">
+                        <div class="farm-logs-item__time">${time}</div>
+                        <div class="farm-logs-item__main">
+                            <span class="farm-logs-group ${groupClass}">${groupLabel}</span>
+                            <div class="farm-logs-item__text">${text}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        };
+
+        const fetchLogs = async (btn) => {
+            const row = btn.closest('tr[data-account-id]');
+            const accountId = btn.dataset.accountId || (row ? row.dataset.accountId : '');
+            if (!accountId) {
+                showToast('Не удалось определить ферму.', 'error');
+                return;
+            }
+
+            const accountName = row ? row.dataset.accountName || '—' : '—';
+            const ownerName = row ? row.dataset.ownerName || '—' : '—';
+            const serverName = row ? row.dataset.serverName || 'N/A' : 'N/A';
+
+            if (subtitleEl) {
+                subtitleEl.textContent = `${accountName} · ${ownerName} · ${serverName}`;
+            }
+            if (summaryEl) {
+                summaryEl.innerHTML = '';
+            }
+            if (errorEl) {
+                errorEl.textContent = 'Не удалось загрузить логи.';
+            }
+            if (listEl) {
+                listEl.innerHTML = '';
+            }
+
+            openModal();
+            setState({ loading: true, error: false, empty: false });
+
+            setButtonLoading(btn, true);
+            const textEl = findBtnTextEl(btn);
+            if (textEl) {
+                textEl.textContent = 'Загрузка...';
+            }
+
+            const requestId = ++currentRequestId;
+            try {
+                const resp = await fetch(`${endpoint}?account_id=${encodeURIComponent(accountId)}&limit=200`, {
+                    headers: { 'x-skip-loader': '1' },
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok || !data.ok) {
+                    throw new Error((data && (data.error || data.message)) || 'Не удалось загрузить логи');
+                }
+
+                if (requestId !== currentRequestId) return;
+
+                renderSummary(data.summary || {});
+                const items = Array.isArray(data.items) ? data.items : [];
+                if (!items.length) {
+                    setState({ loading: false, error: false, empty: true });
+                    return;
+                }
+
+                renderItems(items);
+                setState({ loading: false, error: false, empty: false });
+            } catch (err) {
+                console.error(err);
+                if (requestId !== currentRequestId) return;
+                if (errorEl) {
+                    errorEl.textContent = err.message || 'Не удалось загрузить логи.';
+                }
+                setState({ loading: false, error: true, empty: false });
+                showToast(err.message || 'Ошибка при загрузке логов.', 'error');
+            } finally {
+                setButtonLoading(btn, false);
+            }
+        };
+
+        closeButtons.forEach((btn) => btn.addEventListener('click', closeModal));
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+
+        table.addEventListener('click', (event) => {
+            const btn = event.target.closest('button[data-action="open-account-logs"]');
+            if (!btn) return;
+            event.preventDefault();
+            fetchLogs(btn);
+        });
+    }
+
     function setFarmDataRowDirtyState(row, isDirty) {
         if (!row) return;
         row.dataset.dirty = isDirty ? "1" : "0";
@@ -953,6 +1116,7 @@
         applyFarmDataStatusUI();
         initFarmDataRowIndicators();
         loadAdminAccountResources();
+        setupAccountLogsModal();
         setupServerStatesSection();
         setupWatchCardsSection();
     });
@@ -969,6 +1133,8 @@
         if (action === "refresh-account") {
             event.preventDefault();
             handleRefreshAccount(btn);
+        } else if (action === "open-account-logs") {
+            // handled in setupAccountLogsModal via table-level delegation
         } else if (action === "toggle-step") {
             event.preventDefault();
             handleToggleStep(btn);
