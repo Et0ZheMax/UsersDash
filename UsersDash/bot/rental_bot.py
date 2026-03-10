@@ -90,6 +90,10 @@ class BatchPaymentFSM(StatesGroup):
     waiting_method = State()
     waiting_comment = State()
     waiting_manual_comment = State()
+    waiting_change_kind = State()
+    waiting_tariff_choice = State()
+    waiting_change_scope = State()
+    waiting_change_farm_selection = State()
 
 
 
@@ -191,6 +195,95 @@ def build_dashboard_keyboard(admin_contact: str | None) -> InlineKeyboardMarkup:
     ]
     if admin_contact:
         rows.append([InlineKeyboardButton(text="Связаться с администратором", url=admin_contact)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_change_kind_keyboard(batch_id: int) -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру выбора типа изменений для batch-заявки."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❌ Не продлеваю в этом месяце",
+                    callback_data=f"change_kind:cancel:{batch_id}",
+                )
+            ],
+            [InlineKeyboardButton(text="🔄 Смена тарифа", callback_data=f"change_kind:tariff:{batch_id}")],
+            [InlineKeyboardButton(text="✍️ Другое изменение", callback_data=f"change_kind:other:{batch_id}")],
+        ]
+    )
+
+
+def build_change_scope_keyboard(batch_id: int) -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру выбора охвата изменений по фермам."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🌐 Применить ко всем фермам",
+                    callback_data=f"change_scope:all:{batch_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🎯 Выбрать конкретные фермы",
+                    callback_data=f"change_scope:custom:{batch_id}:0",
+                )
+            ],
+        ]
+    )
+
+
+def build_tariff_change_keyboard(batch_id: int) -> InlineKeyboardMarkup:
+    """Возвращает клавиатуру выбора нового тарифа."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Премиум — 1399 ₽", callback_data=f"change_tariff:premium:{batch_id}")],
+            [InlineKeyboardButton(text="Расширенный — 999 ₽", callback_data=f"change_tariff:extended:{batch_id}")],
+            [InlineKeyboardButton(text="Только фарм — 499 ₽", callback_data=f"change_tariff:farm:{batch_id}")],
+        ]
+    )
+
+
+def build_change_farms_keyboard(batch: RenewalBatchRequest, page: int = 0, page_size: int = 8) -> InlineKeyboardMarkup:
+    """Рисует страницу выбора ферм для изменений клиента."""
+
+    items = list(batch.items.order_by("id").all())
+    total_pages = max(1, (len(items) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    chunk = items[start:start + page_size]
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in chunk:
+        marker = "✅" if item.selected_for_renewal else "⬜"
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{marker} {item.account_name_snapshot}",
+                    callback_data=f"change_toggle:{batch.id}:{item.id}:{page}",
+                )
+            ]
+        )
+
+    nav_row: list[InlineKeyboardButton] = []
+    if page > 0:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"change_page:{batch.id}:{page - 1}"))
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton(text="➡️ Далее", callback_data=f"change_page:{batch.id}:{page + 1}"))
+    if nav_row:
+        rows.append(nav_row)
+
+    rows.append([
+        InlineKeyboardButton(
+            text="☑️ Выбрать всё на странице",
+            callback_data=f"change_select_page:{batch.id}:{page}",
+        )
+    ])
+    rows.append([InlineKeyboardButton(text="Готово", callback_data=f"change_done:{batch.id}")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -872,7 +965,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     mode_map = {
                         "full": "оплачено всё",
                         "partial": "оплачена часть",
-                        "manual_change": "есть изменения",
+                        "manual_change": "запрошены изменения",
                     }
                     mode_text = mode_map.get((batch.mode or "").strip(), batch.mode or "—")
                     method = (batch.payment_method or "—").strip() or "—"
@@ -1230,11 +1323,273 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             mark_batch_mode(batch, "manual_change")
 
         await state.set_data({"batch_id": batch.id, "mode": "manual_change"})
-        await state.set_state(BatchPaymentFSM.waiting_manual_comment)
+        await state.set_state(BatchPaymentFSM.waiting_change_kind)
         await callback.message.answer(
-            "Опишите изменения: какие фермы продлеваете, какие отключить или что нужно скорректировать."
+            "Выберите, что хотите изменить:",
+            reply_markup=build_change_kind_keyboard(batch.id),
         )
         await callback.answer()
+
+    @router.callback_query(F.data.startswith("change_kind:"))
+    async def on_change_kind(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        _, kind, raw_batch_id = parts
+        if not raw_batch_id.isdigit():
+            await callback.answer("Некорректный id", show_alert=True)
+            return
+        batch_id = int(raw_batch_id)
+
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            try:
+                batch = get_batch_for_user(batch_id, profile.user_id)
+                ensure_batch_editable(batch)
+            except BatchValidationError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+
+        data = await state.get_data()
+        data.update({"batch_id": batch_id, "mode": "manual_change", "change_kind": kind})
+        await state.set_data(data)
+
+        if kind == "tariff":
+            await state.set_state(BatchPaymentFSM.waiting_tariff_choice)
+            await callback.message.answer(
+                "Выберите новый тариф:\n"
+                "• Премиум — 1399 ₽\n"
+                "• Расширенный — 999 ₽\n"
+                "• Только фарм — 499 ₽\n\n"
+                "Для 4+ ферм действует скидка (подробнее в лс админу).",
+                reply_markup=build_tariff_change_keyboard(batch_id),
+            )
+            await callback.answer()
+            return
+
+        await state.set_state(BatchPaymentFSM.waiting_change_scope)
+        if kind == "cancel":
+            prompt = "Укажите охват отказа от продления в этом месяце:"
+        else:
+            prompt = "Укажите, к каким фермам относятся изменения:"
+        await callback.message.answer(prompt, reply_markup=build_change_scope_keyboard(batch_id))
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("change_tariff:"))
+    async def on_change_tariff(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":", 2)
+        if len(parts) != 3:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        _, tariff_code, raw_batch_id = parts
+        if not raw_batch_id.isdigit():
+            await callback.answer("Некорректный id", show_alert=True)
+            return
+        batch_id = int(raw_batch_id)
+
+        tariffs = {
+            "premium": "Премиум — 1399 ₽",
+            "extended": "Расширенный — 999 ₽",
+            "farm": "Только фарм — 499 ₽",
+        }
+        selected_tariff = tariffs.get(tariff_code)
+        if not selected_tariff:
+            await callback.answer("Неизвестный тариф", show_alert=True)
+            return
+
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            try:
+                batch = get_batch_for_user(batch_id, profile.user_id)
+                ensure_batch_editable(batch)
+            except BatchValidationError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+
+        data = await state.get_data()
+        data.update(
+            {
+                "batch_id": batch_id,
+                "mode": "manual_change",
+                "change_kind": "tariff",
+                "tariff_target": selected_tariff,
+            }
+        )
+        await state.set_data(data)
+        await state.set_state(BatchPaymentFSM.waiting_change_scope)
+        await callback.message.answer(
+            f"Вы выбрали тариф: {selected_tariff}.\nТеперь укажите, куда применить смену тарифа:",
+            reply_markup=build_change_scope_keyboard(batch_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("change_scope:"))
+    async def on_change_scope(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":")
+        if len(parts) < 3:
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        _, scope, raw_batch_id = parts[:3]
+        page = 0
+        if len(parts) > 3 and parts[3].isdigit():
+            page = int(parts[3])
+        if not raw_batch_id.isdigit():
+            await callback.answer("Некорректный id", show_alert=True)
+            return
+        batch_id = int(raw_batch_id)
+
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            try:
+                batch = get_batch_for_user(batch_id, profile.user_id)
+                ensure_batch_editable(batch)
+            except BatchValidationError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+
+            all_item_ids = {item.account_id for item in batch.items}
+            if scope == "all":
+                set_batch_selected_accounts(batch=batch, selected_account_ids=all_item_ids)
+            elif scope == "custom":
+                set_batch_selected_accounts(batch=batch, selected_account_ids=set())
+            else:
+                await callback.answer("Неизвестный вариант", show_alert=True)
+                return
+
+            mark_batch_mode(batch, "manual_change")
+
+        data = await state.get_data()
+        data.update({"batch_id": batch_id, "mode": "manual_change", "change_scope": scope})
+        await state.set_data(data)
+
+        if scope == "all":
+            await state.set_state(BatchPaymentFSM.waiting_manual_comment)
+            await callback.message.answer(
+                "Добавьте комментарий для администратора (или отправьте '-')."
+            )
+            await callback.answer("Выбраны все фермы")
+            return
+
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            batch = get_batch_for_user(batch_id, profile.user_id)
+            keyboard = build_change_farms_keyboard(batch, page=page)
+        await state.set_state(BatchPaymentFSM.waiting_change_farm_selection)
+        await callback.message.answer(
+            "Выберите фермы, к которым применить изменение:",
+            reply_markup=keyboard,
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("change_page:"))
+    async def on_change_page(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":")
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        batch_id = int(parts[1])
+        page = int(parts[2])
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            try:
+                batch = get_batch_for_user(batch_id, profile.user_id)
+                ensure_batch_editable(batch)
+            except BatchValidationError as exc:
+                await callback.answer(str(exc), show_alert=True)
+                return
+            keyboard = build_change_farms_keyboard(batch, page=page)
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("change_toggle:"))
+    async def on_change_toggle(callback: CallbackQuery) -> None:
+        parts = (callback.data or "").split(":")
+        if len(parts) != 4 or not all(part.isdigit() for part in parts[1:]):
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        batch_id, item_id, page = map(int, parts[1:])
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            batch = get_batch_for_user(batch_id, profile.user_id)
+            ensure_batch_editable(batch)
+            item = RenewalBatchItem.query.filter_by(batch_request_id=batch.id, id=item_id).first()
+            if not item:
+                await callback.answer("Ферма не найдена", show_alert=True)
+                return
+            item.selected_for_renewal = not item.selected_for_renewal
+            db.session.commit()
+            keyboard = build_change_farms_keyboard(batch, page=page)
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+        await callback.answer("Обновлено")
+
+    @router.callback_query(F.data.startswith("change_select_page:"))
+    async def on_change_select_page(callback: CallbackQuery) -> None:
+        parts = (callback.data or "").split(":")
+        if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        batch_id = int(parts[1])
+        page = int(parts[2])
+        page_size = 8
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            batch = get_batch_for_user(batch_id, profile.user_id)
+            ensure_batch_editable(batch)
+            items = list(batch.items.order_by(RenewalBatchItem.id.asc()).all())
+            start = page * page_size
+            chunk = items[start:start + page_size]
+            for item in chunk:
+                item.selected_for_renewal = True
+            db.session.commit()
+            keyboard = build_change_farms_keyboard(batch, page=page)
+        await callback.message.edit_reply_markup(reply_markup=keyboard)
+        await callback.answer("Страница отмечена")
+
+    @router.callback_query(F.data.startswith("change_done:"))
+    async def on_change_done(callback: CallbackQuery, state: FSMContext) -> None:
+        parts = (callback.data or "").split(":", 1)
+        if len(parts) != 2 or not parts[1].isdigit():
+            await callback.answer("Некорректные данные", show_alert=True)
+            return
+        batch_id = int(parts[1])
+        with app.app_context():
+            profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+            if not profile:
+                await callback.answer("Чат не привязан", show_alert=True)
+                return
+            batch = get_batch_for_user(batch_id, profile.user_id)
+            ensure_batch_editable(batch)
+            selected_count = RenewalBatchItem.query.filter_by(
+                batch_request_id=batch.id,
+                selected_for_renewal=True,
+            ).count()
+            if selected_count == 0:
+                await callback.answer("Выберите хотя бы одну ферму.", show_alert=True)
+                return
+            mark_batch_mode(batch, "manual_change")
+
+        await state.set_state(BatchPaymentFSM.waiting_manual_comment)
+        await callback.message.answer("Добавьте комментарий для администратора (или отправьте '-').")
+        await callback.answer("Готово")
 
     @router.callback_query(F.data == "menu:payment_info")
     async def on_menu_payment_info(callback: CallbackQuery) -> None:
@@ -1887,9 +2242,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 return
 
         await state.set_data({"batch_id": batch_id, "mode": "manual_change"})
-        await state.set_state(BatchPaymentFSM.waiting_manual_comment)
+        await state.set_state(BatchPaymentFSM.waiting_change_kind)
         await callback.message.answer(
-            "Опишите изменения: какие фермы продлеваете, какие отключить или что нужно скорректировать."
+            "Выберите, что хотите изменить:",
+            reply_markup=build_change_kind_keyboard(batch_id),
         )
         await callback.answer()
 
@@ -2036,6 +2392,9 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
     async def on_batch_manual_comment(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
         batch_id = int(data["batch_id"])
+        change_kind = str(data.get("change_kind") or "other")
+        change_scope = str(data.get("change_scope") or "all")
+        tariff_target = str(data.get("tariff_target") or "").strip()
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(message.chat.id)).first()
             if not profile:
@@ -2044,11 +2403,32 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 return
             try:
                 batch = get_batch_for_user(batch_id, profile.user_id)
+                selected_items = [item for item in batch.items if item.selected_for_renewal]
+                selected_names = ", ".join(item.account_name_snapshot for item in selected_items[:12])
+                if len(selected_items) > 12:
+                    selected_names = f"{selected_names}, … и ещё {len(selected_items) - 12}"
+                if not selected_names:
+                    selected_names = "—"
+                extra_lines = [
+                    f"Тип изменения: {change_kind}",
+                    f"Охват: {'все фермы' if change_scope == 'all' else 'выбранные фермы'}",
+                    f"Фермы: {selected_names}",
+                ]
+                if tariff_target:
+                    extra_lines.append(f"Новый тариф: {tariff_target}")
+                    extra_lines.append(
+                        "Примечание: при установке от 4-х ферм действует скидка "
+                        "(подробнее в лс админу)."
+                    )
+                user_comment = (message.text or "").strip()
+                comment_payload = "\n".join(extra_lines)
+                if user_comment and user_comment != "-":
+                    comment_payload = f"{comment_payload}\nКомментарий клиента: {user_comment}"
                 submit_batch_request(
                     batch=batch,
                     amount_rub=None,
                     payment_method=None,
-                    comment=(message.text or "").strip() or "Запрошена ручная обработка",
+                    comment=comment_payload,
                     receipt_file_id=None,
                 )
             except BatchValidationError as exc:
