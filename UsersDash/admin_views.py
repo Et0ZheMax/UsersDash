@@ -1338,13 +1338,16 @@ def api_account_logs_view():
     except ValueError:
         return jsonify({"ok": False, "error": "account_id must be integer"}), 400
 
-    limit_raw = (request.args.get("limit") or "200").strip()
+    limit_raw = (request.args.get("limit") or "150").strip()
     try:
         limit = int(limit_raw)
     except ValueError:
         return jsonify({"ok": False, "error": "limit must be integer"}), 400
 
-    limit = max(1, min(limit, 500))
+    limit = max(1, min(limit, 300))
+
+    include_debug_raw = (request.args.get("include_debug") or "0").strip().lower()
+    include_debug = include_debug_raw in ("1", "true", "yes", "on")
 
     account = (
         Account.query.options(joinedload(Account.server), joinedload(Account.owner))
@@ -1354,7 +1357,7 @@ def api_account_logs_view():
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
-    payload, error = fetch_account_logs_view(account, limit=limit)
+    payload, error = fetch_account_logs_view(account, limit=limit, include_debug=include_debug)
     if error:
         status = 404 if _is_remote_account_missing(error) else 502
         return jsonify({"ok": False, "error": error}), status

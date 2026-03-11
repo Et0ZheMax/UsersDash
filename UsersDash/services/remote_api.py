@@ -1291,7 +1291,35 @@ def fetch_server_cycle_time(
     return data, ""
 
 
-def fetch_account_logs_view(account, *, limit: int = 200) -> Tuple[Optional[Dict[str, Any]], str]:
+
+
+def _resolve_remote_acc_id_for_logs(account) -> Optional[str]:
+    """Определяет remote acc_id для логов с лёгким и предсказуемым fallback-порядком."""
+
+    internal_id = str(getattr(account, "internal_id", "") or "").strip()
+    if internal_id:
+        return internal_id
+
+    server = getattr(account, "server", None)
+    if not server:
+        return None
+
+    # Fallback: используем /api/resources только когда локального идентификатора нет.
+    # Это дороже, но сохраняет совместимость со старым mapping account -> remote acc_id.
+    server_resources = fetch_resources_for_server(server)
+    remote_id, _ = _resolve_remote_account(account, server_resources)
+    if remote_id:
+        return str(remote_id).strip()
+
+    name = str(getattr(account, "name", "") or "").strip()
+    return name or None
+
+def fetch_account_logs_view(
+    account,
+    *,
+    limit: int = 150,
+    include_debug: bool = False,
+) -> Tuple[Optional[Dict[str, Any]], str]:
     """Получает нормализованные логи аккаунта с удалённого RSSv7 `/api/logs/view`."""
 
     server = getattr(account, "server", None)
@@ -1302,15 +1330,17 @@ def fetch_account_logs_view(account, *, limit: int = 200) -> Tuple[Optional[Dict
     if not base:
         return None, "api_base_url не задан"
 
-    safe_limit = max(1, min(int(limit or 200), 500))
+    safe_limit = max(1, min(int(limit or 150), 300))
 
-    server_resources = fetch_resources_for_server(server)
-    remote = _resolve_remote_account(account, server_resources)
-    remote_acc_id = str((remote or {}).get("id") or "").strip()
+    remote_acc_id = _resolve_remote_acc_id_for_logs(account)
     if not remote_acc_id:
         return None, "Не удалось определить acc_id на удалённом сервере"
 
-    url = f"{base}/logs/view?acc_id={quote(remote_acc_id, safe='')}&limit={safe_limit}"
+    debug_flag = "1" if include_debug else "0"
+    url = (
+        f"{base}/logs/view?acc_id={quote(remote_acc_id, safe='')}&limit={safe_limit}"
+        f"&include_debug={debug_flag}"
+    )
 
     try:
         resp = requests.get(url, timeout=DEFAULT_TIMEOUT)
@@ -1351,6 +1381,9 @@ def fetch_account_logs_view(account, *, limit: int = 200) -> Tuple[Optional[Dict
             "errors": int(summary.get("errors") or 0),
             "finished": bool(summary.get("finished")),
             "reached_max_marches": bool(summary.get("reached_max_marches")),
+            "last_event_time": str(summary.get("last_event_time") or ""),
+            "last_event_text": str(summary.get("last_event_text") or ""),
+            "scenario_state": str(summary.get("scenario_state") or "idle"),
         },
     }
     return payload, ""

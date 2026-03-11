@@ -3255,6 +3255,8 @@ h1 {
   color: #dbe3ff;
   font-size: 12px;
   background: rgba(34, 42, 68, 0.45);
+  max-width: 100%;
+  white-space: normal;
 }
 
 .farm-logs-modal__state {

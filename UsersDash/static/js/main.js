@@ -16,7 +16,7 @@
         return btn.querySelector(".btn-spinner");
     }
 
-    function setButtonLoading(btn, isLoading) {
+    function setButtonLoading(btn, isLoading, loadingText = null) {
         if (!btn) return;
         const textEl = findBtnTextEl(btn);
         const spinnerEl = findBtnSpinnerEl(btn);
@@ -24,7 +24,14 @@
         if (isLoading) {
             btn.disabled = true;
             if (spinnerEl) spinnerEl.hidden = false;
-            if (textEl) textEl.dataset.originalText = textEl.textContent;
+            if (textEl) {
+                if (!textEl.dataset.originalText) {
+                    textEl.dataset.originalText = textEl.textContent;
+                }
+                if (loadingText) {
+                    textEl.textContent = loadingText;
+                }
+            }
         } else {
             btn.disabled = false;
             if (spinnerEl) spinnerEl.hidden = true;
@@ -704,6 +711,16 @@
         const listEl = modal.querySelector('[data-role="farm-logs-list"]');
 
         let currentRequestId = 0;
+        let currentFetchController = null;
+
+        const allowedGroups = new Set(['gather', 'march', 'system', 'finished', 'warning']);
+        const scenarioLabels = {
+            finished: 'завершён',
+            warning: 'внимание',
+            error: 'ошибка',
+            running: 'выполняется',
+            idle: 'ожидание',
+        };
 
         const setState = ({ loading = false, error = false, empty = false } = {}) => {
             if (loadingEl) loadingEl.hidden = !loading;
@@ -722,17 +739,33 @@
             modal.classList.add('is-open');
         };
 
+        const normalizeGroup = (rawGroup) => {
+            const group = String(rawGroup || '').toLowerCase().trim();
+            return allowedGroups.has(group) ? group : 'system';
+        };
+
         const renderSummary = (summary) => {
+            if (!summaryEl) return;
+
             const total = Number(summary && summary.total) || 0;
             const warnings = Number(summary && summary.warnings) || 0;
+            const errors = Number(summary && summary.errors) || 0;
             const finished = Boolean(summary && summary.finished);
             const maxMarches = Boolean(summary && summary.reached_max_marches);
+            const stateRaw = String((summary && summary.scenario_state) || 'idle').toLowerCase();
+            const scenarioState = scenarioLabels[stateRaw] ? stateRaw : 'idle';
+            const lastEventTime = escapeHtml((summary && summary.last_event_time) || '—');
+            const lastEventText = escapeHtml((summary && summary.last_event_text) || '—');
 
             summaryEl.innerHTML = [
                 `<span class="farm-logs-chip">Всего: ${total}</span>`,
                 `<span class="farm-logs-chip">Предупреждения: ${warnings}</span>`,
-                `<span class="farm-logs-chip">Сценарий: ${finished ? 'завершён' : 'не завершён'}</span>`,
+                `<span class="farm-logs-chip">Ошибки: ${errors}</span>`,
+                `<span class="farm-logs-chip">Сценарий: ${scenarioLabels[scenarioState]}</span>`,
+                `<span class="farm-logs-chip">Сценарий завершён: ${finished ? 'да' : 'нет'}</span>`,
                 `<span class="farm-logs-chip">Лимит маршей: ${maxMarches ? 'достигнут' : 'нет'}</span>`,
+                `<span class="farm-logs-chip">Последнее событие: ${lastEventTime}</span>`,
+                `<span class="farm-logs-chip">Текст: ${lastEventText}</span>`,
             ].join('');
         };
 
@@ -743,7 +776,8 @@
                 const time = escapeHtml(item.time || '--:--:--');
                 const groupLabel = escapeHtml(item.group_label || 'Система');
                 const text = escapeHtml(item.event_text || item.raw_text || '—');
-                const groupClass = `farm-logs-group--${escapeHtml(item.group || 'system')}`;
+                const group = normalizeGroup(item.group);
+                const groupClass = `farm-logs-group--${group}`;
 
                 return `
                     <div class="farm-logs-item">
@@ -769,32 +803,31 @@
             const ownerName = row ? row.dataset.ownerName || '—' : '—';
             const serverName = row ? row.dataset.serverName || 'N/A' : 'N/A';
 
+            if (currentFetchController) {
+                currentFetchController.abort();
+                currentFetchController = null;
+            }
+
             if (subtitleEl) {
                 subtitleEl.textContent = `${accountName} · ${ownerName} · ${serverName}`;
             }
-            if (summaryEl) {
-                summaryEl.innerHTML = '';
-            }
-            if (errorEl) {
-                errorEl.textContent = 'Не удалось загрузить логи.';
-            }
-            if (listEl) {
-                listEl.innerHTML = '';
-            }
+            if (summaryEl) summaryEl.innerHTML = '';
+            if (errorEl) errorEl.textContent = 'Не удалось загрузить логи.';
+            if (listEl) listEl.innerHTML = '';
 
             openModal();
             setState({ loading: true, error: false, empty: false });
 
-            setButtonLoading(btn, true);
-            const textEl = findBtnTextEl(btn);
-            if (textEl) {
-                textEl.textContent = 'Загрузка...';
-            }
-
+            const requestText = String(btn.dataset.loadingText || 'Загрузка...');
+            setButtonLoading(btn, true, requestText);
             const requestId = ++currentRequestId;
+            const controller = new AbortController();
+            currentFetchController = controller;
+
             try {
-                const resp = await fetch(`${endpoint}?account_id=${encodeURIComponent(accountId)}&limit=200`, {
+                const resp = await fetch(`${endpoint}?account_id=${encodeURIComponent(accountId)}&limit=150`, {
                     headers: { 'x-skip-loader': '1' },
+                    signal: controller.signal,
                 });
                 const data = await resp.json().catch(() => ({}));
                 if (!resp.ok || !data.ok) {
@@ -813,6 +846,9 @@
                 renderItems(items);
                 setState({ loading: false, error: false, empty: false });
             } catch (err) {
+                if (err && err.name === 'AbortError') {
+                    return;
+                }
                 console.error(err);
                 if (requestId !== currentRequestId) return;
                 if (errorEl) {
@@ -821,13 +857,21 @@
                 setState({ loading: false, error: true, empty: false });
                 showToast(err.message || 'Ошибка при загрузке логов.', 'error');
             } finally {
-                setButtonLoading(btn, false);
+                if (requestId === currentRequestId) {
+                    currentFetchController = null;
+                }
+                setButtonLoading(btn, false, requestText);
             }
         };
 
         closeButtons.forEach((btn) => btn.addEventListener('click', closeModal));
         modal.addEventListener('click', (event) => {
             if (event.target === modal) {
+                closeModal();
+            }
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && !modal.hidden) {
                 closeModal();
             }
         });
