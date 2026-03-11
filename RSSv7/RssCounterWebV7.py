@@ -1734,6 +1734,22 @@ _LOG_INFO_PREFIX_RE = re.compile(r"^(?:INFO|WARN|WARNING|ERROR|ERR|DEBUG)\|", re
 _LOG_SESSION_PREFIX_RE = re.compile(r"^[0-9a-f]{8,64}\|", re.IGNORECASE)
 _LOG_SAWMILL_LEVEL_RE = re.compile(r"^Gather:\s*Sawmill\s+Level\s+(\d+)\s*$", re.IGNORECASE)
 _LOG_MARCHES_PROGRESS_RE = re.compile(r"^Marches:\s*(\d+)\s*/\s*(\d+)\s*$", re.IGNORECASE)
+_LOG_TIMESTAMP_PREFIX_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s+[+-]\d{2}:\d{2})?\s*"
+)
+_HUMAN_LOG_EXACT_MAP = {
+    "Gather: Open Vip Menu": ("gather", "Сбор", "open_vip_menu", "Открыто VIP-меню"),
+    "Gather: Select Sawmill": ("gather", "Сбор", "select_sawmill", "Выбрана лесопилка"),
+    "March: Create March Troop": ("march", "Марш", "create_march_troop", "Собран марш"),
+    "March: Send Troops": ("march", "Марш", "send_troops", "Отряд отправлен"),
+    "Marches: Reached Maximum of Marches": (
+        "warning",
+        "Предупреждение",
+        "reached_max_marches",
+        "Достигнут лимит маршей",
+    ),
+    "gathervip Finished": ("finished", "Готово", "gathervip_finished", "Сценарий сбора завершён"),
+}
 
 
 def _format_log_time(dt_part: str) -> str:
@@ -1769,6 +1785,12 @@ def _extract_log_level(raw_line: str) -> str:
     return level_map.get(marker.group(1).upper(), "info")
 
 
+def _is_debug_log(raw_line: str) -> bool:
+    """Проверяет, является ли строка debug-сообщением."""
+
+    return _extract_log_level(raw_line) == "debug"
+
+
 def _clean_log_message(raw_line: str) -> str:
     """Убирает служебный префикс ([INF], INFO|session|...) и оставляет только текст события."""
 
@@ -1777,13 +1799,8 @@ def _clean_log_message(raw_line: str) -> str:
 
     text = (raw_line or "").strip()
 
-    if re.match(r"^\d{4}-\d{2}-\d{2}\s", text):
-        text = re.sub(
-            r"^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s+[+-]\d{2}:\d{2})?\s*",
-            "",
-            text,
-            count=1,
-        ).strip()
+    if _LOG_TIMESTAMP_PREFIX_RE.match(text):
+        text = _LOG_TIMESTAMP_PREFIX_RE.sub("", text, count=1).strip()
 
     text = _LOG_LEVEL_RE.sub("", text).strip()
     text = _LOG_INFO_PREFIX_RE.sub("", text).strip()
@@ -1791,14 +1808,19 @@ def _clean_log_message(raw_line: str) -> str:
     return text
 
 
-def parse_human_log_line(dt_part: str, raw_line: str, account_name: t.Optional[str] = None):
+def parse_human_log_line(
+    dt_part: str,
+    raw_line: str,
+    account_name: t.Optional[str] = None,
+    include_debug: bool = False,
+):
     """Нормализует строку лога в человекочитаемый объект для UI/API."""
 
     if not raw_line:
         return None
 
     level = _extract_log_level(raw_line)
-    if level == "debug":
+    if level == "debug" and not include_debug:
         return None
 
     cleaned = _clean_log_message(raw_line)
@@ -1815,21 +1837,7 @@ def parse_human_log_line(dt_part: str, raw_line: str, account_name: t.Optional[s
         "raw_text": cleaned,
     }
 
-    mapping = {
-        "Gather: Open Vip Menu": ("gather", "Сбор", "open_vip_menu", "Открыто VIP-меню"),
-        "Gather: Select Sawmill": ("gather", "Сбор", "select_sawmill", "Выбрана лесопилка"),
-        "March: Create March Troop": ("march", "Марш", "create_march_troop", "Собран марш"),
-        "March: Send Troops": ("march", "Марш", "send_troops", "Отряд отправлен"),
-        "Marches: Reached Maximum of Marches": (
-            "warning",
-            "Предупреждение",
-            "reached_max_marches",
-            "Достигнут лимит маршей",
-        ),
-        "gathervip Finished": ("finished", "Готово", "gathervip_finished", "Сценарий сбора завершён"),
-    }
-
-    preset = mapping.get(cleaned)
+    preset = _HUMAN_LOG_EXACT_MAP.get(cleaned)
     if preset:
         item["group"], item["group_label"], item["event_code"], item["event_text"] = preset
         if item["group"] == "warning" and item["level"] == "info":
@@ -1905,6 +1913,8 @@ def build_human_logs_summary(items):
     errors_count = 0
     finished = False
     reached_max_marches = False
+    last_event_time = ""
+    last_event_text = ""
 
     for item in items or []:
         level = (item.get("level") or "").lower()
@@ -1919,6 +1929,23 @@ def build_human_logs_summary(items):
             finished = True
         if code == "reached_max_marches" or "reached maximum of marches" in text:
             reached_max_marches = True
+        event_text = item.get("event_text") or item.get("raw_text") or ""
+        if event_text:
+            last_event_text = str(event_text)
+        event_time = item.get("time") or ""
+        if event_time:
+            last_event_time = str(event_time)
+
+    if errors_count > 0:
+        scenario_state = "error"
+    elif warnings_count > 0:
+        scenario_state = "warning"
+    elif finished:
+        scenario_state = "finished"
+    elif (items or []):
+        scenario_state = "running"
+    else:
+        scenario_state = "idle"
 
     return {
         "total": len(items or []),
@@ -1926,6 +1953,9 @@ def build_human_logs_summary(items):
         "errors": errors_count,
         "finished": finished,
         "reached_max_marches": reached_max_marches,
+        "last_event_time": last_event_time,
+        "last_event_text": last_event_text,
+        "scenario_state": scenario_state,
     }
 
 
@@ -5182,7 +5212,7 @@ def api_logs():
 
     lines=[]
     for (dt_part, ls) in rows:
-        if "[DBG]" in ls:
+        if _is_debug_log(ls or ""):
             continue
         lines.append(transformLogLine(dt_part, ls))
     lines.reverse()
@@ -5199,13 +5229,16 @@ def api_logs_view():
     if not acc_id:
         return jsonify({"ok": False, "error": "acc_id is required"}), 400
 
-    limit_raw = (request.args.get("limit") or "200").strip()
+    limit_raw = (request.args.get("limit") or "150").strip()
     try:
         limit = int(limit_raw)
     except Exception:
         return jsonify({"ok": False, "error": "limit must be integer"}), 400
 
-    limit = max(1, min(limit, 500))
+    include_debug_raw = (request.args.get("include_debug") or "0").strip().lower()
+    include_debug = include_debug_raw in ("1", "true", "yes", "on")
+
+    limit = max(1, min(limit, 300))
 
     conn = None
     try:
@@ -5242,9 +5275,12 @@ def api_logs_view():
     account_name = _resolve_account_name_for_logs(acc_id)
     items = []
     for dt_part, raw_line in rows:
-        if "[DBG]" in (raw_line or ""):
-            continue
-        normalized = parse_human_log_line(dt_part or "", raw_line or "", account_name=account_name)
+        normalized = parse_human_log_line(
+            dt_part or "",
+            raw_line or "",
+            account_name=account_name,
+            include_debug=include_debug,
+        )
         if normalized:
             items.append(normalized)
 
