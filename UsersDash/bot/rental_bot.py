@@ -364,6 +364,50 @@ async def safe_send_text(target: Message, text: str, *, reply_markup=None, chunk
             break
 
 
+def _fit_admin_card_text(text: str, limit: int = 3800) -> str:
+    """Гарантирует, что карточка с inline-кнопками поместится в одно сообщение."""
+
+    payload = (text or "").strip()
+    if len(payload) <= limit:
+        return payload
+    suffix = "\n… [карточка сокращена из-за лимита Telegram]"
+    safe_limit = max(100, limit - len(suffix))
+    return f"{payload[:safe_limit]}{suffix}"
+
+
+def _trim_text(value: str | None, limit: int, *, fallback: str = "—") -> str:
+    """Обрезает строку до лимита и возвращает fallback для пустых значений."""
+
+    prepared = (value or "").strip()
+    if not prepared:
+        return fallback
+    if len(prepared) <= limit:
+        return prepared
+    return f"{prepared[:limit]}…"
+
+
+def _safe_user_label(user_id: int | None, subscriber: TelegramSubscriber | None) -> str:
+    """Формирует человекочитаемую подпись клиента с fallback-значениями."""
+
+    username = (subscriber.username or "").strip() if subscriber else ""
+    if username:
+        return f"@{username} ({user_id or '—'})"
+    if user_id:
+        return f"user_id={user_id}"
+    if subscriber and subscriber.chat_id:
+        return f"chat_id={subscriber.chat_id}"
+    return "неизвестный клиент"
+
+
+def _batch_items_query(batch: RenewalBatchRequest):
+    """Возвращает query для элементов batch независимо от типа relationship (dynamic/обычный)."""
+
+    items_rel = batch.items
+    if hasattr(items_rel, "order_by"):
+        return items_rel.order_by(RenewalBatchItem.id.asc())
+    return RenewalBatchItem.query.filter_by(batch_request_id=batch.id).order_by(RenewalBatchItem.id.asc())
+
+
 def _account_status_label(account: Account) -> str:
     if account.blocked_for_payment:
         return "Заблокирована"
@@ -749,6 +793,92 @@ def _pause_text(profile: TelegramSubscriber) -> str:
     return "активны"
 
 
+async def _safe_switch_state(
+    state: FSMContext,
+    *,
+    new_state: State | None = None,
+    data: dict | None = None,
+    allowed_prefixes: tuple[str, ...] = (),
+) -> bool:
+    """Безопасно очищает конфликтующий FSM перед запуском нового сценария."""
+
+    old_state = await state.get_state()
+    new_state_name = new_state.state if new_state is not None else None
+
+    is_allowed_state = False
+    if old_state and allowed_prefixes:
+        for prefix in allowed_prefixes:
+            if old_state.startswith(prefix):
+                is_allowed_state = True
+                break
+
+    was_reset = bool(old_state) and not is_allowed_state
+    if was_reset:
+        await state.clear()
+
+    logger.info(
+        "FSM switch: old=%s new=%s reset=%s allowed_prefixes=%s",
+        old_state,
+        new_state_name,
+        was_reset,
+        ",".join(allowed_prefixes) if allowed_prefixes else "-",
+    )
+
+    if new_state is not None:
+        await state.set_state(new_state)
+    if data is not None:
+        await state.set_data(data)
+    return bool(old_state)
+
+
+def _resolve_batch_for_scenario(
+    *,
+    user_id: int,
+    subscriber_id: int,
+    requested_batch_id: int | None,
+    expected_mode: str | None,
+    candidates: list[NotificationCandidate],
+) -> RenewalBatchRequest:
+    """Возвращает безопасный batch для сценария без дублей draft и с явной проверкой mode."""
+
+    if requested_batch_id is not None:
+        batch = get_batch_for_user(requested_batch_id, user_id)
+        ensure_batch_editable(batch)
+        if expected_mode and (batch.mode or "").strip() not in {"", expected_mode}:
+            current_mode = (batch.mode or "—").strip() or "—"
+            raise BatchValidationError(
+                f"Сценарий устарел: batch в режиме «{current_mode}», ожидался «{expected_mode}». "
+                "Откройте «🏠 Меню» и начните заново."
+            )
+        return batch
+
+    # Если mode не указан (обычная оплата), делегируем логику переиспользования
+    # существующего draft в create_notification_batch().
+    if not expected_mode:
+        return create_notification_batch(user_id=user_id, subscriber_id=subscriber_id, candidates=candidates)
+
+    active_batches = (
+        RenewalBatchRequest.query.filter_by(user_id=user_id, subscriber_id=subscriber_id)
+        .filter(RenewalBatchRequest.status.in_(["draft", "payment_data_collecting"]))
+        .order_by(RenewalBatchRequest.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    for batch in active_batches:
+        mode = (batch.mode or "").strip()
+        if mode in {"", expected_mode}:
+            return batch
+
+    if active_batches:
+        active_modes = ", ".join(sorted({(item.mode or "—").strip() or "—" for item in active_batches}))
+        raise BatchValidationError(
+            "Есть активный черновик в другом режиме "
+            f"({active_modes}). Завершите текущий сценарий или используйте /cancel."
+        )
+
+    return create_notification_batch(user_id=user_id, subscriber_id=subscriber_id, candidates=candidates)
+
+
 def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
     print("===== RENTAL BOT HEALTH-CHECK =====")
     critical_ok = True
@@ -883,6 +1013,70 @@ def run_startup_health_check(app: Flask, cfg: RuntimeConfig) -> None:
     print("[OK] CRITICAL проверки пройдены" if critical_ok else "[WARN] Есть ошибки в CRITICAL проверках")
     print("===================================")
 
+
+def build_runtime_self_check_report(app: Flask) -> str:
+    """Формирует компактный self-check отчёт для быстрой диагностики после деплоя."""
+
+    with app.app_context():
+        single_statuses = ["payment_pending_confirmation", "payment_data_collecting", "needs_info"]
+        multi_statuses: list[str] = []
+        single_count = -1
+        multi_count = -1
+        data_warning = ""
+
+        try:
+            multi_statuses = get_multi_pending_statuses()
+            single_count = RenewalRequest.query.filter(RenewalRequest.status.in_(single_statuses)).count()
+            multi_count = RenewalBatchRequest.query.filter(RenewalBatchRequest.status.in_(multi_statuses)).count()
+        except Exception as exc:
+            data_warning = f"db_error={exc.__class__.__name__}"
+            logger.warning("Self-check: не удалось получить pending counts: %s", exc)
+
+        relation_kind = "unknown"
+        try:
+            relation_kind = str(inspect(RenewalBatchRequest).relationships["items"].lazy)
+        except Exception:
+            logger.exception("Не удалось определить тип relationship RenewalBatchRequest.items")
+
+        sample_batch = None
+        try:
+            sample_batch = (
+                RenewalBatchRequest.query.filter(
+                    RenewalBatchRequest.status.in_(["draft", "payment_data_collecting"])
+                )
+                .order_by(RenewalBatchRequest.created_at.desc())
+                .first()
+            )
+        except Exception as exc:
+            data_warning = data_warning or f"db_error={exc.__class__.__name__}"
+            logger.warning("Self-check: не удалось прочитать sample batch: %s", exc)
+        if sample_batch:
+            sample_items_count = _batch_items_query(sample_batch).count()
+            sample_card = _fit_admin_card_text(
+                (
+                    f"Заявка #{sample_batch.id}\n"
+                    f"Режим: {sample_batch.mode or '—'}\n"
+                    f"Комментарий: {_trim_text(sample_batch.comment, 500, fallback='—')}"
+                )
+            )
+            card_len = len(sample_card)
+        else:
+            sample_items_count = 0
+            card_len = 0
+
+    return "\n".join(
+        [
+            "🧪 Runtime self-check",
+            f"FSM конфликтные группы: PaymentFSM ↔ BatchPaymentFSM ↔ ClientClarifyFSM ↔ AdminClarifyFSM",
+            f"Pending single: {single_count} (statuses={single_statuses})",
+            f"Pending multi: {multi_count} (statuses={multi_statuses})",
+            f"Batch items relationship lazy={relation_kind}",
+            f"Sample batch items count: {sample_items_count}",
+            f"Sample admin card length: {card_len} (лимит 3800)",
+            f"Notes: {data_warning or 'ok'}",
+        ]
+    )
+
 def _admin_request_keyboard(request_id: int, include_open: bool = True) -> InlineKeyboardMarkup:
     rows = [[
         InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"admin_confirm:{request_id}"),
@@ -913,6 +1107,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         """Показывает администратору общую очередь подтверждений как на сайте."""
 
         try:
+            limit = max(1, min(limit, 50))
             prepared_single: list[tuple[str, InlineKeyboardMarkup]] = []
             prepared_multi: list[tuple[str, InlineKeyboardMarkup]] = []
             with app.app_context():
@@ -932,14 +1127,9 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                         if account and account.next_payment_amount is not None
                         else "—"
                     )
-                    user_label = str(request_row.user_id)
-                    username = (subscriber.username or "").strip() if subscriber else ""
-                    if username:
-                        user_label = f"@{username} ({request_row.user_id})"
-
-                    comment = (request_row.comment or "—").strip()
-                    if len(comment) > 220:
-                        comment = f"{comment[:220]}…"
+                    user_label = _safe_user_label(request_row.user_id, subscriber)
+                    comment = _trim_text(request_row.comment, 220)
+                    payment_method = _trim_text(request_row.payment_method, 64)
 
                     row_text = (
                         f"Заявка #{request_row.id}\n"
@@ -949,7 +1139,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                         f"Клиент: {user_label}\n"
                         f"Статус: {_status_label(request_row.status)}\n"
                         f"Клиент указал сумму: {request_row.amount_rub if request_row.amount_rub is not None else '—'}\n"
-                        f"Метод: {request_row.payment_method or '—'}\n"
+                        f"Метод: {payment_method}\n"
                         f"Дата заявки: {request_row.created_at:%d.%m.%Y %H:%M}\n"
                         f"Комментарий: {comment}"
                     )
@@ -957,10 +1147,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
                 for batch in multi_rows:
                     subscriber = batch.subscriber
-                    user_label = str(batch.user_id)
-                    username = (subscriber.username or "").strip() if subscriber else ""
-                    if username:
-                        user_label = f"@{username} ({batch.user_id})"
+                    user_label = _safe_user_label(batch.user_id, subscriber)
 
                     mode_map = {
                         "full": "оплачено всё",
@@ -968,18 +1155,24 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                         "manual_change": "запрошены изменения",
                     }
                     mode_text = mode_map.get((batch.mode or "").strip(), batch.mode or "—")
-                    method = (batch.payment_method or "—").strip() or "—"
-                    comment = (batch.comment or "—").strip()
-                    if len(comment) > 220:
-                        comment = f"{comment[:220]}…"
+                    method = _trim_text(batch.payment_method, 64)
+                    comment = _trim_text(batch.comment, 220)
 
                     items_lines: list[str] = []
-                    for item in batch.items.order_by(RenewalBatchItem.id.asc()).all()[:10]:
-                        selected = "✅" if item.selected_for_renewal else "▫️"
-                        due_at = to_utc_naive(item.due_at_snapshot)
-                        due_text = due_at.strftime("%d.%m.%Y") if due_at else "—"
-                        amount = f"{item.amount_rub_snapshot} ₽" if item.amount_rub_snapshot is not None else "—"
-                        items_lines.append(f"{selected} {item.account_name_snapshot} • до {due_text} • {amount}")
+                    all_items = _batch_items_query(batch).all()
+                    for item in all_items[:8]:
+                        try:
+                            selected = "✅" if item.selected_for_renewal else "▫️"
+                            due_at = to_utc_naive(item.due_at_snapshot)
+                            due_text = due_at.strftime("%d.%m.%Y") if due_at else "—"
+                            amount = f"{item.amount_rub_snapshot} ₽" if item.amount_rub_snapshot is not None else "—"
+                            item_name = _trim_text(item.account_name_snapshot, 72)
+                            items_lines.append(f"{selected} {item_name} • до {due_text} • {amount}")
+                        except Exception:
+                            logger.exception("Ошибка рендера item batch_id=%s item_id=%s", batch.id, item.id)
+                            items_lines.append("▫️ [ошибка чтения элемента]")
+                    if len(all_items) > 8:
+                        items_lines.append(f"… и ещё {len(all_items) - 8}")
                     if not items_lines:
                         items_lines.append("—")
 
@@ -995,24 +1188,40 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                     )
                     prepared_multi.append((row_text, build_admin_batch_keyboard(batch.id, batch.mode)))
 
-            await message.answer(
+            await safe_send_text(
+                message,
                 "📥 Очередь подтверждений\n"
                 f"Заявки (1 ферма): {counts['single']}\n"
                 f"Заявки (несколько ферм): {counts['multi']}\n"
-                f"Итого: {counts['total']}"
+                f"Итого: {counts['total']}\n"
+                f"Показано: до {limit} заявок в каждом разделе."
             )
 
-            await message.answer("🧾 Заявки (1 ферма)")
+            await safe_send_text(message, "🧾 Заявки (1 ферма)")
             if not prepared_single:
-                await message.answer("Нет заявок на проверке.")
+                await safe_send_text(message, "Нет заявок на проверке.")
             for row_text, row_keyboard in prepared_single:
-                await message.answer(row_text, reply_markup=row_keyboard)
+                try:
+                    # Для карточки с inline-кнопками отправляем только одним сообщением,
+                    # иначе клавиатура останется только на первом chunk.
+                    await message.answer(_fit_admin_card_text(row_text), reply_markup=row_keyboard)
+                except TelegramBadRequest as exc:
+                    logger.warning("Ошибка отправки single карточки id=%s: %s", row_text.splitlines()[0], exc)
+                    await message.answer("Не удалось отправить одну из карточек (Telegram limit).")
+                except Exception:
+                    logger.exception("Ошибка отправки single request в очередь chat_id=%s", message.chat.id)
 
-            await message.answer("🧾 Заявки (несколько ферм)")
+            await safe_send_text(message, "🧾 Заявки (несколько ферм)")
             if not prepared_multi:
-                await message.answer("Нет заявок на проверке.")
+                await safe_send_text(message, "Нет заявок на проверке.")
             for row_text, row_keyboard in prepared_multi:
-                await message.answer(row_text, reply_markup=row_keyboard)
+                try:
+                    await message.answer(_fit_admin_card_text(row_text), reply_markup=row_keyboard)
+                except TelegramBadRequest as exc:
+                    logger.warning("Ошибка отправки batch карточки id=%s: %s", row_text.splitlines()[0], exc)
+                    await message.answer("Не удалось отправить одну из batch-карточек (Telegram limit).")
+                except Exception:
+                    logger.exception("Ошибка отправки batch request в очередь chat_id=%s", message.chat.id)
         except Exception:
             logger.exception("Ошибка формирования очереди оплат для chat_id=%s", message.chat.id)
             await message.answer("Не удалось показать очередь оплат.")
@@ -1021,6 +1230,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         """Показывает отчёт по отправкам уведомлений без N+1 запросов."""
 
         try:
+            limit = max(1, min(limit, 100))
             lines: list[str] = []
             with app.app_context():
                 logs = (
@@ -1060,34 +1270,25 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                         subs_by_user_id[sub.user_id] = sub
 
                 # Формируем готовые строки внутри app_context, чтобы снаружи только отправлять чанки.
-                lines = ["📣 Последние отправки уведомлений:"]
+                lines = [f"📣 Последние отправки уведомлений (до {limit}):"]
                 for row in logs:
-                    account_name = accounts_by_id.get(row.account_id).name if row.account_id in accounts_by_id else "—"
+                    account = accounts_by_id.get(row.account_id)
+                    account_name = _trim_text(account.name if account else None, 64)
                     due_on = row.due_on.strftime("%d.%m.%Y") if row.due_on else "—"
                     created_at = row.created_at.strftime("%d.%m %H:%M") if row.created_at else "—"
                     subscriber = subs_by_id.get(row.subscriber_id) or subs_by_user_id.get(row.user_id)
-                    username = (subscriber.username or "").strip() if subscriber else ""
-                    user_label = f"@{username} ({row.user_id})" if username else str(row.user_id or "—")
+                    user_label = _trim_text(_safe_user_label(row.user_id, subscriber), 64)
                     stage_label = STAGE_LABELS.get(row.stage or "", row.stage or "—")
                     status_code = row.status or "sent"
                     status_label = STATUS_LABELS.get(status_code, status_code)
                     ack = f"подтверждено ({row.acked_at:%d.%m %H:%M})" if row.acked_at else "нет"
-                    lines.append(
+                    line = (
                         f"• {created_at} | {user_label} | {account_name} | срок: {due_on} "
                         f"| этап: {stage_label} | доставка: {status_label} | подтверждение: {ack}"
                     )
+                    lines.append(_trim_text(line, 3400, fallback="• [пустая запись отправки]"))
 
-            chunk: list[str] = []
-            chunk_chars = 0
-            for line in lines:
-                if chunk and chunk_chars + len(line) + 1 > 3500:
-                    await message.answer("\n".join(chunk))
-                    chunk = []
-                    chunk_chars = 0
-                chunk.append(line)
-                chunk_chars += len(line) + 1
-            if chunk:
-                await message.answer("\n".join(chunk))
+            await safe_send_text(message, "\n".join(lines), chunk_limit=3400)
         except Exception:
             logger.exception("Ошибка формирования отчёта отправок для chat_id=%s", message.chat.id)
             await message.answer("Не удалось показать отчёт по отправкам.")
@@ -1248,7 +1449,8 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         await callback.answer()
 
     @router.callback_query(F.data == "menu:payment")
-    async def on_menu_payment(callback: CallbackQuery) -> None:
+    async def on_menu_payment(callback: CallbackQuery, state: FSMContext) -> None:
+        await _safe_switch_state(state)
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -1285,7 +1487,13 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
             candidates.sort(key=lambda item: to_utc_naive(item.account.next_payment_at) or datetime.max)
             settings = get_bot_settings()
-            batch = create_notification_batch(user_id=profile.user_id, subscriber_id=profile.id, candidates=candidates)
+            batch = _resolve_batch_for_scenario(
+                user_id=profile.user_id,
+                subscriber_id=profile.id,
+                requested_batch_id=None,
+                expected_mode=None,
+                candidates=candidates,
+            )
             await callback.message.answer(
                 render_batch_notification(batch),
                 reply_markup=build_user_keyboard(batch.id, settings.admin_contact),
@@ -1294,6 +1502,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data == "menu:change")
     async def on_menu_change(callback: CallbackQuery, state: FSMContext) -> None:
+        await _safe_switch_state(state)
         with app.app_context():
             profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
             if not profile:
@@ -1318,12 +1527,20 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer()
                 return
 
-            batch = create_notification_batch(user_id=profile.user_id, subscriber_id=profile.id, candidates=candidates)
-            ensure_batch_editable(batch)
+            batch = _resolve_batch_for_scenario(
+                user_id=profile.user_id,
+                subscriber_id=profile.id,
+                requested_batch_id=None,
+                expected_mode="manual_change",
+                candidates=candidates,
+            )
             mark_batch_mode(batch, "manual_change")
 
-        await state.set_data({"batch_id": batch.id, "mode": "manual_change"})
-        await state.set_state(BatchPaymentFSM.waiting_change_kind)
+        await _safe_switch_state(
+            state,
+            new_state=BatchPaymentFSM.waiting_change_kind,
+            data={"batch_id": batch.id, "mode": "manual_change"},
+        )
         await callback.message.answer(
             "Выберите, что хотите изменить:",
             reply_markup=build_change_kind_keyboard(batch.id),
@@ -1708,12 +1925,23 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer("Не удалось определить сообщение.", show_alert=True)
                 return
             message_id = str(callback.message.message_id)
+            callback_chat_id = str(callback.message.chat.id)
             updated = 0
+            already_acked = False
             with app.app_context():
-                profile = TelegramSubscriber.query.filter_by(chat_id=str(callback.message.chat.id)).first()
+                profile = TelegramSubscriber.query.filter_by(chat_id=callback_chat_id).first()
                 if not profile:
                     await callback.answer("Чат не привязан", show_alert=True)
                     return
+                already_acked = (
+                    RentalNotificationLog.query.filter_by(subscriber_id=profile.id, message_id=message_id)
+                    .filter(RentalNotificationLog.acked_at.isnot(None))
+                    .first()
+                    is not None
+                )
+                # Один Telegram message может соответствовать нескольким строкам логов
+                # (batch-уведомление по нескольким фермам). Поэтому ACK обновляет
+                # все записи по (subscriber_id, message_id), оставаясь идемпотентным.
                 updated = (
                     RentalNotificationLog.query.filter_by(subscriber_id=profile.id, message_id=message_id)
                     .filter(RentalNotificationLog.acked_at.is_(None))
@@ -1721,7 +1949,10 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 )
                 db.session.commit()
             if updated == 0:
-                await callback.answer("Уже отмечено или запись не найдена")
+                if already_acked:
+                    await callback.answer("Вы уже отмечали это уведомление 👍")
+                else:
+                    await callback.answer("Запись уведомления не найдена")
                 return
             await callback.answer("Отмечено 👍")
         except Exception:
@@ -1776,6 +2007,9 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("client_reply:"))
     async def on_client_reply(callback: CallbackQuery, state: FSMContext) -> None:
+        if not callback.message:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
         request_id = _safe_callback_int(callback.data or "", 1)
         if request_id is None:
             await callback.answer("Некорректный request_id", show_alert=True)
@@ -1786,8 +2020,11 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
             if not profile or not row or row.user_id != profile.user_id:
                 await callback.answer("Заявка недоступна", show_alert=True)
                 return
-        await state.set_state(ClientClarifyFSM.waiting_answer)
-        await state.set_data({"clarify_request_id": request_id, "clarify_messages_count": 0})
+        await _safe_switch_state(
+            state,
+            new_state=ClientClarifyFSM.waiting_answer,
+            data={"clarify_request_id": request_id, "clarify_messages_count": 0},
+        )
         await callback.message.answer("Напишите ответ одним сообщением. Можно приложить скрин в следующем сообщении.")
         await callback.answer()
 
@@ -1844,6 +2081,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
     @router.message(Command("admin_user"))
     @router.message(Command("admin_settings"))
     @router.message(Command("admin_audit"))
+    @router.message(Command("admin_diag"))
     @router.message(Command("admin"))
     async def on_admin_command(message: Message, state: FSMContext) -> None:
         if not _is_admin(message.chat.id, cfg):
@@ -1864,10 +2102,14 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         elif cmd == "/admin_audit":
             subcmd = "audit"
             args = parts[1:]
+        elif cmd == "/admin_diag":
+            subcmd = "diag"
+            args = parts[1:]
         else:
             if len(parts) < 2:
                 await message.answer(
-                    "Команды: /admin_pending [N], /admin_user <id|@username>, /admin_settings, /admin_audit <user_id>",
+                    "Команды: /admin_pending [N], /admin_user <id|@username>, /admin_settings, "
+                    "/admin_audit <user_id>, /admin_diag",
                     reply_markup=build_admin_menu_keyboard(),
                 )
                 return
@@ -1951,7 +2193,14 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await message.answer("\n".join(lines))
                 return
 
-        await message.answer("Неизвестная команда. Используйте: /admin_pending | /admin_user | /admin_settings | /admin_audit")
+            if subcmd == "diag":
+                await safe_send_text(message, build_runtime_self_check_report(app), chunk_limit=3400)
+                return
+
+        await message.answer(
+            "Неизвестная команда. Используйте: /admin_pending | /admin_user | /admin_settings | "
+            "/admin_audit | /admin_diag"
+        )
 
     @router.callback_query(F.data.startswith("admin_open:"))
     async def on_admin_open(callback: CallbackQuery) -> None:
@@ -2019,8 +2268,7 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer()
                 return
 
-        await state.set_data({"account_id": account_id})
-        await state.set_state(PaymentFSM.waiting_amount)
+        await _safe_switch_state(state, new_state=PaymentFSM.waiting_amount, data={"account_id": account_id})
         await callback.message.answer("Введите сумму оплаты в рублях (только число).")
         await callback.answer()
 
@@ -2049,8 +2297,11 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer()
                 return
 
-        await state.set_data({"batch_id": batch_id, "mode": "full"})
-        await state.set_state(BatchPaymentFSM.waiting_amount)
+        await _safe_switch_state(
+            state,
+            new_state=BatchPaymentFSM.waiting_amount,
+            data={"batch_id": batch_id, "mode": "full"},
+        )
         await callback.message.answer("Укажите общую сумму оплаты по всем фермам (только число).")
         await callback.answer()
 
@@ -2217,8 +2468,11 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer("Выберите хотя бы одну ферму.", show_alert=True)
                 return
 
-        await state.set_data({"batch_id": batch_id, "mode": "partial"})
-        await state.set_state(BatchPaymentFSM.waiting_amount)
+        await _safe_switch_state(
+            state,
+            new_state=BatchPaymentFSM.waiting_amount,
+            data={"batch_id": batch_id, "mode": "partial"},
+        )
         await callback.message.answer("Укажите сумму оплаченной части (только число).")
         await callback.answer()
 
@@ -2241,8 +2495,11 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await callback.answer(str(exc), show_alert=True)
                 return
 
-        await state.set_data({"batch_id": batch_id, "mode": "manual_change"})
-        await state.set_state(BatchPaymentFSM.waiting_change_kind)
+        await _safe_switch_state(
+            state,
+            new_state=BatchPaymentFSM.waiting_change_kind,
+            data={"batch_id": batch_id, "mode": "manual_change"},
+        )
         await callback.message.answer(
             "Выберите, что хотите изменить:",
             reply_markup=build_change_kind_keyboard(batch_id),
@@ -2610,6 +2867,9 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
 
     @router.callback_query(F.data.startswith("admin_clarify:"))
     async def on_admin_clarify(callback: CallbackQuery, state: FSMContext) -> None:
+        if not callback.message:
+            await callback.answer("Сообщение недоступно", show_alert=True)
+            return
         if not _is_admin(callback.message.chat.id, cfg):
             await callback.answer("Недостаточно прав", show_alert=True)
             return
@@ -2617,8 +2877,11 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
         if request_id is None:
             await callback.answer("Некорректный request_id", show_alert=True)
             return
-        await state.set_state(AdminClarifyFSM.waiting_question)
-        await state.set_data({"clarify_request_id": request_id, "clarify_messages_count": 0})
+        await _safe_switch_state(
+            state,
+            new_state=AdminClarifyFSM.waiting_question,
+            data={"clarify_request_id": request_id, "clarify_messages_count": 0},
+        )
         await callback.message.answer(f"Введите вопрос для клиента по заявке #{request_id}.")
         await callback.answer()
 
@@ -2637,6 +2900,9 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 await message.answer("Заявка не найдена.")
                 await state.clear()
                 return
+            if not question:
+                await message.answer("Вопрос не может быть пустым. Напишите текст уточнения.")
+                return
             if row.status != "needs_info":
                 row.status_before_needs_info = row.status
             row.status = "needs_info"
@@ -2654,14 +2920,22 @@ def create_dispatcher(app: Flask, cfg: RuntimeConfig, bot: Bot) -> Dispatcher:
                 message_text=question,
             ))
             db.session.commit()
+            delivered_to_client = False
             if row.subscriber and row.subscriber.chat_id:
                 kb = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="✍️ Ответить", callback_data=f"client_reply:{row.id}")],
                     [InlineKeyboardButton(text="📎 Прикрепить чек/скрин", callback_data=f"client_reply:{row.id}")],
                 ])
-                await bot.send_message(int(row.subscriber.chat_id), f"Админ просит уточнить: {question}", reply_markup=kb)
+                try:
+                    await bot.send_message(int(row.subscriber.chat_id), f"Админ просит уточнить: {question}", reply_markup=kb)
+                    delivered_to_client = True
+                except Exception:
+                    logger.exception("Не удалось отправить admin clarify клиенту request_id=%s", row.id)
         await state.clear()
-        await message.answer("Вопрос отправлен клиенту.")
+        if delivered_to_client:
+            await message.answer("Вопрос отправлен клиенту.")
+        else:
+            await message.answer("Уточнение сохранено, но клиенту пока не отправлено (нет привязки чата или ошибка доставки).")
 
     async def _finalize_client_clarify(message: Message, state: FSMContext) -> None:
         data = await state.get_data()
