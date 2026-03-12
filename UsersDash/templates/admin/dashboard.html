@@ -56,6 +56,11 @@
                             <div class="admin-payment-card__actions">
                                 <button type="button" class="icon-btn" data-role="payment-paid" title="Оплата получена">✔</button>
                                 <button type="button" class="icon-btn icon-btn--danger" data-role="payment-unpaid" title="Отключить за неоплату">✖</button>
+                                {% if item.has_sent_payment_notice %}
+                                    <span class="icon-btn icon-btn--compact icon-btn--success" title="Rental Bot уже отправил уведомление">✉</span>
+                                {% else %}
+                                    <span class="icon-btn icon-btn--compact icon-btn--muted" title="Rental Bot ещё не отправлял уведомление">✉</span>
+                                {% endif %}
                                 {% if item.telegram_link %}
                                     <a class="icon-btn" target="_blank" rel="noopener"
                                        href="{{ item.telegram_link }}?text={{ message_text|urlencode }}"
