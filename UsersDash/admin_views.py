@@ -39,6 +39,7 @@ from UsersDash.models import (
     Account,
     ClientConfigVisibility,
     FarmData,
+    RentalNotificationLog,
     Server,
     SettingsAuditLog,
     TelegramBotSettings,
@@ -989,6 +990,20 @@ def admin_dashboard():
 
     today_date = datetime.utcnow().date()
     payment_accounts = [acc for acc in accounts if acc.next_payment_at]
+    payment_account_ids = [acc.id for acc in payment_accounts]
+
+    sent_notification_pairs: set[tuple[int, Any]] = set()
+    if payment_account_ids:
+        sent_notification_rows = (
+            RentalNotificationLog.query.with_entities(
+                RentalNotificationLog.account_id,
+                RentalNotificationLog.due_on,
+            )
+            .filter(RentalNotificationLog.account_id.in_(payment_account_ids))
+            .filter(RentalNotificationLog.status == "sent")
+            .all()
+        )
+        sent_notification_pairs = {(row.account_id, row.due_on) for row in sent_notification_rows}
 
     payment_cards = []
     for acc in payment_accounts:
@@ -1020,6 +1035,7 @@ def admin_dashboard():
                 "days_left": days_left,
                 "telegram_link": telegram_link,
                 "blocked_for_payment": acc.blocked_for_payment,
+                "has_sent_payment_notice": (acc.id, pay_date) in sent_notification_pairs,
             }
         )
 

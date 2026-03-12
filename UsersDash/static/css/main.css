@@ -2929,6 +2929,20 @@ h1 {
   line-height: 1;
 }
 
+.icon-btn--success {
+  border-color: #3e8c62;
+  color: #d9ffe8;
+  background: #13281f;
+  cursor: default;
+}
+
+.icon-btn--muted {
+  border-color: #2a3048;
+  color: #8590b3;
+  background: #121624;
+  cursor: default;
+}
+
 .icon-btn:hover {
   background: #232a44;
   border-color: #4c5d9c;
