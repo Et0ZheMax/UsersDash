@@ -66,7 +66,7 @@ SPOOL_PATH  = os.path.join(DATA_DIR, "tg_spool.jsonl")
 
 DEFAULTS = {
     # Telegram
-    "telegram_token": "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc",  # замени при необходимости
+    "telegram_token": "__ENV__:GNLDCHECK_TELEGRAM_TOKEN",
     "chat_id": "275483461",
     "thread_id": None,
 
@@ -154,6 +154,14 @@ def _get_int_env(name: str, fallback: int) -> int:
         return int(v.strip())
     return fallback
 
+
+def require_env(name: str) -> str:
+    """[SECURITY] Возвращает обязательную env-переменную или бросает понятную ошибку."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Не задана обязательная переменная окружения: {name}")
+    return value
+
 def _load_config() -> Settings:
     _ensure_config()
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -162,7 +170,7 @@ def _load_config() -> Settings:
     def _int_field(env, key):
         return _get_int_env(env, int(data.get(key, DEFAULTS[key])))
 
-    token = os.getenv("GNLDCHECK_TELEGRAM_TOKEN", data.get("telegram_token", DEFAULTS["telegram_token"]))
+    token = require_env("GNLDCHECK_TELEGRAM_TOKEN")
     chat_id = os.getenv("GNLDCHECK_CHAT_ID", str(data.get("chat_id", DEFAULTS["chat_id"])))
     thread_id_env = os.getenv("GNLDCHECK_THREAD_ID", "")
     thread_id = int(thread_id_env) if thread_id_env.strip().isdigit() else data.get("thread_id")

@@ -6,6 +6,7 @@ openvpn_watchdog.py  –  мониторит OpenVPN-GUI, умеет перек�
 pip install psutil requests
 """
 from __future__ import annotations
+import os
 import time, subprocess, sys
 from pathlib import Path
 from typing import Final
@@ -24,8 +25,26 @@ PROFILES:        Final[list[str]] = ["sde", "xnl"]
 INTERVAL_SEC:    Final = 30          # период проверки
 CONNECT_WAIT_SEC:Final = 15          # сколько секунд ждать, что туннель поднимется
 
-TELEGRAM_TOKEN:  Final = "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc"
-CHAT_ID:         Final = "275483461"
+# [SECURITY] Telegram-секреты читаются только из env-переменных.
+TELEGRAM_TOKEN_ENV: Final = "RSSV7_OVPN_WATCHER_BOT_TOKEN"
+TELEGRAM_CHAT_ID_ENV: Final = "RSSV7_OVPN_WATCHER_CHAT_ID"
+
+
+def require_env(name: str) -> str:
+    """[SECURITY] Возвращает обязательную env-переменную или бросает понятную ошибку."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Не задана обязательная переменная окружения: {name}")
+    return value
+
+
+TELEGRAM_TOKEN: str | None = None
+CHAT_ID: str | None = None
+
+
+def get_telegram_config() -> tuple[str, str]:
+    """[SECURITY] Ленивая загрузка Telegram-конфига без падения при импорте модуля."""
+    return require_env(TELEGRAM_TOKEN_ENV), require_env(TELEGRAM_CHAT_ID_ENV)
 
 VERBOSE:         Final = False
 ###############################################################################
@@ -33,6 +52,10 @@ VERBOSE:         Final = False
 
 class Watchdog:
     def __init__(self) -> None:
+        global TELEGRAM_TOKEN, CHAT_ID
+        if TELEGRAM_TOKEN is None or CHAT_ID is None:
+            TELEGRAM_TOKEN, CHAT_ID = get_telegram_config()
+
         self.last_ok = True
         self.active_profile: str | None = None
 
