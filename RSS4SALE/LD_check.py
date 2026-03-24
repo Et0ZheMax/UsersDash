@@ -18,11 +18,26 @@ config_folder = r'C:\LDPlayer\LDPlayer9\vms\config'
 profile_file = r'C:/Program Files (x86)/GnBots/profiles/TIME_ONLY_RSS.json'
 crashed_file = r'C:\LDPlayer\ldChecker\crashed.json'
 
-telegram_token = os.getenv(
-    'LDC_TG_TOKEN',
-    '7219135420:AAFCxU_xj7Hzn-slUG1iY88qle7LZlFIzzk'
-)
-chat_id = '-1002237965982'
+# [SECURITY] Telegram-токен и chat_id читаются только из обязательных env-переменных.
+TELEGRAM_TOKEN_ENV = "RSS4SALE_LD_CHECK_BOT_TOKEN"
+TELEGRAM_CHAT_ID_ENV = "RSS4SALE_LD_CHECK_CHAT_ID"
+
+
+def require_env(name: str) -> str:
+    """[SECURITY] Возвращает обязательную env-переменную или бросает понятную ошибку."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Не задана обязательная переменная окружения: {name}")
+    return value
+
+
+telegram_token: str | None = None
+chat_id: str | None = None
+
+
+def get_telegram_config() -> tuple[str, str]:
+    """[SECURITY] Ленивая загрузка Telegram-конфига без падения при импорте модуля."""
+    return require_env(TELEGRAM_TOKEN_ENV), require_env(TELEGRAM_CHAT_ID_ENV)
 # ID темы (thread) в чате, куда нужно отправить сообщение
 message_thread_id = 4274
 # -------------------------------------------------
@@ -79,13 +94,17 @@ def extract_instance_id(fname: str):
 
 
 async def check_all_configs_and_notify():
+    global telegram_token, chat_id
+    if telegram_token is None or chat_id is None:
+        telegram_token, chat_id = get_telegram_config()
+
     issues = []
     if not os.path.isdir(config_folder):
         issues.append(f"Папка конфигов не найдена: {config_folder}")
     if not os.path.isfile(profile_file):
         issues.append(f"Файл профилей не найден: {profile_file}")
     if not telegram_token or telegram_token.startswith('000'):
-        issues.append('Некорректный Telegram-токен (переменная LDC_TG_TOKEN)')
+        issues.append(f'Некорректный Telegram-токен (переменная {TELEGRAM_TOKEN_ENV})')
 
     if issues:
         print('❌ Настройки LD_check:')

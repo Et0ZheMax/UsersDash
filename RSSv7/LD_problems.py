@@ -73,11 +73,32 @@ PROBLEM_LABELS = {
     "other": "Other⚠️",
 }
 
-DEFAULT_TG_TOKEN = "7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc"
+# [SECURITY] Telegram-токен читаем только из обязательной env-переменной без fallback.
+TELEGRAM_TOKEN_ENV = "RSSV7_LD_PROBLEMS_BOT_TOKEN"
 
-telegram_token  = os.getenv("LDP_TG_TOKEN") or CONFIG.get("TELEGRAM_TOKEN") or DEFAULT_TG_TOKEN
-chat_id         = os.getenv("LDP_TG_CHAT") or CONFIG.get("TELEGRAM_CHAT_ID", "275483461")
+
+def require_env(name: str) -> str:
+    """[SECURITY] Возвращает обязательную env-переменную или бросает понятную ошибку."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Не задана обязательная переменная окружения: {name}")
+    return value
+
+
+telegram_token: str | None = None
+chat_id: str | None = None
 SERVER_LABEL    = (SERVER_NAME or "LD").strip() or "LD"
+
+
+def get_telegram_config() -> tuple[str, str]:
+    """[SECURITY] Ленивая загрузка Telegram-конфига без падения при импорте модуля."""
+    token = require_env(TELEGRAM_TOKEN_ENV)
+    # [SECURITY][LEGACY] Для совместимости разрешён fallback в локальный config.json,
+    # т.к. на части хостов chat_id исторически задаётся только там.
+    resolved_chat_id = os.getenv("RSSV7_LD_PROBLEMS_CHAT_ID") or CONFIG.get("TELEGRAM_CHAT_ID", "275483461")
+    if not str(resolved_chat_id).strip():
+        raise RuntimeError("Не задан chat_id: RSSV7_LD_PROBLEMS_CHAT_ID")
+    return token, str(resolved_chat_id)
 
 # 1️⃣  Мгновенные шаблоны
 regex_list = [
@@ -107,13 +128,17 @@ DEBUG_MISS_ID      = True   # печатать неизвестные ID (оди
 
 # ────────────────── 🩺 Health-check ──────────────────────────────
 def health_check() -> None:
+    global telegram_token, chat_id
+    if telegram_token is None or chat_id is None:
+        telegram_token, chat_id = get_telegram_config()
+
     issues = []
     if not os.path.isdir(LOG_FOLDER):
         issues.append(f"Папка логов не найдена: {LOG_FOLDER}")
     if not os.path.isfile(PROFILE_FILE):
         issues.append(f"Файл профилей не найден: {PROFILE_FILE}")
     if not telegram_token or telegram_token.startswith("000"):
-        issues.append("Некорректный Telegram-токен (проверьте LDP_TG_TOKEN)")
+        issues.append(f"Некорректный Telegram-токен (проверьте {TELEGRAM_TOKEN_ENV})")
     if issues:
         print("❌ Health-check:")
         for m in issues:
@@ -278,6 +303,10 @@ def deduplicate(recs: list[dict]) -> list[dict]:
 
 # ─────────────────────── Основная логика ─────────────────────────
 async def check_logs_and_notify() -> None:
+    global telegram_token, chat_id
+    if telegram_token is None or chat_id is None:
+        telegram_token, chat_id = get_telegram_config()
+
     bot    = Bot(token=telegram_token)
     id_map = load_account_mapping()
     today  = datetime.now().strftime("%Y-%m-%d")

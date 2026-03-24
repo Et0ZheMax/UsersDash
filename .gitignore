@@ -10,3 +10,6 @@ UsersDash/data/app.db
 UsersDash/telegram_settings.json
 UsersDash/.env
 .env
+.env.local
+secrets*.json
+config.local.json

@@ -93,9 +93,26 @@ config_folder = config_folder or DEFAULT_CONFIG_FOLDER
 profile_file = os.getenv("LDCHECK_PROFILE_FILE") or rss_config.get("PROFILE_PATH")
 profile_file = profile_file or DEFAULT_PROFILE_FILE
 
-# Telegram токены (можно через ENV TG_TOKEN / TG_CHAT)
-telegram_token = os.getenv('TG_TOKEN', '7460479135:AAEUcUZdO01AEOVxgA0xlV8ZoLOmZcKw-Uc')
-chat_id        = os.getenv('TG_CHAT',  '275483461')
+# [SECURITY] Telegram-секреты читаем только из обязательных env-переменных.
+TELEGRAM_TOKEN_ENV = "RSSV7_LD_CHECK_BOT_TOKEN"
+TELEGRAM_CHAT_ID_ENV = "RSSV7_LD_CHECK_CHAT_ID"
+
+
+def require_env(name: str) -> str:
+    """[SECURITY] Возвращает обязательную env-переменную или бросает понятную ошибку."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Не задана обязательная переменная окружения: {name}")
+    return value
+
+
+telegram_token: str | None = None
+chat_id: str | None = None
+
+
+def get_telegram_config() -> tuple[str, str]:
+    """[SECURITY] Ленивая загрузка Telegram-конфига без падения при импорте модуля."""
+    return require_env(TELEGRAM_TOKEN_ENV), require_env(TELEGRAM_CHAT_ID_ENV)
 
 # Бэкенд Dashboard (куда «эмулируем клик»)
 API_BASE = os.getenv("DASH_API", "http://127.0.0.1:5001").rstrip("/")
@@ -194,6 +211,10 @@ def make_fix_url(server_name: str) -> Optional[str]:
     return normalize_base_url(base) + FIX_PAGE
 
 def health_check(verbose: bool=False) -> None:
+    global telegram_token, chat_id
+    if telegram_token is None or chat_id is None:
+        telegram_token, chat_id = get_telegram_config()
+
     problems = []
     warnings = []
     if not os.path.isdir(config_folder):
@@ -201,9 +222,9 @@ def health_check(verbose: bool=False) -> None:
     if not os.path.isfile(profile_file):
         problems.append(f"PROFILE not found: {profile_file}")
     if not telegram_token or len(telegram_token) < 20:
-        problems.append("TELEGRAM_TOKEN is empty/invalid (проверь TG_TOKEN)")
+        problems.append(f"TELEGRAM_TOKEN is empty/invalid (проверь {TELEGRAM_TOKEN_ENV})")
     if not chat_id or not str(chat_id).strip():
-        problems.append("TELEGRAM_CHAT_ID is empty (проверь TG_CHAT)")
+        problems.append(f"TELEGRAM_CHAT_ID is empty (проверь {TELEGRAM_CHAT_ID_ENV})")
 
     srv = resolve_server_name()
     if not make_fix_url(srv):
