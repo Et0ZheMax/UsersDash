@@ -3589,6 +3589,7 @@ def admin_farm_data_pull_preview():
 
             local_data = {
                 "email": (fd.email if fd and fd.email else ""),
+                "login": (fd.login if fd and fd.login else ""),
                 "password": (fd.password if fd and fd.password else ""),
                 "igg_id": (fd.igg_id if fd and fd.igg_id else ""),
                 "server": (fd.server if fd and fd.server else ""),
@@ -3599,16 +3600,23 @@ def admin_farm_data_pull_preview():
                 "tariff": acc.next_payment_amount
                 if acc and acc.next_payment_amount is not None
                 else "",
+                "tariff_plan": acc.next_payment_tariff
+                if acc and acc.next_payment_tariff is not None
+                else "",
             }
 
             remote_data = {
                 "email": item.get("email") or "",
+                "login": item.get("login") or item.get("username") or "",
                 "password": item.get("passwd") or "",
                 "igg_id": item.get("igg") or "",
                 "server": item.get("server") or "",
                 "telegram": item.get("tg_tag") or "",
                 "next_payment_at": item.get("pay_until") or "",
                 "tariff": item.get("tariff_rub") if item.get("tariff_rub") is not None else "",
+                "tariff_plan": item.get("tariff_plan_rub")
+                if item.get("tariff_plan_rub") is not None
+                else "",
             }
 
             items.append(
@@ -3759,6 +3767,7 @@ def admin_farm_data_pull_apply():
             fd = _get_or_create_farmdata_entry(acc.id, acc.owner_id, acc.name)
 
             fd.email = (row.get("email") or "").strip() or None
+            fd.login = (row.get("login") or "").strip() or None
             fd.password = (row.get("password") or "").strip() or None
             fd.igg_id = (row.get("igg_id") or "").strip() or None
             fd.server = (row.get("server") or "").strip() or None
@@ -3767,7 +3776,7 @@ def admin_farm_data_pull_apply():
             pay_until_raw = (row.get("next_payment_at") or "").strip()
             if pay_until_raw:
                 try:
-                    acc.next_payment_at = datetime.strptime(pay_until_raw, "%Y-%m-%d").date()
+                    acc.next_payment_at = datetime.strptime(pay_until_raw, "%Y-%m-%d")
                 except ValueError:
                     warnings.append(
                         f"{acc.name}: не удалось разобрать дату '{pay_until_raw}'"
@@ -3778,16 +3787,32 @@ def admin_farm_data_pull_apply():
             tariff_raw = row.get("tariff")
             if tariff_raw in ("", None):
                 acc.next_payment_amount = None
-                acc.next_payment_tariff = None
             else:
                 try:
                     parsed_tariff = int(tariff_raw)
                     acc.next_payment_amount = parsed_tariff
-                    acc.next_payment_tariff = parsed_tariff
                 except (TypeError, ValueError):
                     warnings.append(
                         f"{acc.name}: некорректное значение тарифа '{tariff_raw}'"
                     )
+
+            tariff_plan_raw = row.get("tariff_plan")
+            if tariff_plan_raw in ("", None):
+                if tariff_raw in ("", None):
+                    acc.next_payment_tariff = None
+            else:
+                try:
+                    acc.next_payment_tariff = int(tariff_plan_raw)
+                except (TypeError, ValueError):
+                    warnings.append(
+                        f"{acc.name}: некорректное значение выбранного тарифа '{tariff_plan_raw}'"
+                    )
+            if (
+                tariff_plan_raw in ("", None)
+                and tariff_raw not in ("", None)
+                and acc.next_payment_tariff is None
+            ):
+                acc.next_payment_tariff = acc.next_payment_amount
 
             updated += 1
 
