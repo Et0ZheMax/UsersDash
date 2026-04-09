@@ -23,6 +23,19 @@ from typing import Dict, List, Tuple
 
 import requests
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # ─────────────────────────── Константы / настройка ───────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 RESOURCES_DB = BASE_DIR / "resources_web.db"
@@ -244,6 +257,7 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
 
 # ─────────────────────────── CLI ───────────────────────────
 if __name__ == "__main__":
+    _load_root_env()
     _ensure_admin()
     if not _health_check():
         sys.exit(1)

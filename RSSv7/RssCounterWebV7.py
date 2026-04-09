@@ -34,6 +34,20 @@ from flask_cors import CORS
 
 # Установка всего: python -m pip install -U psutil paramiko requests Pillow pywin32 WMI icmplib Flask Flask-Cors
 
+
+def _load_root_env() -> None:
+    """Подгружает /.env из корня репозитория без перезаписи системных переменных."""
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # Пример: задаём своему скрипту заголовок «MyUniqueScript»
 DEFAULT_TITLE = "RssV7"
 if sys.platform == "win32":
@@ -5309,6 +5323,7 @@ def api_refresh_schema():
 
 
 if __name__=="__main__":
+    _load_root_env()
     if not os.path.exists(RESOURCES_DB):
         print("Создаём базу ресурсов:", RESOURCES_DB)
     init_resources_db()

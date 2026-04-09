@@ -23,6 +23,21 @@ import sys
 from telegram import Bot
 from telegram.error import TelegramError
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    from pathlib import Path
+
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # ────────────── Заголовок консольного окна (Windows) ──────────────
 title = "LD_problems"
 if sys.platform == "win32":
@@ -309,6 +324,7 @@ async def check_logs_and_notify() -> None:
 
 # ───────────────────── Точка входа ─────────────────────
 async def main() -> None:
+    _load_root_env()
     health_check()
     try:
         await check_logs_and_notify()
