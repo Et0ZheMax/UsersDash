@@ -35,6 +35,21 @@ from telegram.error import (
 )
 from telegram.request import HTTPXRequest  # для настраиваемых таймаутов/пула
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    from pathlib import Path
+
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # ------------------------------ UAC -----------------------------------------
 def _is_admin() -> bool:
     try:
@@ -784,6 +799,7 @@ async def check_and_reboot(cfg: Settings):
 
 # -------------------------------- Entry -------------------------------------
 if __name__ == "__main__":
+    _load_root_env()
     os.chdir(os.path.dirname(__file__))
     cfg = _load_config()
     _ = health_check(cfg)
@@ -793,4 +809,3 @@ if __name__ == "__main__":
         print("Прерывание пользователем.")
     except Exception as e:
         print(f"[FATAL] Необработанная ошибка: {e}")
-

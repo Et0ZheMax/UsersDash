@@ -25,6 +25,19 @@ import sys
 from telegram import Bot
 from telegram.error import TelegramError, TimedOut
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # ─────────────────── Путь до локальной конфигурации ───────────────
 BASE_DIR    = Path(__file__).resolve().parent
 CONFIG_PATH = BASE_DIR / "config.json"
@@ -446,6 +459,7 @@ async def check_logs_and_notify() -> None:
 
 # ───────────────────── Точка входа ─────────────────────
 async def main() -> None:
+    _load_root_env()
     health_check()
     try:
         await check_logs_and_notify()
@@ -457,5 +471,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Прерывание пользователем.")
-
 

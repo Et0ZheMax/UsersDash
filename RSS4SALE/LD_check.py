@@ -7,6 +7,21 @@ from telegram.error import TelegramError
 import ctypes
 import sys
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    from pathlib import Path
+
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # Пример: задаём своему скрипту заголовок «MyUniqueScript»
 title = "LD_Check"
 if sys.platform == "win32":
@@ -177,6 +192,7 @@ async def check_all_configs_and_notify():
 
 
 async def main():
+    _load_root_env()
     await check_all_configs_and_notify()
 
 if __name__ == '__main__':

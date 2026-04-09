@@ -26,6 +26,19 @@ from flask import (
 )
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # ========== Консольный заголовок ==========
 ctypes.windll.kernel32.SetConsoleTitleW("CentralDash v8.0") if sys.platform == "win32" else None  # type: ignore
 
@@ -524,6 +537,7 @@ def api_config():
 
 # ========== Entrypoint ==========
 if __name__ == "__main__":
+    _load_root_env()
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true":    # не выполнять loop в reloader-процессе
         threading.Thread(target=loop, daemon=True).start()
     app.run(host="0.0.0.0", port=5010, debug=False)

@@ -7,6 +7,21 @@ import traceback
 
 import requests
 
+# Общая загрузка /.env из корня репозитория (без перезаписи системных env).
+def _load_root_env() -> None:
+    from pathlib import Path
+
+    current_file = Path(__file__).resolve()
+    for parent in (current_file.parent, *current_file.parents):
+        if (parent / ".git").exists():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            break
+
+    from shared.env_loader import load_root_env_file
+
+    load_root_env_file(current_file)
+
 # [SECURITY] Токен и chat_id теперь читаются только из env; без fallback-значений.
 TELEGRAM_TOKEN_ENV = "RSSV7_BOL_DETECT_SSH_BOT_TOKEN"
 TELEGRAM_CHAT_ID_ENV = "RSSV7_BOL_DETECT_SSH_CHAT_ID"
@@ -57,6 +72,7 @@ def send_telegram(token: str, chat_id: str, message: str) -> None:
 
 
 def main():
+    _load_root_env()
     global telegram_token, chat_id
     telegram_token, chat_id = get_telegram_config()
 
