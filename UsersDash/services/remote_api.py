@@ -7,6 +7,8 @@
 import json
 import logging
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -24,7 +26,13 @@ log = logging.getLogger(__name__)
 # Таймауты для HTTP-запросов (в секундах)
 DEFAULT_TIMEOUT = 15
 HEALTH_TIMEOUT = 5
+RESOURCES_TIMEOUT = 6
+RESOURCES_CACHE_TTL_SECONDS = 30
+RESOURCES_ERROR_CACHE_TTL_SECONDS = 10
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
+_RESOURCES_CACHE_LOCK = threading.Lock()
+_RESOURCES_CACHE: Dict[int, Dict[str, Any]] = {}
 
 
 def _format_http_error(resp: requests.Response) -> str:
@@ -196,14 +204,30 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
 
     Ключ — строковый id (GUID).
     """
+    server_id = getattr(server, "id", None)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if isinstance(server_id, int):
+        with _RESOURCES_CACHE_LOCK:
+            cached = _RESOURCES_CACHE.get(server_id)
+            if cached and cached.get("expires_at", 0) > now_ts:
+                cached_data = cached.get("data")
+                if isinstance(cached_data, dict):
+                    return cached_data
+
     base = _get_effective_api_base(server)
     if not base:
         return {}
 
     url = f"{base}/resources"
-    data = _safe_get_json(url, timeout=DEFAULT_TIMEOUT, source=f"resources {server.name}")
+    data = _safe_get_json(url, timeout=RESOURCES_TIMEOUT, source=f"resources {server.name}")
     if not data or "accounts" not in data:
         print(f"[remote_api] WARNING: /api/resources вернул пусто или без 'accounts' для сервера {server.name}")
+        if isinstance(server_id, int):
+            with _RESOURCES_CACHE_LOCK:
+                _RESOURCES_CACHE[server_id] = {
+                    "data": {},
+                    "expires_at": now_ts + RESOURCES_ERROR_CACHE_TTL_SECONDS,
+                }
         return {}
 
     result: Dict[str, Dict[str, Any]] = {}
@@ -213,6 +237,13 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
             continue
         key = str(acc_id)
         result[key] = acc
+
+    if isinstance(server_id, int):
+        with _RESOURCES_CACHE_LOCK:
+            _RESOURCES_CACHE[server_id] = {
+                "data": result,
+                "expires_at": now_ts + RESOURCES_CACHE_TTL_SECONDS,
+            }
 
     return result
 
@@ -399,13 +430,37 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
     result: Dict[int, Dict[str, Any]] = {}
     reactivated_accounts: List[Any] = []
 
-    for server_id, acc_list in by_server.items():
-        server = Server.query.get(server_id)
-        if not server:
-            print(f"[remote_api] WARNING: сервер с id={server_id} не найден в БД")
-            continue
+    if not by_server:
+        return result
 
-        server_resources = fetch_resources_for_server(server)
+    servers = Server.query.filter(Server.id.in_(list(by_server.keys()))).all()
+    server_by_id = {server.id: server for server in servers}
+    missing_server_ids = [server_id for server_id in by_server if server_id not in server_by_id]
+    for missing_server_id in missing_server_ids:
+        print(f"[remote_api] WARNING: сервер с id={missing_server_id} не найден в БД")
+
+    server_resources_map: Dict[int, Dict[str, Dict[str, Any]]] = {}
+    max_workers = min(8, len(server_by_id))
+    if max_workers > 0:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_server_id = {
+                executor.submit(fetch_resources_for_server, server): server_id
+                for server_id, server in server_by_id.items()
+            }
+            for future in as_completed(future_to_server_id):
+                server_id = future_to_server_id[future]
+                try:
+                    server_resources_map[server_id] = future.result() or {}
+                except Exception as exc:
+                    log.warning(
+                        "Не удалось получить ресурсы для server_id=%s: %s",
+                        server_id,
+                        exc,
+                    )
+                    server_resources_map[server_id] = {}
+
+    for server_id, acc_list in by_server.items():
+        server_resources = server_resources_map.get(server_id) or {}
         if not server_resources:
             continue
 
