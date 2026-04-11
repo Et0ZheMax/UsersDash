@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
@@ -125,6 +125,8 @@ class RuntimeConfig:
 
 
 logger = logging.getLogger(__name__)
+NETWORK_RETRY_BASE_SECONDS = 5
+NETWORK_RETRY_MAX_SECONDS = 60
 
 
 STAGE_LABELS: dict[str, str] = {
@@ -3418,8 +3420,22 @@ async def run_bot() -> None:
 
 def main() -> None:
     """CLI entrypoint."""
-
-    asyncio.run(run_bot())
+    retry_delay = NETWORK_RETRY_BASE_SECONDS
+    while True:
+        try:
+            asyncio.run(run_bot())
+            return
+        except KeyboardInterrupt:
+            logger.info("[rental-bot] Остановка по Ctrl+C.")
+            return
+        except TelegramNetworkError as exc:
+            logger.warning(
+                "[rental-bot] Ошибка сети при запуске polling: %s. Повтор через %s с.",
+                exc,
+                retry_delay,
+            )
+            time.sleep(retry_delay)
+            retry_delay = min(retry_delay * 2, NETWORK_RETRY_MAX_SECONDS)
 
 
 if __name__ == "__main__":
