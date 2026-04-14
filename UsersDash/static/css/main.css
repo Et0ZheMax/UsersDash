@@ -2042,6 +2042,56 @@ h1 {
   flex-wrap: wrap;
 }
 
+.manage-modern__save-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(255, 255, 255, 0.04);
+  color: #cbd5e1;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.manage-modern__save-indicator::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  flex-shrink: 0;
+}
+
+.manage-modern__save-indicator--saving::before {
+  background: #60a5fa;
+  box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.2);
+}
+
+.manage-modern__save-indicator--saved::before {
+  background: #34d399;
+}
+
+.manage-modern__save-indicator--error::before {
+  background: #f87171;
+}
+
+.manage-modern__save-indicator--dirty::before {
+  background: #f59e0b;
+}
+
+.manage-modern__mobile-save-indicator {
+  margin-top: 4px;
+  height: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
 .manage-modern__search {
   display: inline-flex;
   align-items: center;
@@ -2274,6 +2324,10 @@ h1 {
   .manage-modern__toolbar {
     width: 100%;
     justify-content: flex-start;
+  }
+
+  .manage-modern__save-indicator {
+    order: 10;
   }
 
   .manage-modern__search {
