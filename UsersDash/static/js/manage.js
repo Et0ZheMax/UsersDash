@@ -231,6 +231,8 @@
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
     const layoutRoot = document.querySelector('[data-role="manage-layout"]');
     const manageRoot = document.querySelector('.manage-modern');
+    const saveIndicator = document.querySelector('[data-role="config-save-indicator"]');
+    const mobileSaveIndicator = document.querySelector('[data-role="config-save-indicator-mobile"]');
     const explicitAdminFlag = (typeof window.manageIsAdmin !== "undefined") ? window.manageIsAdmin : false;
     const isAdminManage = Boolean(
         explicitAdminFlag
@@ -239,6 +241,17 @@
         || ((window.location && window.location.pathname) ? window.location.pathname.includes('/admin/') : false)
     );
     const paymentWarning = document.querySelector('[data-role="payment-warning"]');
+    const CONFIG_AUTO_SAVE_DELAY_MS = 450;
+    const CONFIG_PENDING_STORAGE_KEY = "usersdash.manage.pending_config_saves.v1";
+    const MANAGE_SYNC_SW_URL = "/static/js/manage-save-worker.js";
+    const MANAGE_SYNC_TAG = "usersdash-manage-config-sync";
+    const SAVE_STATUS_CLASSES = [
+        "manage-modern__save-indicator--idle",
+        "manage-modern__save-indicator--dirty",
+        "manage-modern__save-indicator--saving",
+        "manage-modern__save-indicator--saved",
+        "manage-modern__save-indicator--error",
+    ];
 
     function escapeHtml(str) {
         return (str || "").replace(/[&<>"]+/g, (ch) => ({
@@ -259,6 +272,19 @@
             url = url.replace("__STEP__", stepIdx);
         }
         return url;
+    }
+
+    function setSaveIndicatorState(stateName, text) {
+        [saveIndicator, mobileSaveIndicator].forEach((indicator) => {
+            if (!indicator) return;
+            SAVE_STATUS_CLASSES.forEach((cls) => indicator.classList.remove(cls));
+            indicator.classList.add(`manage-modern__save-indicator--${stateName}`);
+            indicator.textContent = text;
+        });
+    }
+
+    function buildConfigSaveKey(accountId, stepIdx) {
+        return `${accountId}:${stepIdx}`;
     }
 
     function unwrapValue(raw) {
@@ -1441,10 +1467,153 @@
 
     let currentConfigForm = null;
     let configAutoSaveTimer = null;
-    let configSaveInProgress = false;
-    let configAutoSaveQueued = false;
     let lastConfigToastAt = 0;
+    let lastConfigSavedAt = null;
     let applyDefaultsInProgress = false;
+    let configSaveError = null;
+    const pendingConfigSaves = new Map();
+    const inFlightConfigSaves = new Set();
+    const configSaveTimers = new Map();
+    let manageSyncRegistration = null;
+
+    function persistPendingConfigSaves() {
+        try {
+            const snapshot = Array.from(pendingConfigSaves.values()).map((entry) => ({
+                accountId: entry.accountId,
+                stepIdx: entry.stepIdx,
+                requestBody: entry.requestBody,
+                revision: entry.revision,
+                updatedAt: entry.updatedAt,
+            }));
+            window.localStorage.setItem(CONFIG_PENDING_STORAGE_KEY, JSON.stringify(snapshot));
+        } catch (err) {
+            console.warn("Не удалось сохранить очередь настроек локально", err);
+        }
+    }
+
+    function restorePendingConfigSaves() {
+        try {
+            const raw = window.localStorage.getItem(CONFIG_PENDING_STORAGE_KEY);
+            if (!raw) return;
+            const parsed = JSON.parse(raw);
+            if (!Array.isArray(parsed)) return;
+            parsed.forEach((entry) => {
+                if (!entry || typeof entry !== "object") return;
+                const { accountId, requestBody } = entry;
+                const stepIdx = Number(entry.stepIdx);
+                if (!accountId || !Number.isFinite(stepIdx) || !requestBody || typeof requestBody !== "object") return;
+                const key = buildConfigSaveKey(accountId, stepIdx);
+                pendingConfigSaves.set(key, {
+                    accountId,
+                    stepIdx,
+                    requestBody,
+                    revision: Number.isFinite(entry.revision) ? entry.revision : 1,
+                    updatedAt: Number.isFinite(entry.updatedAt) ? entry.updatedAt : Date.now(),
+                });
+            });
+        } catch (err) {
+            console.warn("Не удалось восстановить очередь настроек", err);
+        }
+    }
+
+    function updateSaveIndicatorByQueue() {
+        const pendingCount = pendingConfigSaves.size;
+        const inFlightCount = inFlightConfigSaves.size;
+
+        if (configSaveError) {
+            const suffix = pendingCount ? ` (${pendingCount})` : "";
+            setSaveIndicatorState("error", `Ошибка сохранения${suffix}`);
+            return;
+        }
+        if (inFlightCount > 0) {
+            const suffix = pendingCount > 1 ? ` (${pendingCount})` : "";
+            setSaveIndicatorState("saving", `Сохраняем изменения${suffix}…`);
+            return;
+        }
+        if (pendingCount > 0) {
+            const suffix = pendingCount > 1 ? ` (${pendingCount})` : "";
+            setSaveIndicatorState("dirty", `Есть несохранённые изменения${suffix}`);
+            return;
+        }
+        if (lastConfigSavedAt) {
+            const savedTime = lastConfigSavedAt.toLocaleTimeString("ru-RU", {
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+            });
+            setSaveIndicatorState("saved", `Сохранено в ${savedTime}`);
+            return;
+        }
+        setSaveIndicatorState("idle", "Автосохранение включено");
+    }
+
+    async function ensureBackgroundSyncReady() {
+        if (!("serviceWorker" in navigator)) return null;
+        try {
+            if (!manageSyncRegistration) {
+                manageSyncRegistration = await navigator.serviceWorker.register(MANAGE_SYNC_SW_URL);
+            }
+            const readyRegistration = await navigator.serviceWorker.ready;
+            manageSyncRegistration = readyRegistration || manageSyncRegistration;
+            return manageSyncRegistration;
+        } catch (err) {
+            console.warn("Не удалось зарегистрировать Service Worker для очереди сохранений", err);
+            return null;
+        }
+    }
+
+    async function scheduleBackgroundSync() {
+        const registration = await ensureBackgroundSyncReady();
+        if (!registration || !registration.sync) return;
+        try {
+            await registration.sync.register(MANAGE_SYNC_TAG);
+        } catch (err) {
+            console.warn("Не удалось зарегистрировать background sync", err);
+        }
+    }
+
+    function notifyServiceWorkerAboutSave(record) {
+        if (!("serviceWorker" in navigator) || !record) return;
+        const url = replaceStepTemplate(state.updateUrlTemplate, record.accountId, record.stepIdx);
+        const message = {
+            type: "MANAGE_CONFIG_ENQUEUE",
+            payload: {
+                id: buildConfigSaveKey(record.accountId, record.stepIdx),
+                url,
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1",
+                },
+                body: record.requestBody,
+                updatedAt: record.updatedAt || Date.now(),
+            },
+        };
+        if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage(message);
+        } else {
+            navigator.serviceWorker.ready
+                .then((registration) => {
+                    const worker = registration.active || registration.waiting || registration.installing;
+                    if (worker) worker.postMessage(message);
+                })
+                .catch(() => {});
+        }
+        scheduleBackgroundSync().catch(() => {});
+    }
+
+    function notifyServiceWorkerSaveDone(accountId, stepIdx) {
+        if (!("serviceWorker" in navigator)) return;
+        const message = {
+            type: "MANAGE_CONFIG_DONE",
+            payload: {
+                id: buildConfigSaveKey(accountId, stepIdx),
+            },
+        };
+        if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage(message);
+        }
+    }
 
     function renderConfig() {
         if (!configRoot) return;
@@ -1454,6 +1623,7 @@
             clearTimeout(configAutoSaveTimer);
             configAutoSaveTimer = null;
         }
+        updateSaveIndicatorByQueue();
 
         if (state.selectedStepIndex === null || !state.rawSteps[state.selectedStepIndex]) {
             configRoot.innerHTML = '<div class="config-empty">Выберите шаг, чтобы редактировать настройки.</div>';
@@ -1997,25 +2167,158 @@
     function scheduleConfigAutoSave(stepIdx, formEl, cfg) {
         if (!formEl || !cfg || formEl !== currentConfigForm) return;
         if (Number(formEl.dataset.stepIdx) !== stepIdx) return;
+        const step = state.rawSteps && state.rawSteps[stepIdx];
+        const payload = collectConfig(formEl, cfg || {});
+        const scheduleRules = collectScheduleRules(formEl, step && step.ScheduleRules);
+        const requestBody = {};
+        if (Object.keys(payload).length) requestBody.Config = payload;
+        if (scheduleRules !== null) requestBody.ScheduleRules = scheduleRules;
+        if (!Object.keys(requestBody).length || !state.selectedAccountId) return;
+
+        enqueueConfigSave(state.selectedAccountId, stepIdx, requestBody, { immediate: false });
 
         if (configAutoSaveTimer) {
             clearTimeout(configAutoSaveTimer);
         }
 
-        configAutoSaveTimer = null;
-        saveConfig(stepIdx, formEl, cfg, { isAuto: true });
+        configAutoSaveTimer = window.setTimeout(() => {
+            configAutoSaveTimer = null;
+            saveConfig(stepIdx, formEl, cfg, { isAuto: true });
+        }, CONFIG_AUTO_SAVE_DELAY_MS);
+    }
+
+    function enqueueConfigSave(accountId, stepIdx, requestBody, options = {}) {
+        const key = buildConfigSaveKey(accountId, stepIdx);
+        const existing = pendingConfigSaves.get(key);
+        const revision = existing ? existing.revision + 1 : 1;
+        pendingConfigSaves.set(key, {
+            accountId,
+            stepIdx,
+            requestBody,
+            revision,
+            updatedAt: Date.now(),
+        });
+        notifyServiceWorkerAboutSave(pendingConfigSaves.get(key));
+        configSaveError = null;
+        persistPendingConfigSaves();
+        updateSaveIndicatorByQueue();
+
+        if (configSaveTimers.has(key)) {
+            window.clearTimeout(configSaveTimers.get(key));
+        }
+        if (options.immediate) {
+            flushConfigSave(key, { isAuto: options.isAuto !== false });
+            return;
+        }
+        const timerId = window.setTimeout(() => {
+            configSaveTimers.delete(key);
+            flushConfigSave(key, { isAuto: true });
+        }, CONFIG_AUTO_SAVE_DELAY_MS);
+        configSaveTimers.set(key, timerId);
+    }
+
+    function applySavedConfigToState(accountId, stepIdx, requestBody) {
+        if (String(state.selectedAccountId) !== String(accountId)) return;
+        if (!state.rawSteps || !state.rawSteps[stepIdx]) return;
+        const step = state.rawSteps[stepIdx];
+        const payload = requestBody && requestBody.Config ? requestBody.Config : {};
+        const scheduleRules = Object.prototype.hasOwnProperty.call(requestBody || {}, "ScheduleRules")
+            ? requestBody.ScheduleRules
+            : null;
+        const currentCfg = step.Config || {};
+        const mergedCfg = { ...currentCfg };
+        Object.entries(payload).forEach(([cfgKey, value]) => {
+            const existing = currentCfg[cfgKey];
+            const hasValueField = existing && typeof existing === "object" && Object.prototype.hasOwnProperty.call(existing, "value");
+            mergedCfg[cfgKey] = hasValueField ? { ...existing, value } : value;
+        });
+        step.Config = mergedCfg;
+        if (scheduleRules !== null) {
+            step.ScheduleRules = scheduleRules || [];
+        }
+        if (state.scheduleDrafts && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx)) {
+            delete state.scheduleDrafts[stepIdx];
+        }
+        state.steps = buildViewStepsFromRaw(state.rawSteps, state.visibilityMap);
+    }
+
+    async function flushConfigSave(key, options = {}) {
+        const record = pendingConfigSaves.get(key);
+        if (!record || inFlightConfigSaves.has(key)) return;
+        const isAuto = options.isAuto !== false;
+        inFlightConfigSaves.add(key);
+        updateSaveIndicatorByQueue();
+        const sentRevision = record.revision;
+        const { accountId, stepIdx, requestBody } = record;
+        try {
+            const url = replaceStepTemplate(state.updateUrlTemplate, accountId, stepIdx);
+            const resp = await fetch(url, {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1",
+                },
+                body: JSON.stringify(requestBody),
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
+
+            const freshRecord = pendingConfigSaves.get(key);
+            if (freshRecord && freshRecord.revision === sentRevision) {
+                pendingConfigSaves.delete(key);
+                notifyServiceWorkerSaveDone(accountId, stepIdx);
+            }
+            lastConfigSavedAt = new Date();
+            configSaveError = null;
+            applySavedConfigToState(accountId, stepIdx, requestBody);
+            persistPendingConfigSaves();
+            const now = Date.now();
+            if (!isAuto || now - lastConfigToastAt > 4000) {
+                showMiniToast("Сохранено", "success");
+                lastConfigToastAt = now;
+            }
+            if (!isAuto) {
+                renderSteps();
+                renderConfig();
+            }
+        } catch (err) {
+            console.error(err);
+            configSaveError = err && err.message ? err.message : "Не удалось сохранить настройки";
+            if (isAuto) {
+                showMiniToast(configSaveError, "error");
+            } else {
+                alert(configSaveError);
+            }
+        } finally {
+            inFlightConfigSaves.delete(key);
+            updateSaveIndicatorByQueue();
+            const freshRecord = pendingConfigSaves.get(key);
+            if (freshRecord && freshRecord.revision !== sentRevision) {
+                flushConfigSave(key, { isAuto: true });
+            }
+        }
+    }
+
+    function flushPendingConfigSavesOnExit() {
+        if (!pendingConfigSaves.size) return;
+        persistPendingConfigSaves();
+        pendingConfigSaves.forEach((record) => {
+            const url = replaceStepTemplate(state.updateUrlTemplate, record.accountId, record.stepIdx);
+            fetch(url, {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1",
+                },
+                body: JSON.stringify(record.requestBody),
+                keepalive: true,
+            }).catch(() => {});
+        });
     }
 
     async function saveConfig(stepIdx, formEl, cfg, options = {}) {
         const isAuto = Boolean(options.isAuto);
         if (!state.selectedAccountId) return;
-        if (isAuto && configSaveInProgress) {
-            configAutoSaveQueued = true;
-            return;
-        }
-        if (isAuto) {
-            configSaveInProgress = true;
-        }
         if (configAutoSaveTimer) {
             clearTimeout(configAutoSaveTimer);
             configAutoSaveTimer = null;
@@ -2036,57 +2339,8 @@
             }
             return;
         }
-        try {
-            const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
-            const resp = await fetch(url, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(requestBody),
-            });
-            const data = await resp.json().catch(() => ({}));
-            if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка сохранения");
-            if (state.rawSteps[stepIdx]) {
-                const currentCfg = state.rawSteps[stepIdx].Config || {};
-                const mergedCfg = { ...currentCfg };
-
-                Object.entries(payload).forEach(([key, value]) => {
-                    const existing = currentCfg[key];
-                    const hasValueField = existing && typeof existing === "object" && Object.prototype.hasOwnProperty.call(existing, "value");
-                    if (hasValueField) {
-                        mergedCfg[key] = { ...existing, value };
-                    } else {
-                        mergedCfg[key] = value;
-                    }
-                });
-
-                state.rawSteps[stepIdx].Config = mergedCfg;
-                if (scheduleRules !== null) {
-                    state.rawSteps[stepIdx].ScheduleRules = scheduleRules || [];
-                }
-                if (state.scheduleDrafts && Object.prototype.hasOwnProperty.call(state.scheduleDrafts, stepIdx)) {
-                    delete state.scheduleDrafts[stepIdx];
-                }
-                state.steps = buildViewStepsFromRaw(state.rawSteps, state.visibilityMap);
-            }
-            renderSteps();
-            const now = Date.now();
-            if (!isAuto || now - lastConfigToastAt > 4000) {
-                showMiniToast("Сохранено", "success");
-                lastConfigToastAt = now;
-            }
-            renderConfig();
-        } catch (err) {
-            console.error(err);
-            alert(err.message || "Не удалось сохранить настройки");
-        } finally {
-            if (isAuto) {
-                configSaveInProgress = false;
-                if (configAutoSaveQueued) {
-                    configAutoSaveQueued = false;
-                    scheduleConfigAutoSave(stepIdx, formEl, cfg);
-                }
-            }
-        }
+        enqueueConfigSave(state.selectedAccountId, stepIdx, requestBody, { immediate: true, isAuto });
+        await flushConfigSave(buildConfigSaveKey(state.selectedAccountId, stepIdx), { isAuto });
     }
 
     function extractStepsAndMenu(payload) {
@@ -2407,6 +2661,12 @@
     }
 
     function init() {
+        restorePendingConfigSaves();
+        updateSaveIndicatorByQueue();
+        ensureBackgroundSyncReady().then(() => {
+            pendingConfigSaves.forEach((record) => notifyServiceWorkerAboutSave(record));
+        }).catch(() => {});
+
         if (accountsRoot) {
             accountsRoot.addEventListener('click', handleAccountClick);
             accountsRoot.addEventListener('change', handleAccountToggle);
@@ -2520,6 +2780,8 @@
 
         bindSwipeNavigation();
         window.addEventListener('resize', handleResize);
+        window.addEventListener('beforeunload', flushPendingConfigSavesOnExit);
+        window.addEventListener('pagehide', flushPendingConfigSavesOnExit);
 
         syncAccountsUi();
 
@@ -2575,6 +2837,12 @@
         } else if (manageRoot) {
             manageRoot.removeAttribute('data-mobile-view');
             state.mobileView = null;
+        }
+
+        if (pendingConfigSaves.size) {
+            pendingConfigSaves.forEach((_, key) => {
+                flushConfigSave(key, { isAuto: true });
+            });
         }
     }
 
