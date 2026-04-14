@@ -329,19 +329,54 @@ def _resolve_remote_account(
     return None, None
 
 
+def _parse_remote_datetime(dt_raw: Any) -> Optional[datetime]:
+    """Пытается распарсить удалённую дату/время в объект datetime."""
+
+    if dt_raw is None:
+        return None
+
+    if isinstance(dt_raw, datetime):
+        return dt_raw
+
+    text = str(dt_raw).strip()
+    if not text:
+        return None
+
+    parse_candidates = [text]
+    if text.endswith("Z"):
+        parse_candidates.append(text.replace("Z", "+00:00"))
+
+    for candidate in parse_candidates:
+        try:
+            return datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+
+    return None
+
+
+def _is_placeholder_epoch(dt: datetime) -> bool:
+    """Возвращает True для placeholder-дат эпохи Unix (1970/1971)."""
+
+    dt_utc = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    dt_utc = dt_utc.astimezone(timezone.utc)
+    return dt_utc.year <= 1971
+
+
 def _fmt_last_updated(dt_str: Optional[str]) -> Optional[str]:
     """
-    Преобразует ISO-строку из /api/resources в формат 'чч:мм дд:мм:гггг'.
-    Если что-то пошло не так — возвращает исходную строку.
+    Преобразует метку last_updated к виду 'чч:мм дд:мм:гггг'.
+    Epoch-заглушки (1970/1971) считаются невалидными.
     """
     if not dt_str:
         return None
-    try:
-        dt = datetime.fromisoformat(dt_str)
-        dt = _to_moscow_time(dt)
-        return dt.strftime("%H:%M %d.%m.%Y")
-    except Exception:
-        return dt_str
+
+    dt = _parse_remote_datetime(dt_str)
+    if dt is None or _is_placeholder_epoch(dt):
+        return None
+
+    dt = _to_moscow_time(dt)
+    return dt.strftime("%H:%M %d.%m.%Y")
 
 
 def _fmt_generated_at(dt_str: Optional[str]) -> Optional[str]:
@@ -349,6 +384,13 @@ def _fmt_generated_at(dt_str: Optional[str]) -> Optional[str]:
 
     if not dt_str:
         return None
+
+    dt = _parse_remote_datetime(dt_str)
+    if dt is None:
+        return dt_str
+
+    dt = _to_moscow_time(dt)
+    return dt.strftime("%d.%m %H:%M")
 
 
 def _format_resource_value(view: Any, emoji: str) -> Markup:
@@ -384,17 +426,6 @@ def _to_moscow_time(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(MOSCOW_TZ)
-
-    try:
-        dt = datetime.fromisoformat(dt_str)
-    except ValueError:
-        try:
-            dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
-        except Exception:
-            return dt_str
-
-    dt = _to_moscow_time(dt)
-    return dt.strftime("%d.%m %H:%M")
 
 
 def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any]]:
@@ -479,6 +510,9 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
             brief = Markup(" / ").join(brief_parts)
 
             last_raw = res.get("last_updated")
+            last_dt = _parse_remote_datetime(last_raw)
+            if last_dt is not None and _is_placeholder_epoch(last_dt):
+                last_raw = None
             last_fmt = _fmt_last_updated(last_raw)
 
             result[acc.id] = {
