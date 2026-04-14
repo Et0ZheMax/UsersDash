@@ -293,7 +293,17 @@
 
         Object.entries(source).forEach(([key, val]) => {
             const optionCfg = normalizeOptionConfig(val);
-            normalized[key] = optionCfg || val;
+            if (optionCfg) {
+                normalized[key] = optionCfg;
+                return;
+            }
+
+            const hasValueEnvelope = (
+                val
+                && typeof val === "object"
+                && Object.prototype.hasOwnProperty.call(val, "value")
+            );
+            normalized[key] = hasValueEnvelope ? unwrapValue(val) : val;
         });
 
         return normalized;
@@ -1776,6 +1786,10 @@
             return state.scheduleDrafts[stepIdx];
         }
 
+        if (!options.forceCollect) {
+            return null;
+        }
+
         const editor = rootEl.querySelector('[data-role="schedule-editor"]');
         if (!editor) return Array.isArray(originalRules) ? originalRules : [];
         const rows = Array.from(editor.querySelectorAll('[data-role="schedule-row"]'));
@@ -2009,9 +2023,18 @@
         const step = state.rawSteps && state.rawSteps[stepIdx];
         const payload = collectConfig(formEl, cfg || {});
         const scheduleRules = collectScheduleRules(formEl, step && step.ScheduleRules);
-        const requestBody = { Config: payload };
+        const requestBody = {};
+        if (Object.keys(payload).length) {
+            requestBody.Config = payload;
+        }
         if (scheduleRules !== null) {
             requestBody.ScheduleRules = scheduleRules;
+        }
+        if (!Object.keys(requestBody).length) {
+            if (!isAuto) {
+                showMiniToast("Нет изменений для сохранения", "info");
+            }
+            return;
         }
         try {
             const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
