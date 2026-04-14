@@ -105,6 +105,17 @@ def _get_or_create_farmdata_entry(
     return farm_data
 
 
+def _is_truthy(value) -> bool:
+    """Нормализует флаг из JSON/query в bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
 # ------------------------ GET /api/farms/v1 ------------------------------
 
 
@@ -227,9 +238,15 @@ def save_farms_v1():
 
     payload = request.get_json(silent=True) or {}
     items = payload.get("items") or []
+    apply_instance_id_updates = _is_truthy(
+        payload.get("apply_instance_id_updates")
+        or request.args.get("apply_instance_id_updates")
+    )
 
     if not isinstance(items, list) or not items:
         return jsonify({"ok": False, "error": "No items to save."}), 400
+
+    instance_id_update_suggestions = []
 
     try:
         for row in items:
@@ -240,15 +257,11 @@ def save_farms_v1():
                 # Нечем сопоставлять
                 continue
 
-            if internal_id:
-                # Пытаемся по internal_id (GUID или instanceId)
-                acc = Account.query.filter_by(internal_id=internal_id).first()
-            else:
-                acc = None
+            acc = Account.query.filter_by(internal_id=internal_id).first() if internal_id else None
 
             if not acc and name:
-                # Фоллбек по имени, если internal_id ещё не забит
-                acc = Account.query.filter_by(name=name).first()
+                # Фоллбек по имени в рамках текущего сервера.
+                acc = Account.query.filter_by(server_id=srv.id, name=name).first()
 
             if not acc:
                 # Не нашли соответствие — можно логировать, но не падаем
@@ -263,7 +276,40 @@ def save_farms_v1():
                 acc.name = name
 
             if internal_id and acc.internal_id != internal_id:
-                acc.internal_id = internal_id
+                # Сценарий "ферму удалили/создали заново, имя осталось, instance_id сменился".
+                # В таком случае предлагается обновление, а применение — по флагу.
+                occupied = Account.query.filter_by(internal_id=internal_id).first()
+                occupied_by_other = occupied and occupied.id != acc.id
+                matched_by_name = bool(name and acc.name == name)
+                old_internal_id = (acc.internal_id or "").strip()
+
+                if matched_by_name and old_internal_id:
+                    suggestion = {
+                        "account_id": acc.id,
+                        "farm_name": acc.name,
+                        "server": srv.name,
+                        "old_internal_id": old_internal_id,
+                        "new_internal_id": internal_id,
+                        "applied": False,
+                        "reason": (
+                            "Имя фермы совпало, но instance_id изменился. "
+                            "Возможна пересозданная ферма на сервере."
+                        ),
+                    }
+                    if occupied_by_other:
+                        suggestion["conflict_account_id"] = occupied.id
+                        suggestion["conflict_farm_name"] = occupied.name
+                        suggestion["reason"] = (
+                            "Новый instance_id уже занят другой фермой. "
+                            "Нужно ручное подтверждение."
+                        )
+                    elif apply_instance_id_updates:
+                        acc.internal_id = internal_id
+                        suggestion["applied"] = True
+                    instance_id_update_suggestions.append(suggestion)
+                elif not occupied_by_other:
+                    # Для новых/непривязанных internal_id обновляем сразу.
+                    acc.internal_id = internal_id
 
             owner_id = acc.owner_id
             farm_name = acc.name
@@ -324,4 +370,10 @@ def save_farms_v1():
         print(f"[save_farms_v1] ERROR: {exc}")
         return jsonify({"ok": False, "error": "Internal error while saving."}), 500
 
-    return jsonify({"ok": True})
+    return jsonify(
+        {
+            "ok": True,
+            "instance_id_updates": instance_id_update_suggestions,
+            "apply_instance_id_updates": apply_instance_id_updates,
+        }
+    )
