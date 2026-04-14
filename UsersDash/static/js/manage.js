@@ -308,7 +308,7 @@
         const options = entry.options.map((opt) => (typeof opt === "number" ? String(opt) : String(opt)));
         let value = unwrapValue(entry.value);
         if (value === undefined || value === null) value = "";
-        if (typeof value === "number") value = String(value);
+        if (typeof value === "number" || typeof value === "boolean") value = String(value);
 
         return { value, options };
     }
@@ -1740,11 +1740,15 @@
             } else if (conf && typeof conf === "object" && Array.isArray(conf.options)) {
                 const options = conf.options
                     .map((opt) => {
+                        const normalizedOpt = String(opt);
+                        const normalizedValue = conf.value === null || conf.value === undefined
+                            ? ""
+                            : String(conf.value);
                         const text = (OPTION_LABELS[key] && OPTION_LABELS[key][opt])
                             || (OPTION_LABELS["*"] && OPTION_LABELS["*"][opt])
                             || opt;
-                        const selected = opt === conf.value ? "selected" : "";
-                        return `<option value="${opt}" ${selected}>${text}</option>`;
+                        const selected = normalizedOpt === normalizedValue ? "selected" : "";
+                        return `<option value="${normalizedOpt}" ${selected}>${text}</option>`;
                     }).join("");
                 field.innerHTML = `
                     <label for="cfg_${key}">${label}</label>
