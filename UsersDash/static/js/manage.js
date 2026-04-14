@@ -231,6 +231,8 @@
     const mobileBackBtn = document.querySelector('[data-role="mobile-back"]');
     const layoutRoot = document.querySelector('[data-role="manage-layout"]');
     const manageRoot = document.querySelector('.manage-modern');
+    const saveIndicator = document.querySelector('[data-role="config-save-indicator"]');
+    const mobileSaveIndicator = document.querySelector('[data-role="config-save-indicator-mobile"]');
     const explicitAdminFlag = (typeof window.manageIsAdmin !== "undefined") ? window.manageIsAdmin : false;
     const isAdminManage = Boolean(
         explicitAdminFlag
@@ -239,6 +241,14 @@
         || ((window.location && window.location.pathname) ? window.location.pathname.includes('/admin/') : false)
     );
     const paymentWarning = document.querySelector('[data-role="payment-warning"]');
+    const CONFIG_AUTO_SAVE_DELAY_MS = 450;
+    const SAVE_STATUS_CLASSES = [
+        "manage-modern__save-indicator--idle",
+        "manage-modern__save-indicator--dirty",
+        "manage-modern__save-indicator--saving",
+        "manage-modern__save-indicator--saved",
+        "manage-modern__save-indicator--error",
+    ];
 
     function escapeHtml(str) {
         return (str || "").replace(/[&<>"]+/g, (ch) => ({
@@ -259,6 +269,15 @@
             url = url.replace("__STEP__", stepIdx);
         }
         return url;
+    }
+
+    function setSaveIndicatorState(stateName, text) {
+        [saveIndicator, mobileSaveIndicator].forEach((indicator) => {
+            if (!indicator) return;
+            SAVE_STATUS_CLASSES.forEach((cls) => indicator.classList.remove(cls));
+            indicator.classList.add(`manage-modern__save-indicator--${stateName}`);
+            indicator.textContent = text;
+        });
     }
 
     function unwrapValue(raw) {
@@ -1454,6 +1473,8 @@
             clearTimeout(configAutoSaveTimer);
             configAutoSaveTimer = null;
         }
+        configAutoSaveQueued = false;
+        setSaveIndicatorState("idle", "Автосохранение включено");
 
         if (state.selectedStepIndex === null || !state.rawSteps[state.selectedStepIndex]) {
             configRoot.innerHTML = '<div class="config-empty">Выберите шаг, чтобы редактировать настройки.</div>';
@@ -1997,13 +2018,16 @@
     function scheduleConfigAutoSave(stepIdx, formEl, cfg) {
         if (!formEl || !cfg || formEl !== currentConfigForm) return;
         if (Number(formEl.dataset.stepIdx) !== stepIdx) return;
+        setSaveIndicatorState("dirty", "Есть несохранённые изменения");
 
         if (configAutoSaveTimer) {
             clearTimeout(configAutoSaveTimer);
         }
 
-        configAutoSaveTimer = null;
-        saveConfig(stepIdx, formEl, cfg, { isAuto: true });
+        configAutoSaveTimer = window.setTimeout(() => {
+            configAutoSaveTimer = null;
+            saveConfig(stepIdx, formEl, cfg, { isAuto: true });
+        }, CONFIG_AUTO_SAVE_DELAY_MS);
     }
 
     async function saveConfig(stepIdx, formEl, cfg, options = {}) {
@@ -2037,10 +2061,16 @@
             return;
         }
         try {
+            if (isAuto) {
+                setSaveIndicatorState("saving", "Сохраняем изменения…");
+            }
             const url = replaceStepTemplate(state.updateUrlTemplate, state.selectedAccountId, stepIdx);
             const resp = await fetch(url, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1",
+                },
                 body: JSON.stringify(requestBody),
             });
             const data = await resp.json().catch(() => ({}));
@@ -2068,16 +2098,26 @@
                 }
                 state.steps = buildViewStepsFromRaw(state.rawSteps, state.visibilityMap);
             }
-            renderSteps();
             const now = Date.now();
             if (!isAuto || now - lastConfigToastAt > 4000) {
                 showMiniToast("Сохранено", "success");
                 lastConfigToastAt = now;
             }
-            renderConfig();
+            const savedAt = new Date();
+            const savedTime = savedAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+            setSaveIndicatorState("saved", `Сохранено в ${savedTime}`);
+            if (!isAuto) {
+                renderSteps();
+                renderConfig();
+            }
         } catch (err) {
             console.error(err);
-            alert(err.message || "Не удалось сохранить настройки");
+            setSaveIndicatorState("error", "Ошибка сохранения, повторяем при изменении");
+            if (isAuto) {
+                showMiniToast(err.message || "Не удалось сохранить настройки", "error");
+            } else {
+                alert(err.message || "Не удалось сохранить настройки");
+            }
         } finally {
             if (isAuto) {
                 configSaveInProgress = false;

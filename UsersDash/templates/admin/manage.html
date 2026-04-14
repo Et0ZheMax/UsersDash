@@ -20,6 +20,9 @@
         <button class="btn btn-primary" onclick="goBack()">← В дашборд</button>
         <a class="btn btn-outline" href="{{ url_for('admin.config_visibility_matrix') }}">Матрица видимости</a>
         <button class="btn btn-outline" onclick="window.location.reload()">Обновить</button>
+        <div class="manage-modern__save-indicator manage-modern__save-indicator--idle" data-role="config-save-indicator">
+            Автосохранение включено
+        </div>
         <label class="manage-modern__search">
             <span class="manage-modern__search-icon" aria-hidden="true">
                 <svg viewBox="0 0 20 20" focusable="false">
@@ -42,6 +45,10 @@
         <div class="manage-modern__mobile-titles">
             <div class="manage-modern__mobile-title" data-role="mobile-title">Фермы</div>
             <div class="manage-modern__mobile-subtitle" data-role="mobile-subtitle"></div>
+            <div class="manage-modern__mobile-save-indicator manage-modern__save-indicator manage-modern__save-indicator--idle"
+                 data-role="config-save-indicator-mobile">
+                Автосохранение включено
+            </div>
         </div>
         <div class="manage-modern__mobile-placeholder" aria-hidden="true"></div>
     </div>
