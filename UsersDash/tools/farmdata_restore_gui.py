@@ -17,6 +17,7 @@ import argparse
 import json
 import shutil
 import sqlite3
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -399,6 +400,9 @@ class RestoreGui:
         self.selected_next_payment_amount_ids: set[int] = set()
         self.main_rows_count = 0
         self.backup_rows_count = 0
+        self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="farmdata-restore")
+        self._busy = False
+        self._refresh_token = 0
 
         self.backup_var = StringVar()
         self.search_var = StringVar()
@@ -409,6 +413,7 @@ class RestoreGui:
         root.geometry("2320x820")
 
         self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._reload_backups(initial_backup)
 
     def _build_ui(self) -> None:
@@ -420,8 +425,10 @@ class RestoreGui:
         self.backup_combo.pack(side=LEFT, padx=(8, 8))
         self.backup_combo.bind("<<ComboboxSelected>>", lambda _event: self.load_selected_backup())
 
-        ttk.Button(top, text="Обновить список", command=self._reload_backups).pack(side=LEFT)
-        ttk.Button(top, text="Загрузить", command=self.load_selected_backup).pack(side=LEFT, padx=(8, 0))
+        self.reload_btn = ttk.Button(top, text="Обновить список", command=self._reload_backups)
+        self.reload_btn.pack(side=LEFT)
+        self.load_btn = ttk.Button(top, text="Загрузить", command=self.load_selected_backup)
+        self.load_btn.pack(side=LEFT, padx=(8, 0))
 
         filters = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         filters.pack(fill="x")
@@ -430,26 +437,40 @@ class RestoreGui:
         search_entry.pack(side=LEFT, padx=(8, 16))
         search_entry.bind("<KeyRelease>", lambda _event: self._refresh_tree())
 
-        ttk.Checkbutton(
+        self.only_empty_cb = ttk.Checkbutton(
             filters,
             text="Показывать только строки с пустыми полями в основной БД",
             variable=self.only_empty_var,
             command=self._refresh_tree,
-        ).pack(side=LEFT)
+        )
+        self.only_empty_cb.pack(side=LEFT)
 
         btns = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         btns.pack(fill="x")
-        ttk.Button(btns, text="Отметить email у всех", command=self._select_all_email).pack(side=LEFT)
-        ttk.Button(btns, text="Отметить login у всех", command=self._select_all_login).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(btns, text="Отметить password у всех", command=self._select_all_password).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(btns, text="Отметить дату оплаты у всех", command=self._select_all_next_payment_at).pack(
+        self.select_all_email_btn = ttk.Button(btns, text="Отметить email у всех", command=self._select_all_email)
+        self.select_all_email_btn.pack(side=LEFT)
+        self.select_all_login_btn = ttk.Button(btns, text="Отметить login у всех", command=self._select_all_login)
+        self.select_all_login_btn.pack(side=LEFT, padx=(8, 0))
+        self.select_all_password_btn = ttk.Button(
+            btns, text="Отметить password у всех", command=self._select_all_password
+        )
+        self.select_all_password_btn.pack(side=LEFT, padx=(8, 0))
+        self.select_all_next_payment_at_btn = ttk.Button(
+            btns, text="Отметить дату оплаты у всех", command=self._select_all_next_payment_at
+        )
+        self.select_all_next_payment_at_btn.pack(
             side=LEFT, padx=(8, 0)
         )
-        ttk.Button(btns, text="Отметить тариф у всех", command=self._select_all_next_payment_amount).pack(
+        self.select_all_next_payment_amount_btn = ttk.Button(
+            btns, text="Отметить тариф у всех", command=self._select_all_next_payment_amount
+        )
+        self.select_all_next_payment_amount_btn.pack(
             side=LEFT, padx=(8, 0)
         )
-        ttk.Button(btns, text="Снять всё", command=self._clear_selection).pack(side=LEFT, padx=(8, 0))
-        ttk.Button(btns, text="Применить выбранное", command=self._apply_changes).pack(side=RIGHT)
+        self.clear_selection_btn = ttk.Button(btns, text="Снять всё", command=self._clear_selection)
+        self.clear_selection_btn.pack(side=LEFT, padx=(8, 0))
+        self.apply_btn = ttk.Button(btns, text="Применить выбранное", command=self._apply_changes)
+        self.apply_btn.pack(side=RIGHT)
 
         status_frame = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         status_frame.pack(fill="x")
@@ -512,6 +533,53 @@ class RestoreGui:
 
         self.tree.bind("<Double-1>", self._on_double_click)
 
+    def _on_close(self) -> None:
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self.root.destroy()
+
+    def _set_busy(self, busy: bool, status_text: str | None = None) -> None:
+        self._busy = busy
+        state = "disabled" if busy else "normal"
+        readonly_state = "disabled" if busy else "readonly"
+        self.backup_combo.configure(state=readonly_state)
+        self.reload_btn.configure(state=state)
+        self.load_btn.configure(state=state)
+        self.only_empty_cb.configure(state=state)
+        self.select_all_email_btn.configure(state=state)
+        self.select_all_login_btn.configure(state=state)
+        self.select_all_password_btn.configure(state=state)
+        self.select_all_next_payment_at_btn.configure(state=state)
+        self.select_all_next_payment_amount_btn.configure(state=state)
+        self.clear_selection_btn.configure(state=state)
+        self.apply_btn.configure(state=state)
+        if status_text:
+            self.status_var.set(status_text)
+
+    def _run_in_background(
+        self,
+        task,  # type: ignore[no-untyped-def]
+        *,
+        busy_text: str,
+        on_success,  # type: ignore[no-untyped-def]
+        on_error_title: str,
+    ) -> None:
+        self._set_busy(True, busy_text)
+        future: Future = self._executor.submit(task)
+
+        def _done_callback(done_future: Future) -> None:
+            def _finish() -> None:
+                self._set_busy(False)
+                try:
+                    result = done_future.result()
+                except Exception as exc:  # pragma: no cover - UI error path
+                    messagebox.showerror(on_error_title, str(exc))
+                    return
+                on_success(result)
+
+            self.root.after(0, _finish)
+
+        future.add_done_callback(_done_callback)
+
     def _reload_backups(self, initial_backup: Path | None = None) -> None:
         self.backups_dir.mkdir(parents=True, exist_ok=True)
         self.backup_paths = sorted(
@@ -532,28 +600,37 @@ class RestoreGui:
             self.load_selected_backup()
 
     def load_selected_backup(self) -> None:
+        if self._busy:
+            return
+
         selected = self.backup_var.get().strip()
         if not selected:
             messagebox.showwarning("Нет бэкапа", "Сначала выберите файл бэкапа.")
             return
 
         backup_path = Path(selected)
-        try:
+
+        def _load() -> tuple[int, int, list[RestoreCandidate]]:
             main_rows = load_farmdata_rows(self.main_db_path)
             backup_rows = load_farmdata_rows(backup_path)
-        except Exception as exc:  # pragma: no cover - UI error path
-            messagebox.showerror("Ошибка чтения БД", str(exc))
-            return
+            candidates = build_restore_candidates(main_rows, backup_rows)
+            return len(main_rows), len(backup_rows), candidates
 
-        self.main_rows_count = len(main_rows)
-        self.backup_rows_count = len(backup_rows)
-        self.candidates = build_restore_candidates(main_rows, backup_rows)
-        self.selected_email_ids.clear()
-        self.selected_login_ids.clear()
-        self.selected_password_ids.clear()
-        self.selected_next_payment_at_ids.clear()
-        self.selected_next_payment_amount_ids.clear()
-        self._refresh_tree()
+        def _on_loaded(payload: tuple[int, int, list[RestoreCandidate]]) -> None:
+            self.main_rows_count, self.backup_rows_count, self.candidates = payload
+            self.selected_email_ids.clear()
+            self.selected_login_ids.clear()
+            self.selected_password_ids.clear()
+            self.selected_next_payment_at_ids.clear()
+            self.selected_next_payment_amount_ids.clear()
+            self._refresh_tree()
+
+        self._run_in_background(
+            _load,
+            busy_text=f"Читаю бэкап: {backup_path.name}…",
+            on_success=_on_loaded,
+            on_error_title="Ошибка чтения БД",
+        )
 
     def _passes_filters(self, item: RestoreCandidate) -> bool:
         text = self.search_var.get().strip().lower()
@@ -582,14 +659,20 @@ class RestoreGui:
         return True
 
     def _refresh_tree(self) -> None:
+        self._refresh_token += 1
+        refresh_token = self._refresh_token
         self.tree.delete(*self.tree.get_children())
-        visible_count = 0
+        filtered_items = [item for item in self.candidates if self._passes_filters(item)]
+        self.status_var.set("Отрисовываю таблицу…")
+        self._render_tree_chunk(refresh_token=refresh_token, items=filtered_items, start=0)
 
-        for item in self.candidates:
-            if not self._passes_filters(item):
-                continue
+    def _render_tree_chunk(self, *, refresh_token: int, items: list[RestoreCandidate], start: int) -> None:
+        if refresh_token != self._refresh_token:
+            return
 
-            visible_count += 1
+        chunk_size = 250
+        end = min(start + chunk_size, len(items))
+        for item in items[start:end]:
             email_mark = "✅" if item.row_id in self.selected_email_ids else "—"
             login_mark = "✅" if item.row_id in self.selected_login_ids else "—"
             password_mark = "✅" if item.row_id in self.selected_password_ids else "—"
@@ -622,12 +705,16 @@ class RestoreGui:
                 ),
             )
 
+        if end < len(items):
+            self.root.after(1, lambda: self._render_tree_chunk(refresh_token=refresh_token, items=items, start=end))
+            return
+
         self.status_var.set(
             build_status_text(
                 main_rows_count=self.main_rows_count,
                 backup_rows_count=self.backup_rows_count,
                 candidates_count=len(self.candidates),
-                visible_count=visible_count,
+                visible_count=len(items),
                 only_empty_enabled=self.only_empty_var.get(),
                 search_text=self.search_var.get(),
             )
@@ -711,6 +798,9 @@ class RestoreGui:
         self._refresh_tree()
 
     def _apply_changes(self) -> None:
+        if self._busy:
+            return
+
         selected_any = bool(
             self.selected_email_ids
             or self.selected_login_ids
@@ -735,7 +825,7 @@ class RestoreGui:
         if not confirm:
             return
 
-        try:
+        def _apply() -> tuple[int, Path, Path]:
             safety_backup = create_safety_backup(self.main_db_path, self.backups_dir)
             changed_count = apply_selected_changes(
                 self.main_db_path,
@@ -782,18 +872,25 @@ class RestoreGui:
 
             report_dir = self.backups_dir / "restore_reports"
             report_path = dump_restore_report(report_dir, current_backup, safety_backup, changed_items)
-        except Exception as exc:  # pragma: no cover - UI error path
-            messagebox.showerror("Ошибка применения", str(exc))
-            return
+            return changed_count, safety_backup, report_path
 
-        messagebox.showinfo(
-            "Готово",
-            "Восстановление завершено.\n"
-            f"Обновлено строк: {changed_count}\n"
-            f"Страхующий бэкап: {safety_backup}\n"
-            f"Отчёт: {report_path}",
+        def _on_applied(payload: tuple[int, Path, Path]) -> None:
+            changed_count, safety_backup, report_path = payload
+            messagebox.showinfo(
+                "Готово",
+                "Восстановление завершено.\n"
+                f"Обновлено строк: {changed_count}\n"
+                f"Страхующий бэкап: {safety_backup}\n"
+                f"Отчёт: {report_path}",
+            )
+            self.load_selected_backup()
+
+        self._run_in_background(
+            _apply,
+            busy_text="Применяю выбранные изменения…",
+            on_success=_on_applied,
+            on_error_title="Ошибка применения",
         )
-        self.load_selected_backup()
 
 
 def parse_args() -> argparse.Namespace:
