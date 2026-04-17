@@ -65,15 +65,26 @@ def _safe_farm_name(name: str | None) -> str:
     return (name or "").strip()
 
 
-def _farm_key(row: FarmDataRow) -> tuple[str, int | tuple[int, str]]:
-    """Возвращает устойчивый ключ сопоставления строк между БД.
+def _match_main_row(
+    backup_row: FarmDataRow,
+    main_by_account: dict[int, FarmDataRow],
+    main_by_fallback: dict[tuple[int, str], FarmDataRow],
+) -> FarmDataRow | None:
+    """Подбирает строку из основной БД для записи из бэкапа.
 
-    Приоритет: account_id, затем fallback на (user_id, farm_name_lower).
+    Сначала пробует точное совпадение по `account_id`, затем fallback по
+    `(user_id, farm_name_lower)`. Такой порядок сохраняет стабильность
+    обновлений, но позволяет находить строки после миграций, где account_id
+    изменился между бэкапом и текущей БД.
     """
 
-    if row.account_id is not None:
-        return ("account", row.account_id)
-    return ("fallback", (row.user_id, _safe_farm_name(row.farm_name).lower()))
+    if backup_row.account_id is not None:
+        matched = main_by_account.get(backup_row.account_id)
+        if matched is not None:
+            return matched
+
+    fallback_key = (backup_row.user_id, _safe_farm_name(backup_row.farm_name).lower())
+    return main_by_fallback.get(fallback_key)
 
 
 def load_farmdata_rows(db_path: Path) -> list[FarmDataRow]:
@@ -115,12 +126,12 @@ def load_farmdata_rows(db_path: Path) -> list[FarmDataRow]:
 def build_restore_candidates(main_rows: list[FarmDataRow], backup_rows: list[FarmDataRow]) -> list[RestoreCandidate]:
     """Строит список строк, где есть что восстанавливать из бэкапа."""
 
-    main_by_key = {_farm_key(row): row for row in main_rows}
+    main_by_account = {row.account_id: row for row in main_rows if row.account_id is not None}
+    main_by_fallback = {(row.user_id, _safe_farm_name(row.farm_name).lower()): row for row in main_rows}
     candidates: list[RestoreCandidate] = []
 
     for backup_row in backup_rows:
-        key = _farm_key(backup_row)
-        main_row = main_by_key.get(key)
+        main_row = _match_main_row(backup_row, main_by_account, main_by_fallback)
         if not main_row:
             continue
 
