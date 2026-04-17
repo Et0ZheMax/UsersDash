@@ -1,11 +1,12 @@
-"""GUI-утилита для выборочного восстановления login/password из бэкапов UsersDash.
+"""GUI-утилита для выборочного восстановления полей farm_data/accounts из бэкапов UsersDash.
 
-Сценарий рассчитан на экстренное восстановление полей `farm_data.login` и
-`farm_data.password`, если значения были случайно очищены или перезаписаны.
+Сценарий рассчитан на экстренное восстановление полей:
+- `farm_data.email`, `farm_data.login`, `farm_data.password`;
+- `accounts.next_payment_at`, `accounts.next_payment_amount`.
 
 Ключевые свойства:
 - безопасное применение: перед записью делается страхующий бэкап основной БД;
-- выборочное восстановление: можно включать login/password отдельно по строкам;
+- выборочное восстановление: можно включать нужные поля отдельно по строкам;
 - сравнение "основная БД" vs "выбранный бэкап" в визуальной таблице;
 - отчёт по применению сохраняется в JSON для аудита.
 """
@@ -32,8 +33,11 @@ class FarmDataRow:
     account_id: int | None
     user_id: int
     farm_name: str
+    email: str | None
     login: str | None
     password: str | None
+    next_payment_at: str | None
+    next_payment_amount: int | None
 
 
 @dataclass(slots=True)
@@ -44,12 +48,21 @@ class RestoreCandidate:
     account_id: int | None
     user_id: int
     farm_name: str
+    main_email: str | None
+    backup_email: str | None
     main_login: str | None
     backup_login: str | None
     main_password: str | None
     backup_password: str | None
+    main_next_payment_at: str | None
+    backup_next_payment_at: str | None
+    main_next_payment_amount: int | None
+    backup_next_payment_amount: int | None
+    can_restore_email: bool
     can_restore_login: bool
     can_restore_password: bool
+    can_restore_next_payment_at: bool
+    can_restore_next_payment_amount: bool
 
 
 def _normalize_text(value: str | None) -> str | None:
@@ -65,15 +78,40 @@ def _safe_farm_name(name: str | None) -> str:
     return (name or "").strip()
 
 
-def _farm_key(row: FarmDataRow) -> tuple[str, int | tuple[int, str]]:
-    """Возвращает устойчивый ключ сопоставления строк между БД.
+def _normalize_int(value: object) -> int | None:
+    """Нормализует числовое значение из SQLite (None/'' -> None)."""
 
-    Приоритет: account_id, затем fallback на (user_id, farm_name_lower).
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _match_main_row(
+    backup_row: FarmDataRow,
+    main_by_account: dict[int, FarmDataRow],
+    main_by_fallback: dict[tuple[int, str], FarmDataRow],
+) -> FarmDataRow | None:
+    """Подбирает строку из основной БД для записи из бэкапа.
+
+    Сначала пробует точное совпадение по `account_id`, затем fallback по
+    `(user_id, farm_name_lower)`. Такой порядок сохраняет стабильность
+    обновлений, но позволяет находить строки после миграций, где account_id
+    изменился между бэкапом и текущей БД.
     """
 
-    if row.account_id is not None:
-        return ("account", row.account_id)
-    return ("fallback", (row.user_id, _safe_farm_name(row.farm_name).lower()))
+    if backup_row.account_id is not None:
+        matched = main_by_account.get(backup_row.account_id)
+        if matched is not None:
+            return matched
+
+    fallback_key = (backup_row.user_id, _safe_farm_name(backup_row.farm_name).lower())
+    return main_by_fallback.get(fallback_key)
 
 
 def load_farmdata_rows(db_path: Path) -> list[FarmDataRow]:
@@ -87,13 +125,17 @@ def load_farmdata_rows(db_path: Path) -> list[FarmDataRow]:
         rows = conn.execute(
             """
             SELECT
-                id,
-                account_id,
-                user_id,
-                farm_name,
-                login,
-                password
-            FROM farm_data
+                fd.id,
+                fd.account_id,
+                fd.user_id,
+                fd.farm_name,
+                fd.email,
+                fd.login,
+                fd.password,
+                acc.next_payment_at,
+                acc.next_payment_amount
+            FROM farm_data fd
+            LEFT JOIN accounts acc ON acc.id = fd.account_id
             """
         ).fetchall()
 
@@ -105,8 +147,11 @@ def load_farmdata_rows(db_path: Path) -> list[FarmDataRow]:
                 account_id=row["account_id"],
                 user_id=int(row["user_id"]),
                 farm_name=_safe_farm_name(row["farm_name"]),
+                email=_normalize_text(row["email"]),
                 login=_normalize_text(row["login"]),
                 password=_normalize_text(row["password"]),
+                next_payment_at=_normalize_text(row["next_payment_at"]),
+                next_payment_amount=_normalize_int(row["next_payment_amount"]),
             )
         )
     return result
@@ -115,19 +160,31 @@ def load_farmdata_rows(db_path: Path) -> list[FarmDataRow]:
 def build_restore_candidates(main_rows: list[FarmDataRow], backup_rows: list[FarmDataRow]) -> list[RestoreCandidate]:
     """Строит список строк, где есть что восстанавливать из бэкапа."""
 
-    main_by_key = {_farm_key(row): row for row in main_rows}
+    main_by_account = {row.account_id: row for row in main_rows if row.account_id is not None}
+    main_by_fallback = {(row.user_id, _safe_farm_name(row.farm_name).lower()): row for row in main_rows}
     candidates: list[RestoreCandidate] = []
 
     for backup_row in backup_rows:
-        key = _farm_key(backup_row)
-        main_row = main_by_key.get(key)
+        main_row = _match_main_row(backup_row, main_by_account, main_by_fallback)
         if not main_row:
             continue
 
+        email_diff = backup_row.email is not None and backup_row.email != main_row.email
         login_diff = backup_row.login is not None and backup_row.login != main_row.login
         password_diff = backup_row.password is not None and backup_row.password != main_row.password
+        can_restore_payment = main_row.account_id is not None
+        next_payment_at_diff = (
+            can_restore_payment
+            and backup_row.next_payment_at is not None
+            and backup_row.next_payment_at != main_row.next_payment_at
+        )
+        next_payment_amount_diff = (
+            can_restore_payment
+            and backup_row.next_payment_amount is not None
+            and backup_row.next_payment_amount != main_row.next_payment_amount
+        )
 
-        if not (login_diff or password_diff):
+        if not (email_diff or login_diff or password_diff or next_payment_at_diff or next_payment_amount_diff):
             continue
 
         candidates.append(
@@ -136,17 +193,59 @@ def build_restore_candidates(main_rows: list[FarmDataRow], backup_rows: list[Far
                 account_id=main_row.account_id,
                 user_id=main_row.user_id,
                 farm_name=main_row.farm_name,
+                main_email=main_row.email,
+                backup_email=backup_row.email,
                 main_login=main_row.login,
                 backup_login=backup_row.login,
                 main_password=main_row.password,
                 backup_password=backup_row.password,
+                main_next_payment_at=main_row.next_payment_at,
+                backup_next_payment_at=backup_row.next_payment_at,
+                main_next_payment_amount=main_row.next_payment_amount,
+                backup_next_payment_amount=backup_row.next_payment_amount,
+                can_restore_email=email_diff,
                 can_restore_login=login_diff,
                 can_restore_password=password_diff,
+                can_restore_next_payment_at=next_payment_at_diff,
+                can_restore_next_payment_amount=next_payment_amount_diff,
             )
         )
 
     candidates.sort(key=lambda item: (item.user_id, (item.farm_name or "").lower()))
     return candidates
+
+
+def build_status_text(
+    *,
+    main_rows_count: int,
+    backup_rows_count: int,
+    candidates_count: int,
+    visible_count: int,
+    only_empty_enabled: bool,
+    search_text: str,
+) -> str:
+    """Формирует строку статуса для GUI с пояснением текущего состояния."""
+
+    base = (
+        f"Основная БД: {main_rows_count} строк | "
+        f"Бэкап: {backup_rows_count} строк | "
+        f"Кандидаты: {candidates_count} | "
+        f"Показано: {visible_count}"
+    )
+
+    hints: list[str] = []
+    if only_empty_enabled:
+        hints.append("включён фильтр только пустых полей")
+    if search_text.strip():
+        hints.append(f"поиск: «{search_text.strip()}»")
+    if candidates_count > 0 and visible_count == 0:
+        hints.append("ничего не видно из-за фильтров")
+    if candidates_count == 0:
+        hints.append("совпадений для восстановления не найдено")
+
+    if hints:
+        return f"{base} — " + "; ".join(hints)
+    return base
 
 
 def create_safety_backup(main_db_path: Path, backups_dir: Path) -> Path:
@@ -162,39 +261,77 @@ def create_safety_backup(main_db_path: Path, backups_dir: Path) -> Path:
 def apply_selected_changes(
     main_db_path: Path,
     items: list[RestoreCandidate],
+    selected_email_ids: set[int],
     selected_login_ids: set[int],
     selected_password_ids: set[int],
+    selected_next_payment_at_ids: set[int],
+    selected_next_payment_amount_ids: set[int],
 ) -> int:
     """Применяет выбранные поля к основной БД и возвращает число обновлённых строк."""
 
     updated_rows = 0
     with sqlite3.connect(main_db_path) as conn:
         for item in items:
+            update_email = item.row_id in selected_email_ids and item.can_restore_email
             update_login = item.row_id in selected_login_ids and item.can_restore_login
             update_password = item.row_id in selected_password_ids and item.can_restore_password
-            if not (update_login or update_password):
+            update_next_payment_at = (
+                item.row_id in selected_next_payment_at_ids and item.can_restore_next_payment_at
+            )
+            update_next_payment_amount = (
+                item.row_id in selected_next_payment_amount_ids and item.can_restore_next_payment_amount
+            )
+            if not (
+                update_email
+                or update_login
+                or update_password
+                or update_next_payment_at
+                or update_next_payment_amount
+            ):
                 continue
 
             current = conn.execute(
-                "SELECT login, password FROM farm_data WHERE id = ?",
+                "SELECT email, login, password FROM farm_data WHERE id = ?",
                 (item.row_id,),
             ).fetchone()
             if current is None:
                 continue
 
-            new_login = item.backup_login if update_login else current[0]
-            new_password = item.backup_password if update_password else current[1]
+            new_email = item.backup_email if update_email else current[0]
+            new_login = item.backup_login if update_login else current[1]
+            new_password = item.backup_password if update_password else current[2]
 
             conn.execute(
                 """
                 UPDATE farm_data
-                SET login = ?,
+                SET email = ?,
+                    login = ?,
                     password = ?,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (new_login, new_password, item.row_id),
+                (new_email, new_login, new_password, item.row_id),
             )
+
+            if item.account_id is not None and (update_next_payment_at or update_next_payment_amount):
+                current_account = conn.execute(
+                    "SELECT next_payment_at, next_payment_amount FROM accounts WHERE id = ?",
+                    (item.account_id,),
+                ).fetchone()
+                if current_account is not None:
+                    new_next_payment_at = item.backup_next_payment_at if update_next_payment_at else current_account[0]
+                    new_next_payment_amount = (
+                        item.backup_next_payment_amount if update_next_payment_amount else current_account[1]
+                    )
+                    conn.execute(
+                        """
+                        UPDATE accounts
+                        SET next_payment_at = ?,
+                            next_payment_amount = ?
+                        WHERE id = ?
+                        """,
+                        (new_next_payment_at, new_next_payment_amount, item.account_id),
+                    )
             updated_rows += 1
 
         conn.commit()
@@ -232,12 +369,21 @@ class RestoreGui:
         "farm_name",
         "user_id",
         "account_id",
+        "main_email",
+        "backup_email",
         "main_login",
         "backup_login",
         "main_password",
         "backup_password",
+        "main_next_payment_at",
+        "backup_next_payment_at",
+        "main_next_payment_amount",
+        "backup_next_payment_amount",
+        "restore_email",
         "restore_login",
         "restore_password",
+        "restore_next_payment_at",
+        "restore_next_payment_amount",
     )
 
     def __init__(self, root: Tk, main_db_path: Path, backups_dir: Path, initial_backup: Path | None = None) -> None:
@@ -246,15 +392,21 @@ class RestoreGui:
         self.backups_dir = backups_dir
         self.backup_paths: list[Path] = []
         self.candidates: list[RestoreCandidate] = []
+        self.selected_email_ids: set[int] = set()
         self.selected_login_ids: set[int] = set()
         self.selected_password_ids: set[int] = set()
+        self.selected_next_payment_at_ids: set[int] = set()
+        self.selected_next_payment_amount_ids: set[int] = set()
+        self.main_rows_count = 0
+        self.backup_rows_count = 0
 
         self.backup_var = StringVar()
         self.search_var = StringVar()
-        self.only_empty_var = BooleanVar(value=True)
+        self.only_empty_var = BooleanVar(value=False)
+        self.status_var = StringVar(value="Выберите бэкап и нажмите «Загрузить».")
 
-        root.title("UsersDash • Восстановление login/password из бэкапа")
-        root.geometry("1650x760")
+        root.title("UsersDash • Восстановление email/login/password/оплаты из бэкапа")
+        root.geometry("2320x820")
 
         self._build_ui()
         self._reload_backups(initial_backup)
@@ -273,7 +425,7 @@ class RestoreGui:
 
         filters = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         filters.pack(fill="x")
-        ttk.Label(filters, text="Поиск (ферма/логин):").pack(side=LEFT)
+        ttk.Label(filters, text="Поиск (ферма/email/логин):").pack(side=LEFT)
         search_entry = ttk.Entry(filters, textvariable=self.search_var, width=40)
         search_entry.pack(side=LEFT, padx=(8, 16))
         search_entry.bind("<KeyRelease>", lambda _event: self._refresh_tree())
@@ -287,10 +439,21 @@ class RestoreGui:
 
         btns = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         btns.pack(fill="x")
-        ttk.Button(btns, text="Отметить login у всех", command=self._select_all_login).pack(side=LEFT)
+        ttk.Button(btns, text="Отметить email у всех", command=self._select_all_email).pack(side=LEFT)
+        ttk.Button(btns, text="Отметить login у всех", command=self._select_all_login).pack(side=LEFT, padx=(8, 0))
         ttk.Button(btns, text="Отметить password у всех", command=self._select_all_password).pack(side=LEFT, padx=(8, 0))
+        ttk.Button(btns, text="Отметить дату оплаты у всех", command=self._select_all_next_payment_at).pack(
+            side=LEFT, padx=(8, 0)
+        )
+        ttk.Button(btns, text="Отметить тариф у всех", command=self._select_all_next_payment_amount).pack(
+            side=LEFT, padx=(8, 0)
+        )
         ttk.Button(btns, text="Снять всё", command=self._clear_selection).pack(side=LEFT, padx=(8, 0))
         ttk.Button(btns, text="Применить выбранное", command=self._apply_changes).pack(side=RIGHT)
+
+        status_frame = ttk.Frame(self.root, padding=(8, 0, 8, 8))
+        status_frame.pack(fill="x")
+        ttk.Label(status_frame, textvariable=self.status_var).pack(side=LEFT)
 
         body = ttk.Frame(self.root, padding=(8, 0, 8, 8))
         body.pack(fill=BOTH, expand=True)
@@ -306,23 +469,41 @@ class RestoreGui:
             "farm_name": "Ферма",
             "user_id": "User ID",
             "account_id": "Account ID",
+            "main_email": "Основной email",
+            "backup_email": "Email из бэкапа",
             "main_login": "Основной login",
             "backup_login": "Login из бэкапа",
             "main_password": "Основной password",
             "backup_password": "Password из бэкапа",
+            "main_next_payment_at": "Осн. дата оплаты",
+            "backup_next_payment_at": "Дата оплаты из бэкапа",
+            "main_next_payment_amount": "Осн. тариф, ₽",
+            "backup_next_payment_amount": "Тариф из бэкапа, ₽",
+            "restore_email": "Вернуть email",
             "restore_login": "Вернуть login",
             "restore_password": "Вернуть password",
+            "restore_next_payment_at": "Вернуть дату оплаты",
+            "restore_next_payment_amount": "Вернуть тариф, ₽",
         }
         widths = {
             "farm_name": 190,
             "user_id": 90,
             "account_id": 95,
+            "main_email": 180,
+            "backup_email": 180,
             "main_login": 180,
             "backup_login": 180,
             "main_password": 180,
             "backup_password": 180,
+            "main_next_payment_at": 135,
+            "backup_next_payment_at": 165,
+            "main_next_payment_amount": 120,
+            "backup_next_payment_amount": 140,
+            "restore_email": 110,
             "restore_login": 110,
             "restore_password": 130,
+            "restore_next_payment_at": 150,
+            "restore_next_payment_amount": 130,
         }
 
         for col in self.columns:
@@ -364,9 +545,14 @@ class RestoreGui:
             messagebox.showerror("Ошибка чтения БД", str(exc))
             return
 
+        self.main_rows_count = len(main_rows)
+        self.backup_rows_count = len(backup_rows)
         self.candidates = build_restore_candidates(main_rows, backup_rows)
+        self.selected_email_ids.clear()
         self.selected_login_ids.clear()
         self.selected_password_ids.clear()
+        self.selected_next_payment_at_ids.clear()
+        self.selected_next_payment_amount_ids.clear()
         self._refresh_tree()
 
     def _passes_filters(self, item: RestoreCandidate) -> bool:
@@ -375,6 +561,8 @@ class RestoreGui:
             haystack = " | ".join(
                 [
                     item.farm_name or "",
+                    item.main_email or "",
+                    item.backup_email or "",
                     item.main_login or "",
                     item.backup_login or "",
                 ]
@@ -383,22 +571,30 @@ class RestoreGui:
                 return False
 
         if self.only_empty_var.get():
+            email_empty = not _normalize_text(item.main_email)
             login_empty = not _normalize_text(item.main_login)
             password_empty = not _normalize_text(item.main_password)
-            if not (login_empty or password_empty):
+            next_payment_at_empty = not _normalize_text(item.main_next_payment_at)
+            next_payment_amount_empty = item.main_next_payment_amount is None
+            if not (email_empty or login_empty or password_empty or next_payment_at_empty or next_payment_amount_empty):
                 return False
 
         return True
 
     def _refresh_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
+        visible_count = 0
 
         for item in self.candidates:
             if not self._passes_filters(item):
                 continue
 
+            visible_count += 1
+            email_mark = "✅" if item.row_id in self.selected_email_ids else "—"
             login_mark = "✅" if item.row_id in self.selected_login_ids else "—"
             password_mark = "✅" if item.row_id in self.selected_password_ids else "—"
+            next_payment_at_mark = "✅" if item.row_id in self.selected_next_payment_at_ids else "—"
+            next_payment_amount_mark = "✅" if item.row_id in self.selected_next_payment_amount_ids else "—"
 
             self.tree.insert(
                 "",
@@ -408,19 +604,39 @@ class RestoreGui:
                     item.farm_name,
                     item.user_id,
                     item.account_id if item.account_id is not None else "",
+                    item.main_email or "",
+                    item.backup_email or "",
                     item.main_login or "",
                     item.backup_login or "",
                     item.main_password or "",
                     item.backup_password or "",
+                    item.main_next_payment_at or "",
+                    item.backup_next_payment_at or "",
+                    item.main_next_payment_amount if item.main_next_payment_amount is not None else "",
+                    item.backup_next_payment_amount if item.backup_next_payment_amount is not None else "",
+                    email_mark if item.can_restore_email else "н/д",
                     login_mark if item.can_restore_login else "н/д",
                     password_mark if item.can_restore_password else "н/д",
+                    next_payment_at_mark if item.can_restore_next_payment_at else "н/д",
+                    next_payment_amount_mark if item.can_restore_next_payment_amount else "н/д",
                 ),
             )
+
+        self.status_var.set(
+            build_status_text(
+                main_rows_count=self.main_rows_count,
+                backup_rows_count=self.backup_rows_count,
+                candidates_count=len(self.candidates),
+                visible_count=visible_count,
+                only_empty_enabled=self.only_empty_var.get(),
+                search_text=self.search_var.get(),
+            )
+        )
 
     def _on_double_click(self, event) -> None:  # type: ignore[no-untyped-def]
         row_id = self.tree.identify_row(event.y)
         col_id = self.tree.identify_column(event.x)
-        if not row_id or col_id not in ("#8", "#9"):
+        if not row_id or col_id not in ("#14", "#15", "#16", "#17", "#18"):
             return
 
         row_key = int(row_id)
@@ -428,18 +644,40 @@ class RestoreGui:
         if item is None:
             return
 
-        if col_id == "#8" and item.can_restore_login:
+        if col_id == "#14" and item.can_restore_email:
+            if row_key in self.selected_email_ids:
+                self.selected_email_ids.remove(row_key)
+            else:
+                self.selected_email_ids.add(row_key)
+
+        if col_id == "#15" and item.can_restore_login:
             if row_key in self.selected_login_ids:
                 self.selected_login_ids.remove(row_key)
             else:
                 self.selected_login_ids.add(row_key)
 
-        if col_id == "#9" and item.can_restore_password:
+        if col_id == "#16" and item.can_restore_password:
             if row_key in self.selected_password_ids:
                 self.selected_password_ids.remove(row_key)
             else:
                 self.selected_password_ids.add(row_key)
 
+        if col_id == "#17" and item.can_restore_next_payment_at:
+            if row_key in self.selected_next_payment_at_ids:
+                self.selected_next_payment_at_ids.remove(row_key)
+            else:
+                self.selected_next_payment_at_ids.add(row_key)
+
+        if col_id == "#18" and item.can_restore_next_payment_amount:
+            if row_key in self.selected_next_payment_amount_ids:
+                self.selected_next_payment_amount_ids.remove(row_key)
+            else:
+                self.selected_next_payment_amount_ids.add(row_key)
+
+        self._refresh_tree()
+
+    def _select_all_email(self) -> None:
+        self.selected_email_ids = {item.row_id for item in self.candidates if item.can_restore_email and self._passes_filters(item)}
         self._refresh_tree()
 
     def _select_all_login(self) -> None:
@@ -452,13 +690,34 @@ class RestoreGui:
         }
         self._refresh_tree()
 
+    def _select_all_next_payment_at(self) -> None:
+        self.selected_next_payment_at_ids = {
+            item.row_id for item in self.candidates if item.can_restore_next_payment_at and self._passes_filters(item)
+        }
+        self._refresh_tree()
+
+    def _select_all_next_payment_amount(self) -> None:
+        self.selected_next_payment_amount_ids = {
+            item.row_id for item in self.candidates if item.can_restore_next_payment_amount and self._passes_filters(item)
+        }
+        self._refresh_tree()
+
     def _clear_selection(self) -> None:
+        self.selected_email_ids.clear()
         self.selected_login_ids.clear()
         self.selected_password_ids.clear()
+        self.selected_next_payment_at_ids.clear()
+        self.selected_next_payment_amount_ids.clear()
         self._refresh_tree()
 
     def _apply_changes(self) -> None:
-        selected_any = bool(self.selected_login_ids or self.selected_password_ids)
+        selected_any = bool(
+            self.selected_email_ids
+            or self.selected_login_ids
+            or self.selected_password_ids
+            or self.selected_next_payment_at_ids
+            or self.selected_next_payment_amount_ids
+        )
         if not selected_any:
             messagebox.showinfo("Нет выбора", "Отметьте хотя бы одно поле для восстановления.")
             return
@@ -481,15 +740,31 @@ class RestoreGui:
             changed_count = apply_selected_changes(
                 self.main_db_path,
                 self.candidates,
+                self.selected_email_ids,
                 self.selected_login_ids,
                 self.selected_password_ids,
+                self.selected_next_payment_at_ids,
+                self.selected_next_payment_amount_ids,
             )
 
             changed_items: list[dict[str, object]] = []
             for item in self.candidates:
+                email_selected = item.row_id in self.selected_email_ids and item.can_restore_email
                 login_selected = item.row_id in self.selected_login_ids and item.can_restore_login
                 password_selected = item.row_id in self.selected_password_ids and item.can_restore_password
-                if not (login_selected or password_selected):
+                next_payment_at_selected = (
+                    item.row_id in self.selected_next_payment_at_ids and item.can_restore_next_payment_at
+                )
+                next_payment_amount_selected = (
+                    item.row_id in self.selected_next_payment_amount_ids and item.can_restore_next_payment_amount
+                )
+                if not (
+                    email_selected
+                    or login_selected
+                    or password_selected
+                    or next_payment_at_selected
+                    or next_payment_amount_selected
+                ):
                     continue
                 changed_items.append(
                     {
@@ -497,8 +772,11 @@ class RestoreGui:
                         "account_id": item.account_id,
                         "user_id": item.user_id,
                         "farm_name": item.farm_name,
+                        "email_restored": email_selected,
                         "login_restored": login_selected,
                         "password_restored": password_selected,
+                        "next_payment_at_restored": next_payment_at_selected,
+                        "next_payment_amount_restored": next_payment_amount_selected,
                     }
                 )
 
@@ -522,7 +800,7 @@ def parse_args() -> argparse.Namespace:
     """Парсит аргументы CLI для запуска GUI."""
 
     parser = argparse.ArgumentParser(
-        description="GUI для сравнения и восстановления farm_data.login/password из backup SQLite",
+        description="GUI для сравнения и восстановления farm_data/accounts полей из backup SQLite",
     )
     parser.add_argument(
         "--main-db",
