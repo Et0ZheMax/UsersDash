@@ -238,8 +238,51 @@ def _json_read_or(path, default):
     except Exception:
         return default
 
+def _normalize_schema_for_templates(raw_schema: dict | None) -> dict:
+    """Приводим схему к формату {ScriptId: {fields: ...}} для автофикса шаблонов."""
+    if not isinstance(raw_schema, dict):
+        return {}
+
+    # Уже в legacy-формате для template_inflate_with_schema.
+    if raw_schema and all(isinstance(v, dict) and "fields" in v for v in raw_schema.values()):
+        return raw_schema
+
+    scripts = raw_schema.get("Scripts")
+    if not isinstance(scripts, dict):
+        return {}
+
+    normalized: dict = {}
+    for sid, spec in scripts.items():
+        if not isinstance(spec, dict):
+            continue
+        shape = spec.get("Shape") or {}
+        defaults = spec.get("Defaults") or {}
+        fields = {}
+        for key, form in shape.items():
+            if not isinstance(form, dict):
+                continue
+            ftype = form.get("type") or "string"
+            field_spec = {"type": ftype}
+            if ftype == "select":
+                options = list(form.get("options") or [])
+                field_spec["options"] = options
+                default_val = defaults.get(key)
+                if default_val not in options:
+                    default_val = "Off" if "Off" in options else (options[0] if options else "")
+                field_spec["default"] = {"value": default_val, "options": options}
+            elif ftype == "bool":
+                field_spec["default"] = bool(defaults.get(key, False))
+            elif ftype == "number":
+                field_spec["default"] = defaults.get(key, 0)
+            else:
+                field_spec["default"] = defaults.get(key, "")
+            fields[key] = field_spec
+        normalized[sid] = {"fields": fields}
+    return normalized
+
+
 def schema_load():
-    return _json_read_or(SCHEMA_CACHE_PATH, {})
+    return _normalize_schema_for_templates(_json_read_or(SCHEMA_CACHE_PATH, {}))
 
 def schema_save(data: dict):
     safe_write_json(SCHEMA_CACHE_PATH, data)
@@ -597,7 +640,7 @@ def _build_live_schema() -> dict:
                 options = v.get("options") or []
                 val = v.get("value")
                 prev_opts = set(shape["options"]) if shape and shape.get("type") == "select" else set()
-                new_opts = sorted(list(prev_opts | set(options)))
+                new_opts = sorted(list(prev_opts | set(options)), key=lambda x: str(x))
                 dst["Shape"][k] = {"type": "select", "options": new_opts}
                 if k not in dst["Defaults"]:
                     default_val = val if val in new_opts else (new_opts[0] if new_opts else val)
@@ -4252,6 +4295,9 @@ def api_templates_fix():
 
     schema = schema_load()
     if not schema:
+        live_schema = _ensure_schema()
+        schema = _normalize_schema_for_templates(live_schema)
+    if not schema:
         return jsonify({"error": "schema_not_found"}), 400
 
     changes: list[dict] = []
@@ -4471,6 +4517,8 @@ def api_templates_rename(template_name: str):
 def api_templates_rehydrate():
     """Дополнить ВСЕ шаблоны недостающими ключами из schema_cache.json."""
     schema = schema_load()
+    if not schema:
+        schema = _normalize_schema_for_templates(_ensure_schema())
     updated = []
     for name in os.listdir(TEMPLATES_DIR):
         if not name.lower().endswith(".json"):
