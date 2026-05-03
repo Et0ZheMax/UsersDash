@@ -83,6 +83,7 @@ PROBLEM_LABELS = {
     "crash": "Crash💥",
     "idle": "Idle⌛",
     "no_tasks": "No tasks🤷🏼‍♀️📋",
+    "broken_acc": "Broken acc🪫",
     "other": "Other⚠️",
 }
 
@@ -256,6 +257,8 @@ def _classify_problem(raw_line: str) -> tuple[str, str]:
         return "idle", PROBLEM_LABELS["idle"]
     if "found 0 active actions" in lower:
         return "no_tasks", PROBLEM_LABELS["no_tasks"]
+    if "broken acc" in lower or "broken_acc" in lower:
+        return "broken_acc", PROBLEM_LABELS["broken_acc"]
 
     return "other", PROBLEM_LABELS["other"]
 
@@ -329,6 +332,7 @@ async def check_logs_and_notify() -> None:
 
     # 🆕 Теперь храним ts + desc, а не только ts
     cluster_dict: defaultdict[str, list[dict]] = defaultdict(list)
+    prep_done_stop_events: defaultdict[str, list[str]] = defaultdict(list)
 
     unknown_ids: set[str] = set()   # для отладки
 
@@ -343,15 +347,23 @@ async def check_logs_and_notify() -> None:
                     if today not in line:
                         continue
 
+                    lower_line = line.lower()
+                    id_match = re.search(r"\|([0-9a-f\-]{8,32})\|", line, re.I)
+                    acct_id_raw = id_match.group(1) if id_match else ""
+                    acct_id = norm_id(acct_id_raw)
+                    acct = id_map.get(acct_id, acct_id or "Unknown")
+
+                    if "preparing account" in lower_line:
+                        prep_done_stop_events[acct].append("prep")
+                    elif "account done" in lower_line:
+                        prep_done_stop_events[acct].append("done")
+                    elif "stopping emulator" in lower_line:
+                        prep_done_stop_events[acct].append("stop")
+
                     matched_instant = any(rgx.search(line) for rgx in regex_list)
                     matched_cluster = any(rgx.search(line) for rgx in cluster_regex_list)
 
                     if matched_instant or matched_cluster:
-                        id_match = re.search(r"\|([0-9a-f\-]{8,32})\|", line, re.I)
-                        acct_id_raw = id_match.group(1) if id_match else ""
-                        acct_id = norm_id(acct_id_raw)
-                        acct = id_map.get(acct_id, acct_id or "Unknown")
-
                         if acct == "Unknown" and DEBUG_MISS_ID and acct_id and acct_id not in unknown_ids:
                             print(f"⚠️  Не найден ник для ID: {acct_id_raw}")
                             unknown_ids.add(acct_id)
@@ -384,6 +396,20 @@ async def check_logs_and_notify() -> None:
                             except ValueError:
                                 continue
                             crash_events[acct_name].append(ts)
+
+    for acct, events in prep_done_stop_events.items():
+        loops = 0
+        for i in range(len(events) - 2):
+            if events[i : i + 3] == ["prep", "done", "stop"]:
+                loops += 1
+        if loops >= 2:
+            found.append(
+                {
+                    "file": "BROKEN_ACC_PATTERN",
+                    "account": acct,
+                    "line": "BROKEN ACC: повторяется цикл Preparing Account -> Account Done -> Stopping Emulator",
+                }
+            )
 
     # ───────── Кластеры Crash ──────────
     for acct, tl in crash_events.items():
@@ -471,4 +497,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         print("Прерывание пользователем.")
-
