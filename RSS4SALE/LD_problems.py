@@ -192,6 +192,32 @@ def deduplicate(recs: list[dict]) -> list[dict]:
             out.append(r)
     return out
 
+
+BROKEN_ACC_LOOP = ["prep", "done", "stop"]
+BROKEN_ACC_DOUBLE_LOOP = BROKEN_ACC_LOOP * 2
+
+
+def get_broken_acc_event(lower_line: str, has_account_id: bool) -> str | None:
+    """Возвращает шаг broken acc или маркер строки, которая разрывает цикл."""
+    if "preparing account" in lower_line:
+        return "prep"
+    if "account done" in lower_line:
+        return "done"
+    if "stopping emulator" in lower_line:
+        return "stop"
+    if has_account_id:
+        return "other"
+    return None
+
+
+def has_broken_acc_pattern(events: list[str]) -> bool:
+    """Проверяет два подряд идущих пустых цикла подготовки без промежуточных действий."""
+    for i in range(len(events) - len(BROKEN_ACC_DOUBLE_LOOP) + 1):
+        if events[i : i + len(BROKEN_ACC_DOUBLE_LOOP)] == BROKEN_ACC_DOUBLE_LOOP:
+            return True
+    return False
+
+
 # ─────────────────────── Основная логика ─────────────────────────
 async def check_logs_and_notify() -> None:
     global telegram_token, chat_id
@@ -228,12 +254,9 @@ async def check_logs_and_notify() -> None:
                     acct_id = norm_id(acct_id_raw)
                     acct = id_map.get(acct_id, acct_id or "Unknown")
 
-                    if "preparing account" in lower_line:
-                        prep_done_stop_events[acct].append("prep")
-                    elif "account done" in lower_line:
-                        prep_done_stop_events[acct].append("done")
-                    elif "stopping emulator" in lower_line:
-                        prep_done_stop_events[acct].append("stop")
+                    broken_acc_event = get_broken_acc_event(lower_line, bool(acct_id))
+                    if broken_acc_event:
+                        prep_done_stop_events[acct].append(broken_acc_event)
 
                     matched_instant = any(rgx.search(line) for rgx in regex_list)
                     matched_cluster = any(rgx.search(line) for rgx in cluster_regex_list)
@@ -273,11 +296,7 @@ async def check_logs_and_notify() -> None:
                             crash_events[acct_name].append(ts)
 
     for acct, events in prep_done_stop_events.items():
-        loops = 0
-        for i in range(len(events) - 2):
-            if events[i : i + 3] == ["prep", "done", "stop"]:
-                loops += 1
-        if loops >= 2:
+        if has_broken_acc_pattern(events):
             found.append(
                 {
                     "file": "BROKEN_ACC_PATTERN",
