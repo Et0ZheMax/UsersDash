@@ -973,6 +973,7 @@ def admin_dashboard():
             joinedload(Account.server),
             joinedload(Account.owner),
         )
+        .filter(Account.is_active.is_(True))
         .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
@@ -1270,6 +1271,7 @@ def api_account_resources():
             joinedload(Account.server),
             joinedload(Account.owner),
         )
+        .filter(Account.is_active.is_(True))
         .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
