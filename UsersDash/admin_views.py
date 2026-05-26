@@ -151,7 +151,7 @@ def _get_cached_resources_for_server(
             if cached and now - cached["fetched_at"] < _FARMDATA_RESOURCES_CACHE_TTL_SECONDS:
                 return cached["resources"]
 
-    resources = fetch_resources_for_server(server)
+    resources = fetch_resources_for_server(server, force_refresh=force_refresh)
     with _FARMDATA_RESOURCES_CACHE_LOCK:
         _FARMDATA_RESOURCES_CACHE[server_id] = {
             "fetched_at": now,

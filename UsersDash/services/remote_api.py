@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,9 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 _RESOURCES_CACHE_LOCK = threading.Lock()
 _RESOURCES_CACHE: Dict[int, Dict[str, Any]] = {}
+_REMOTE_REFRESH_LOCK = threading.Lock()
+_REMOTE_REFRESH_TS: Dict[int, float] = {}
+REMOTE_REFRESH_MIN_INTERVAL_SECONDS = 15
 
 
 def _format_http_error(resp: requests.Response) -> str:
@@ -218,6 +222,9 @@ def fetch_resources_for_server(server, *, force_refresh: bool = False) -> Dict[s
     if not base:
         return {}
 
+    if force_refresh:
+        _refresh_remote_logs_cache(server, base=base, hard=False)
+
     url = f"{base}/resources"
     data = _safe_get_json(url, timeout=RESOURCES_TIMEOUT, source=f"resources {server.name}")
     if not data or "accounts" not in data:
@@ -246,6 +253,30 @@ def fetch_resources_for_server(server, *, force_refresh: bool = False) -> Dict[s
             }
 
     return result
+
+
+def _refresh_remote_logs_cache(server, *, base: Optional[str] = None, hard: bool = False) -> None:
+    """Просит RSSv7 сначала обновить кэш логов/ресурсов, чтобы отдать максимально актуальные данные."""
+
+    server_id = getattr(server, "id", None)
+    now_ts = time.monotonic()
+    if isinstance(server_id, int):
+        with _REMOTE_REFRESH_LOCK:
+            last_ts = _REMOTE_REFRESH_TS.get(server_id, 0.0)
+            if now_ts - last_ts < REMOTE_REFRESH_MIN_INTERVAL_SECONDS:
+                return
+            _REMOTE_REFRESH_TS[server_id] = now_ts
+
+    api_base = base or _get_effective_api_base(server)
+    if not api_base:
+        return
+
+    endpoint = "/forceRefreshToday" if hard else "/refresh"
+    url = f"{api_base}{endpoint}"
+    try:
+        requests.post(url, timeout=DEFAULT_TIMEOUT)
+    except RequestException as exc:
+        log.warning("Не удалось обновить кэш на сервере %s (%s): %s", getattr(server, "name", "—"), endpoint, exc)
 
 
 def _build_resource_indexes(server_resources: Dict[str, Dict[str, Any]]) -> Tuple[
@@ -1422,6 +1453,8 @@ def fetch_account_logs_view(
     base = _get_effective_api_base(server)
     if not base:
         return None, "api_base_url не задан"
+
+    _refresh_remote_logs_cache(server, base=base, hard=False)
 
     safe_limit = max(1, min(int(limit or 150), 300))
 
