@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,9 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 _RESOURCES_CACHE_LOCK = threading.Lock()
 _RESOURCES_CACHE: Dict[int, Dict[str, Any]] = {}
+_REMOTE_REFRESH_LOCK = threading.Lock()
+_REMOTE_REFRESH_TS: Dict[int, float] = {}
+REMOTE_REFRESH_MIN_INTERVAL_SECONDS = 15
 
 
 def _format_http_error(resp: requests.Response) -> str:
@@ -180,7 +184,7 @@ def ping_server(server) -> Tuple[bool, str]:
     return True, "OK"
 
 
-def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
+def fetch_resources_for_server(server, *, force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
     """
     Подтягивает ресурсы со старого RssCounter через /api/resources
     для ОДНОГО сервера.
@@ -206,7 +210,7 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
     """
     server_id = getattr(server, "id", None)
     now_ts = datetime.now(timezone.utc).timestamp()
-    if isinstance(server_id, int):
+    if isinstance(server_id, int) and not force_refresh:
         with _RESOURCES_CACHE_LOCK:
             cached = _RESOURCES_CACHE.get(server_id)
             if cached and cached.get("expires_at", 0) > now_ts:
@@ -217,6 +221,9 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
     base = _get_effective_api_base(server)
     if not base:
         return {}
+
+    if force_refresh:
+        _refresh_remote_logs_cache(server, base=base, hard=False)
 
     url = f"{base}/resources"
     data = _safe_get_json(url, timeout=RESOURCES_TIMEOUT, source=f"resources {server.name}")
@@ -246,6 +253,30 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
             }
 
     return result
+
+
+def _refresh_remote_logs_cache(server, *, base: Optional[str] = None, hard: bool = False) -> None:
+    """Просит RSSv7 сначала обновить кэш логов/ресурсов, чтобы отдать максимально актуальные данные."""
+
+    server_id = getattr(server, "id", None)
+    now_ts = time.monotonic()
+    if isinstance(server_id, int):
+        with _REMOTE_REFRESH_LOCK:
+            last_ts = _REMOTE_REFRESH_TS.get(server_id, 0.0)
+            if now_ts - last_ts < REMOTE_REFRESH_MIN_INTERVAL_SECONDS:
+                return
+            _REMOTE_REFRESH_TS[server_id] = now_ts
+
+    api_base = base or _get_effective_api_base(server)
+    if not api_base:
+        return
+
+    endpoint = "/forceRefreshToday" if hard else "/refresh"
+    url = f"{api_base}{endpoint}"
+    try:
+        requests.post(url, timeout=DEFAULT_TIMEOUT)
+    except RequestException as exc:
+        log.warning("Не удалось обновить кэш на сервере %s (%s): %s", getattr(server, "name", "—"), endpoint, exc)
 
 
 def _build_resource_indexes(server_resources: Dict[str, Dict[str, Any]]) -> Tuple[
@@ -428,7 +459,11 @@ def _to_moscow_time(dt: datetime) -> datetime:
     return dt.astimezone(MOSCOW_TZ)
 
 
-def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any]]:
+def fetch_resources_for_accounts(
+    accounts: List[Any],
+    *,
+    force_refresh: bool = False,
+) -> Dict[int, Dict[str, Any]]:
     """
     Подтягивает ресурсы сразу для списка аккаунтов (Account-моделей).
 
@@ -475,7 +510,7 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
     if max_workers > 0:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_server_id = {
-                executor.submit(fetch_resources_for_server, server): server_id
+                executor.submit(fetch_resources_for_server, server, force_refresh=force_refresh): server_id
                 for server_id, server in server_by_id.items()
             }
             for future in as_completed(future_to_server_id):
@@ -1418,6 +1453,8 @@ def fetch_account_logs_view(
     base = _get_effective_api_base(server)
     if not base:
         return None, "api_base_url не задан"
+
+    _refresh_remote_logs_cache(server, base=base, hard=False)
 
     safe_limit = max(1, min(int(limit or 150), 300))
 
