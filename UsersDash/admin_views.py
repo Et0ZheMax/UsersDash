@@ -151,7 +151,7 @@ def _get_cached_resources_for_server(
             if cached and now - cached["fetched_at"] < _FARMDATA_RESOURCES_CACHE_TTL_SECONDS:
                 return cached["resources"]
 
-    resources = fetch_resources_for_server(server)
+    resources = fetch_resources_for_server(server, force_refresh=force_refresh)
     with _FARMDATA_RESOURCES_CACHE_LOCK:
         _FARMDATA_RESOURCES_CACHE[server_id] = {
             "fetched_at": now,
@@ -973,6 +973,7 @@ def admin_dashboard():
             joinedload(Account.server),
             joinedload(Account.owner),
         )
+        .filter(Account.is_active.is_(True))
         .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
@@ -1270,11 +1271,12 @@ def api_account_resources():
             joinedload(Account.server),
             joinedload(Account.owner),
         )
+        .filter(Account.is_active.is_(True))
         .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
         .all()
     )
 
-    res_map = fetch_resources_for_accounts(accounts)
+    res_map = fetch_resources_for_accounts(accounts, force_refresh=True)
     items = []
 
     for acc in accounts:
