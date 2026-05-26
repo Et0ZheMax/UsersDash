@@ -180,7 +180,7 @@ def ping_server(server) -> Tuple[bool, str]:
     return True, "OK"
 
 
-def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
+def fetch_resources_for_server(server, *, force_refresh: bool = False) -> Dict[str, Dict[str, Any]]:
     """
     Подтягивает ресурсы со старого RssCounter через /api/resources
     для ОДНОГО сервера.
@@ -206,7 +206,7 @@ def fetch_resources_for_server(server) -> Dict[str, Dict[str, Any]]:
     """
     server_id = getattr(server, "id", None)
     now_ts = datetime.now(timezone.utc).timestamp()
-    if isinstance(server_id, int):
+    if isinstance(server_id, int) and not force_refresh:
         with _RESOURCES_CACHE_LOCK:
             cached = _RESOURCES_CACHE.get(server_id)
             if cached and cached.get("expires_at", 0) > now_ts:
@@ -428,7 +428,11 @@ def _to_moscow_time(dt: datetime) -> datetime:
     return dt.astimezone(MOSCOW_TZ)
 
 
-def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any]]:
+def fetch_resources_for_accounts(
+    accounts: List[Any],
+    *,
+    force_refresh: bool = False,
+) -> Dict[int, Dict[str, Any]]:
     """
     Подтягивает ресурсы сразу для списка аккаунтов (Account-моделей).
 
@@ -475,7 +479,7 @@ def fetch_resources_for_accounts(accounts: List[Any]) -> Dict[int, Dict[str, Any
     if max_workers > 0:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_server_id = {
-                executor.submit(fetch_resources_for_server, server): server_id
+                executor.submit(fetch_resources_for_server, server, force_refresh=force_refresh): server_id
                 for server_id, server in server_by_id.items()
             }
             for future in as_completed(future_to_server_id):

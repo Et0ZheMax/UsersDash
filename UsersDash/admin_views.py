@@ -1274,7 +1274,7 @@ def api_account_resources():
         .all()
     )
 
-    res_map = fetch_resources_for_accounts(accounts)
+    res_map = fetch_resources_for_accounts(accounts, force_refresh=True)
     items = []
 
     for acc in accounts:

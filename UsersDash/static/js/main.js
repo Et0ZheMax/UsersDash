@@ -240,6 +240,33 @@
         });
     }
 
+    function formatLogTime(raw) {
+        const value = String(raw || "").trim();
+        if (!value) return "—";
+
+        const parsed = new Date(value);
+        if (!Number.isNaN(parsed.getTime())) {
+            return parsed.toLocaleString("ru-RU", {
+                timeZone: "Europe/Moscow",
+                day: "2-digit",
+                month: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+            });
+        }
+
+        const dmhm = value.match(/(\d{2}\.\d{2})\D+(\d{2}:\d{2})/);
+        if (dmhm) {
+            return `${dmhm[1]} ${dmhm[2]}`;
+        }
+
+        const hm = value.match(/\b(\d{2}:\d{2})(?::\d{2})?\b/);
+        if (hm) {
+            return hm[1];
+        }
+        return value;
+    }
+
     function createWatchPlaceholder(text, tone) {
         const card = document.createElement('div');
         card.className = 'admin-watch-card admin-watch-card--placeholder';
@@ -754,7 +781,7 @@
             const maxMarches = Boolean(summary && summary.reached_max_marches);
             const stateRaw = String((summary && summary.scenario_state) || 'idle').toLowerCase();
             const scenarioState = scenarioLabels[stateRaw] ? stateRaw : 'idle';
-            const lastEventTime = escapeHtml((summary && summary.last_event_time) || '—');
+            const lastEventTime = escapeHtml(formatLogTime(summary && summary.last_event_time));
             const lastEventText = escapeHtml((summary && summary.last_event_text) || '—');
 
             summaryEl.innerHTML = [
@@ -773,7 +800,7 @@
             if (!listEl) return;
 
             listEl.innerHTML = (items || []).map((item) => {
-                const time = escapeHtml(item.time || '--:--:--');
+                const time = escapeHtml(formatLogTime(item.time));
                 const groupLabel = escapeHtml(item.group_label || 'Система');
                 const text = escapeHtml(item.event_text || item.raw_text || '—');
                 const group = normalizeGroup(item.group);

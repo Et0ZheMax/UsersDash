@@ -1158,7 +1158,7 @@ def account_refresh(account_id: int):
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
-    res_map = fetch_resources_for_accounts([account])
+    res_map = fetch_resources_for_accounts([account], force_refresh=True)
     res_info = res_map.get(account.id)
 
     if not res_info:
