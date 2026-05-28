@@ -2735,7 +2735,9 @@ def admin_farm_data_chunk():
                 "farm_name": acc.name,
                 "instance_id": instance_id if instance_id is not None else "",
                 "server_bot": acc.server.name if acc.server else "—",
-                "is_active": acc.is_active,
+                "is_active": bool(acc.is_active and acc.server and acc.server.is_active),
+                "is_active_local": bool(acc.is_active),
+                "server_is_active": bool(acc.server.is_active) if acc.server else False,
                 "blocked_for_payment": acc.blocked_for_payment,
                 "email": fd.email if fd else None,
                 "password": fd.password if fd else None,
@@ -3218,6 +3220,13 @@ def admin_farm_data_save():
                     )
             else:
                 acc.next_payment_at = None
+
+        if "is_active" in row:
+            raw_active = row.get("is_active")
+            if isinstance(raw_active, bool):
+                acc.is_active = raw_active
+            else:
+                acc.is_active = str(raw_active).strip().lower() in {"1", "true", "yes", "on"}
 
         parsed_tariff = None
         if "tariff" in row:
