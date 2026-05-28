@@ -135,6 +135,28 @@ _FARMDATA_RESOURCES_CACHE_LOCK = threading.Lock()
 _FARMDATA_RESOURCES_CACHE: dict[int, dict[str, Any]] = {}
 
 
+def _dashboard_active_accounts_query():
+    """Возвращает фермы, которые реально активны для главного дашборда.
+
+    Локальный флаг фермы и активность сервера — разные состояния: ферма может быть
+    включена и не заблокирована по оплате, но не должна попадать в рабочий список,
+    если сервер помечен неактивным.
+    """
+
+    return (
+        Account.query
+        .join(Account.server)
+        .options(
+            joinedload(Account.server),
+            joinedload(Account.owner),
+        )
+        .filter(
+            Account.is_active.is_(True),
+            Server.is_active.is_(True),
+        )
+    )
+
+
 def _get_cached_resources_for_server(
     server: Server,
     *,
@@ -969,12 +991,8 @@ def admin_dashboard():
     total_servers = Server.query.count()
 
     accounts = (
-        Account.query.options(
-            joinedload(Account.server),
-            joinedload(Account.owner),
-        )
-        .filter(Account.is_active.is_(True))
-        .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
+        _dashboard_active_accounts_query()
+        .order_by(Account.server_id.asc(), Account.name.asc())
         .all()
     )
 
@@ -1101,14 +1119,8 @@ def admin_dashboard():
     price_gold_100 = RSS_SALE_DEFAULT_PRICE_GOLD_100
     tax_percent = RSS_SALE_DEFAULT_TAX_PERCENT
     rss_sale_accounts = (
-        Account.query.options(
-            joinedload(Account.server),
-            joinedload(Account.owner),
-        )
-        .filter(
-            Account.next_payment_amount == RSS_FOR_SALE_TARIFF_PRICE,
-            Account.is_active.is_(True),
-        )
+        _dashboard_active_accounts_query()
+        .filter(Account.next_payment_amount == RSS_FOR_SALE_TARIFF_PRICE)
         .order_by(Account.game_world.asc(), Account.name.asc())
         .all()
     )
@@ -1170,14 +1182,8 @@ def rss_sale_page():
     )
 
     accounts = (
-        Account.query.options(
-            joinedload(Account.server),
-            joinedload(Account.owner),
-        )
-        .filter(
-            Account.next_payment_amount == RSS_FOR_SALE_TARIFF_PRICE,
-            Account.is_active.is_(True),
-        )
+        _dashboard_active_accounts_query()
+        .filter(Account.next_payment_amount == RSS_FOR_SALE_TARIFF_PRICE)
         .order_by(Account.game_world.asc(), Account.name.asc())
         .all()
     )
@@ -1267,12 +1273,8 @@ def api_account_resources():
     admin_required()
 
     accounts = (
-        Account.query.options(
-            joinedload(Account.server),
-            joinedload(Account.owner),
-        )
-        .filter(Account.is_active.is_(True))
-        .order_by(Account.is_active.desc(), Account.server_id.asc(), Account.name.asc())
+        _dashboard_active_accounts_query()
+        .order_by(Account.server_id.asc(), Account.name.asc())
         .all()
     )
 
