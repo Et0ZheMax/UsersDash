@@ -879,9 +879,10 @@ def update_account_menu_data(
 
     # FarmData — источник истины для меню бота: если IGG ID очистили в кабинете,
     # старое значение Custom в конфиге тоже нужно затереть пустой строкой.
+    # Slot нужен боту даже при пустом Custom, поэтому ставим его при каждой
+    # подстановке почты и пароля из UsersDash.
     menu_config["Custom"] = igg_id or ""
-    if igg_id and "Slot" not in menu_config:
-        menu_config["Slot"] = "igg"
+    menu_config["Slot"] = "igg"
 
     menu_data["Config"] = menu_config
 

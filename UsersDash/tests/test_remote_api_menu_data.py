@@ -105,7 +105,49 @@ class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
         self.assertEqual(captured_payloads[0]["MenuData"]["Config"]["Custom"], "")
         self.assertEqual(captured_payloads[0]["MenuData"]["Config"]["Slot"], "igg")
 
-    def test_local_menu_config_always_contains_custom_key(self):
+    def test_update_account_menu_data_sets_slot_when_igg_id_is_empty(self):
+        account = SimpleNamespace(id=10, name="Airat", server=SimpleNamespace(name="S1"))
+        settings = {
+            "Data": [{"ScriptId": "vikingbot.base.gathervip"}],
+            "MenuData": {
+                "ScriptId": "appmenu",
+                "Config": {
+                    "Email": "old@example.com",
+                    "Password": "old-pass",
+                    "Custom": "",
+                },
+            },
+        }
+        captured_payloads = []
+
+        def fake_update(_account, payload):
+            captured_payloads.append(payload)
+            return True, "OK"
+
+        with patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
+            remote_api,
+            "update_account_settings_full",
+            side_effect=fake_update,
+        ):
+            ok, _ = remote_api.update_account_menu_data(
+                account,
+                email="Turist_sso@mail.ru",
+                password="D6543210",
+                igg_id=None,
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(
+            captured_payloads[0]["MenuData"]["Config"],
+            {
+                "Email": "Turist_sso@mail.ru",
+                "Password": "D6543210",
+                "Custom": "",
+                "Slot": "igg",
+            },
+        )
+
+    def test_local_menu_config_always_contains_custom_and_slot_keys(self):
         farm_data = SimpleNamespace(email="mail@example.com", password="pass", igg_id=None)
 
         self.assertEqual(
@@ -114,6 +156,7 @@ class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
                 "Email": "mail@example.com",
                 "Password": "pass",
                 "Custom": "",
+                "Slot": "igg",
             },
         )
 
