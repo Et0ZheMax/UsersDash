@@ -52,11 +52,10 @@ def build_menu_config(fd: FarmData) -> dict[str, str]:
     menu_config = {
         "Email": fd.email or "",
         "Password": fd.password or "",
+        "Custom": fd.igg_id or "",
     }
-    if fd.igg_id is not None:
-        menu_config["Custom"] = fd.igg_id or ""
-        if fd.igg_id and "Slot" not in menu_config:
-            menu_config["Slot"] = "igg"
+    if fd.igg_id and "Slot" not in menu_config:
+        menu_config["Slot"] = "igg"
     return menu_config
 
 
