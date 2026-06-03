@@ -58,6 +58,7 @@ from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_resources_for_server,
     fetch_rssv7_accounts_meta,
+    sync_accounts_active_from_remote,
     fetch_template_payload,
     fetch_template_schema,
     fetch_templates_list,
@@ -2702,6 +2703,17 @@ def admin_farm_data_chunk():
         .all()
     )
 
+    sync_errors: list[str] = []
+    accounts_by_server: dict[int, list[Account]] = {}
+    for acc in accounts:
+        if acc.server_id and acc.server and acc.server.is_active:
+            accounts_by_server.setdefault(acc.server_id, []).append(acc)
+
+    for server_accounts in accounts_by_server.values():
+        err = sync_accounts_active_from_remote(server_accounts[0].server, server_accounts)
+        if err:
+            sync_errors.append(err)
+
     account_ids = [acc.id for acc in accounts]
     farmdata_entries = []
     if account_ids:
@@ -2764,6 +2776,7 @@ def admin_farm_data_chunk():
             "offset": offset,
             "limit": limit,
             "items": items,
+            "errors": sync_errors,
         }
     )
 
@@ -3226,9 +3239,24 @@ def admin_farm_data_save():
         if "is_active" in row:
             raw_active = row.get("is_active")
             if isinstance(raw_active, bool):
-                acc.is_active = raw_active
+                new_active = raw_active
             else:
-                acc.is_active = str(raw_active).strip().lower() in {"1", "true", "yes", "on"}
+                new_active = str(raw_active).strip().lower() in {"1", "true", "yes", "on"}
+
+            if bool(acc.is_active) != new_active:
+                ok, msg = update_account_active(acc, new_active)
+                if ok or _is_remote_account_missing(msg):
+                    acc.is_active = new_active
+                    if new_active:
+                        acc.blocked_for_payment = False
+                    if not ok:
+                        warnings.append(
+                            f"{acc.name}: ферма не найдена в боте, статус изменён только локально"
+                        )
+                else:
+                    warnings.append(
+                        f"{acc.name}: не удалось {'включить' if new_active else 'выключить'} ферму в боте: {msg}"
+                    )
 
         parsed_tariff = None
         if "tariff" in row:
