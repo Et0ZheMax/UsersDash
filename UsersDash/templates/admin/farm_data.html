@@ -407,6 +407,71 @@
         animation: farmdata-spin 0.8s linear infinite;
     }
 
+
+    .farmdata-restore-summary {
+        margin: 0 0 0.85rem;
+        color: #cbd5e1;
+        font-size: 0.9rem;
+    }
+
+    .farmdata-restore-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.55rem;
+        align-items: center;
+        margin-bottom: 0.75rem;
+    }
+
+    .farmdata-restore-select,
+    .farmdata-restore-search {
+        min-height: 34px;
+        border-radius: 999px;
+        border: 1px solid rgba(75, 85, 99, 0.9);
+        background: #020617;
+        color: #e5e7eb;
+        padding: 0.35rem 0.75rem;
+        outline: none;
+    }
+
+    .farmdata-restore-select {
+        min-width: min(100%, 380px);
+    }
+
+    .farmdata-restore-search {
+        min-width: min(100%, 260px);
+    }
+
+    .farmdata-restore-field {
+        display: inline-flex;
+        align-items: flex-start;
+        gap: 0.35rem;
+        min-width: 190px;
+        margin: 0.1rem 0.45rem 0.1rem 0;
+        padding: 0.25rem 0.35rem;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.75);
+    }
+
+    .farmdata-restore-field-main {
+        display: block;
+        color: #94a3b8;
+        font-size: 0.76rem;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .farmdata-restore-field-backup {
+        display: block;
+        color: #e5e7eb;
+        font-size: 0.8rem;
+        max-width: 260px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
     @keyframes farmdata-spin {
         to { transform: rotate(360deg); }
     }
@@ -493,6 +558,12 @@
                             class="btn btn-secondary"
                             data-role="farmdata-conflicts">
                         Проверить конфликты
+                    </button>
+                    <button type="button"
+                            class="btn btn-secondary"
+                            data-role="farmdata-backup-restore">
+                        Восстановить из бэкапа
+                        <span class="btn-spinner" data-role="farmdata-backup-spinner" hidden></span>
                     </button>
                     <button type="button"
                             class="btn btn-secondary"
@@ -685,6 +756,77 @@
                         </div>
                     </div>
 
+                    <div class="modal" data-role="backup-restore-modal" hidden>
+                        <div class="modal-backdrop" data-role="backup-restore-modal-close"></div>
+                        <div class="modal-dialog">
+                            <div class="modal-header">
+                                <h3>Восстановление данных ферм из бэкапа</h3>
+                                <button type="button"
+                                        class="modal-close-btn"
+                                        data-role="backup-restore-modal-close">&times;</button>
+                            </div>
+                            <div class="modal-body">
+                                <p class="farmdata-restore-summary" data-role="backup-restore-summary">
+                                    Выберите бэкап прошлых дней, загрузите отличия и отметьте поля для восстановления.
+                                </p>
+                                <p class="sync-errors" data-role="backup-restore-errors" style="display:none;"></p>
+
+                                <div class="farmdata-restore-controls">
+                                    <select class="farmdata-restore-select" data-role="backup-restore-select">
+                                        <option value="">Загружаем список бэкапов...</option>
+                                    </select>
+                                    <button type="button"
+                                            class="btn btn-secondary"
+                                            data-role="backup-restore-preview">
+                                        Показать отличия
+                                    </button>
+                                    <button type="button"
+                                            class="btn btn-secondary"
+                                            data-role="backup-restore-check-all">
+                                        Отметить всё
+                                    </button>
+                                    <button type="button"
+                                            class="btn btn-secondary"
+                                            data-role="backup-restore-uncheck-all">
+                                        Снять всё
+                                    </button>
+                                    <input type="text"
+                                           class="farmdata-restore-search"
+                                           data-role="backup-restore-search"
+                                           placeholder="Фильтр по клиенту или ферме">
+                                </div>
+
+                                <div class="sync-table-wrapper">
+                                    <table class="sync-table" data-role="backup-restore-table">
+                                        <thead>
+                                        <tr>
+                                            <th>Клиент</th>
+                                            <th>Ферма</th>
+                                            <th>Поля из бэкапа</th>
+                                        </tr>
+                                        </thead>
+                                        <tbody data-role="backup-restore-rows">
+                                            <tr>
+                                                <td colspan="3">Выберите бэкап и нажмите «Показать отличия».</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button"
+                                        class="btn btn-secondary"
+                                        data-role="backup-restore-modal-close">
+                                    Отмена
+                                </button>
+                                <button type="button"
+                                        class="btn btn-primary"
+                                        data-role="backup-restore-apply">
+                                    Восстановить выбранное
+                                </button>
+                            </div>
+                        </div>
+                    </div>
 
 
                     </tbody>
@@ -1927,6 +2069,19 @@ document.addEventListener("DOMContentLoaded", function () {
     const conflictRenameAllBtn = document.querySelector('[data-role="conflict-rename-all"]');
     let conflictItems = [];
 
+
+    const backupRestoreModal = document.querySelector('[data-role="backup-restore-modal"]');
+    const backupRestoreBtn = document.querySelector('[data-role="farmdata-backup-restore"]');
+    const backupRestoreSpinner = document.querySelector('[data-role="farmdata-backup-spinner"]');
+    const backupRestoreSelect = document.querySelector('[data-role="backup-restore-select"]');
+    const backupRestoreRows = document.querySelector('[data-role="backup-restore-rows"]');
+    const backupRestoreSummary = document.querySelector('[data-role="backup-restore-summary"]');
+    const backupRestoreErrors = document.querySelector('[data-role="backup-restore-errors"]');
+    const backupRestorePreviewBtn = document.querySelector('[data-role="backup-restore-preview"]');
+    const backupRestoreApplyBtn = document.querySelector('[data-role="backup-restore-apply"]');
+    const backupRestoreSearch = document.querySelector('[data-role="backup-restore-search"]');
+    let backupRestoreCandidates = [];
+
     function openSyncModal() {
         if (!syncModal) return;
         syncModal.hidden = false;
@@ -1968,6 +2123,204 @@ document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll('[data-role="conflict-modal-close"]').forEach(function (el) {
         el.addEventListener("click", closeConflictModal);
     });
+
+
+
+    function openBackupRestoreModal() {
+        if (!backupRestoreModal) return;
+        backupRestoreModal.hidden = false;
+    }
+
+    function closeBackupRestoreModal() {
+        if (!backupRestoreModal) return;
+        backupRestoreModal.hidden = true;
+    }
+
+    document.querySelectorAll('[data-role="backup-restore-modal-close"]').forEach(function (el) {
+        el.addEventListener("click", closeBackupRestoreModal);
+    });
+
+    function setBackupRestoreError(message) {
+        if (!backupRestoreErrors) return;
+        backupRestoreErrors.textContent = message || "";
+        backupRestoreErrors.style.display = message ? "block" : "none";
+    }
+
+    function formatRestoreValue(value) {
+        if (value === null || value === undefined || value === "") return "—";
+        return String(value);
+    }
+
+    function updateBackupRestoreVisibility() {
+        const query = (backupRestoreSearch?.value || "").trim().toLowerCase();
+        if (!backupRestoreRows) return;
+        backupRestoreRows.querySelectorAll("tr[data-restore-search]").forEach(function (tr) {
+            const haystack = tr.dataset.restoreSearch || "";
+            tr.style.display = !query || haystack.includes(query) ? "" : "none";
+        });
+    }
+
+    function renderBackupRestoreRows(candidates) {
+        if (!backupRestoreRows) return;
+        backupRestoreRows.innerHTML = "";
+
+        if (!candidates.length) {
+            backupRestoreRows.innerHTML = '<tr><td colspan="3">В выбранном бэкапе нет отличий для восстановления.</td></tr>';
+            return;
+        }
+
+        candidates.forEach(function (item) {
+            const tr = document.createElement("tr");
+            tr.dataset.restoreSearch = `${item.owner_name || ""} ${item.farm_name || ""}`.toLowerCase();
+            const fieldsHtml = (item.changes || []).map(function (change) {
+                const fieldId = `restore-${item.row_id}-${change.field}`;
+                return `
+                    <label class="farmdata-restore-field">
+                        <input type="checkbox"
+                               data-role="backup-restore-check"
+                               data-row-id="${item.row_id}"
+                               data-field="${change.field}"
+                               id="${fieldId}"
+                               checked>
+                        <span>
+                            <strong>${escapeHtml(change.label || change.field)}</strong>
+                            <span class="farmdata-restore-field-main">Сейчас: ${escapeHtml(formatRestoreValue(change.main))}</span>
+                            <span class="farmdata-restore-field-backup">Бэкап: ${escapeHtml(formatRestoreValue(change.backup))}</span>
+                        </span>
+                    </label>`;
+            }).join("");
+            tr.innerHTML = `
+                <td>${escapeHtml(item.owner_name || "—")}</td>
+                <td>${escapeHtml(item.farm_name || "—")}</td>
+                <td>${fieldsHtml}</td>`;
+            backupRestoreRows.appendChild(tr);
+        });
+        updateBackupRestoreVisibility();
+    }
+
+    async function loadBackupRestoreList() {
+        if (!backupRestoreSelect) return;
+        backupRestoreSelect.innerHTML = '<option value="">Загружаем список бэкапов...</option>';
+        setBackupRestoreError("");
+
+        const resp = await fetch("/admin/farm-data/backups", {
+            method: "GET",
+            headers: { "Accept": "application/json" }
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data.ok) {
+            throw new Error(data.error || "Не удалось загрузить список бэкапов.");
+        }
+
+        const backups = data.backups || [];
+        if (!backups.length) {
+            backupRestoreSelect.innerHTML = '<option value="">Бэкапы не найдены</option>';
+            return;
+        }
+
+        backupRestoreSelect.innerHTML = backups.map(function (backup) {
+            const label = `${backup.created_at_label || backup.name} — ${backup.name}`;
+            return `<option value="${escapeHtml(backup.name)}">${escapeHtml(label)}</option>`;
+        }).join("");
+    }
+
+    async function loadBackupRestorePreview() {
+        const backupName = backupRestoreSelect?.value || "";
+        if (!backupName) {
+            showToast("Выберите бэкап.", "info");
+            return;
+        }
+
+        setBackupRestoreError("");
+        if (backupRestorePreviewBtn) backupRestorePreviewBtn.disabled = true;
+        if (backupRestoreSummary) backupRestoreSummary.textContent = "Сравниваем текущую БД с выбранным бэкапом...";
+
+        try {
+            const resp = await fetch(`/admin/farm-data/backups/preview?backup=${encodeURIComponent(backupName)}`, {
+                method: "GET",
+                headers: { "Accept": "application/json" }
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось получить отличия из бэкапа.");
+            }
+            backupRestoreCandidates = data.candidates || [];
+            if (backupRestoreSummary) {
+                backupRestoreSummary.textContent = `Основная БД: ${data.main_rows_count || 0} строк | `
+                    + `Бэкап: ${data.backup_rows_count || 0} строк | `
+                    + `Кандидаты: ${data.candidates_count || 0}`;
+            }
+            renderBackupRestoreRows(backupRestoreCandidates);
+        } catch (err) {
+            console.error("backup restore preview error:", err);
+            setBackupRestoreError(err.message || "Ошибка предпросмотра.");
+        } finally {
+            if (backupRestorePreviewBtn) backupRestorePreviewBtn.disabled = false;
+        }
+    }
+
+    function setAllBackupRestoreChecks(checked) {
+        if (!backupRestoreRows) return;
+        backupRestoreRows.querySelectorAll('[data-role="backup-restore-check"]').forEach(function (cb) {
+            cb.checked = checked;
+        });
+    }
+
+    async function applyBackupRestore() {
+        const backupName = backupRestoreSelect?.value || "";
+        if (!backupName) {
+            showToast("Выберите бэкап.", "info");
+            return;
+        }
+
+        const changes = Array.from(
+            backupRestoreRows?.querySelectorAll('[data-role="backup-restore-check"]:checked') || []
+        ).map(function (cb) {
+            return {
+                row_id: cb.dataset.rowId,
+                field: cb.dataset.field
+            };
+        });
+
+        if (!changes.length) {
+            showToast("Не выбрано ни одного поля.", "info");
+            return;
+        }
+
+        const ok = window.confirm(
+            `Восстановить выбранные поля из бэкапа ${backupName}? Перед записью будет создан страхующий бэкап.`
+        );
+        if (!ok) return;
+
+        if (backupRestoreApplyBtn) backupRestoreApplyBtn.disabled = true;
+        setBackupRestoreError("");
+        try {
+            const resp = await fetch("/admin/farm-data/backups/restore", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json"
+                },
+                body: JSON.stringify({ backup: backupName, changes })
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) {
+                throw new Error(data.error || "Не удалось восстановить данные.");
+            }
+            showToast(
+                `Восстановлено строк: ${data.updated_rows || 0}, полей: ${data.updated_fields || 0}. `
+                    + `Страхующий бэкап: ${data.safety_backup || "создан"}`,
+                "success"
+            );
+            closeBackupRestoreModal();
+            window.location.reload();
+        } catch (err) {
+            console.error("backup restore apply error:", err);
+            setBackupRestoreError(err.message || "Ошибка применения восстановления.");
+        } finally {
+            if (backupRestoreApplyBtn) backupRestoreApplyBtn.disabled = false;
+        }
+    }
 
     if (checkAll) {
         checkAll.addEventListener("change", function () {
@@ -2194,6 +2547,44 @@ document.addEventListener("DOMContentLoaded", function () {
             }
             await resolveConflictsBatch(renameConflicts);
         });
+    }
+
+
+
+    if (backupRestoreBtn) {
+        backupRestoreBtn.addEventListener("click", async function () {
+            openBackupRestoreModal();
+            setBtnLoading(backupRestoreBtn, true, backupRestoreSpinner);
+            try {
+                await loadBackupRestoreList();
+                await loadBackupRestorePreview();
+            } catch (err) {
+                console.error("backup restore list error:", err);
+                setBackupRestoreError(err.message || "Не удалось загрузить бэкапы.");
+            } finally {
+                setBtnLoading(backupRestoreBtn, false, backupRestoreSpinner);
+            }
+        });
+    }
+
+    if (backupRestorePreviewBtn) {
+        backupRestorePreviewBtn.addEventListener("click", loadBackupRestorePreview);
+    }
+
+    document.querySelector('[data-role="backup-restore-check-all"]')?.addEventListener("click", function () {
+        setAllBackupRestoreChecks(true);
+    });
+
+    document.querySelector('[data-role="backup-restore-uncheck-all"]')?.addEventListener("click", function () {
+        setAllBackupRestoreChecks(false);
+    });
+
+    if (backupRestoreSearch) {
+        backupRestoreSearch.addEventListener("input", updateBackupRestoreVisibility);
+    }
+
+    if (backupRestoreApplyBtn) {
+        backupRestoreApplyBtn.addEventListener("click", applyBackupRestore);
     }
 
     if (syncBtn) {
