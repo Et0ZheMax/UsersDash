@@ -1200,12 +1200,69 @@
         });
     }
 
+    function getClientFarmdataTariffValue(row) {
+        if (!row) return null;
+
+        const input = row.querySelector('input[name="tariff"]');
+        const rawValue = (input ? input.value : row.dataset.tariffValue || "").trim();
+        if (!rawValue || !/^\d+$/.test(rawValue)) {
+            return null;
+        }
+
+        return parseInt(rawValue, 10);
+    }
+
+    function applyClientFarmdataTariffSort() {
+        const table = document.querySelector('[data-role="farmdata-table"]');
+        const body = table ? table.querySelector("tbody") : null;
+        const sortSelect = document.querySelector('[data-role="farmdata-tariff-sort"]');
+        if (!body || !sortSelect) return;
+
+        const rows = Array.from(body.querySelectorAll("tr[data-account-id]"));
+        const sortMode = sortSelect.value || "default";
+        rows.sort(function (a, b) {
+            const aIndex = parseInt(a.dataset.originalIndex || "0", 10) || 0;
+            const bIndex = parseInt(b.dataset.originalIndex || "0", 10) || 0;
+
+            if (sortMode === "default") {
+                return aIndex - bIndex;
+            }
+
+            const aTariff = getClientFarmdataTariffValue(a);
+            const bTariff = getClientFarmdataTariffValue(b);
+            const aEmpty = aTariff === null;
+            const bEmpty = bTariff === null;
+
+            if (sortMode === "tariff-empty") {
+                if (aEmpty !== bEmpty) return aEmpty ? -1 : 1;
+                if (aEmpty && bEmpty) return aIndex - bIndex;
+                return aTariff - bTariff || aIndex - bIndex;
+            }
+
+            if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+            if (aEmpty && bEmpty) return aIndex - bIndex;
+
+            const tariffDiff = sortMode === "tariff-desc" ? bTariff - aTariff : aTariff - bTariff;
+            return tariffDiff || aIndex - bIndex;
+        });
+
+        rows.forEach((row) => body.appendChild(row));
+    }
+
+    function setupClientFarmdataTariffSort() {
+        const sortSelect = document.querySelector('[data-role="farmdata-tariff-sort"]');
+        if (!sortSelect) return;
+
+        sortSelect.addEventListener("change", applyClientFarmdataTariffSort);
+    }
+
     document.addEventListener("DOMContentLoaded", function () {
         autoHideFlashMessages();
         setupNavToggle();
         setupAccountSearch();
         applyFarmDataStatusUI();
         initFarmDataRowIndicators();
+        setupClientFarmdataTariffSort();
         loadAdminAccountResources();
         setupAccountLogsModal();
         setupServerStatesSection();

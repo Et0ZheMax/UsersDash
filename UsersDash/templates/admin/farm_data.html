@@ -143,6 +143,34 @@
         box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
     }
 
+    .farmdata-sort-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.25rem 0.35rem 0.25rem 0.7rem;
+        border: 1px solid rgba(75, 85, 99, 0.7);
+        border-radius: 999px;
+        background: rgba(2, 6, 23, 0.72);
+        color: #9ca3af;
+        font-size: 0.8rem;
+    }
+
+    .farmdata-sort-control select {
+        min-height: 30px;
+        border: none;
+        border-radius: 999px;
+        padding: 0.2rem 1.8rem 0.2rem 0.55rem;
+        background: #111827;
+        color: #e5e7eb;
+        font-size: 0.82rem;
+        outline: none;
+        cursor: pointer;
+    }
+
+    .farmdata-sort-control select:focus {
+        box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+    }
+
     .farmdata-table-wrapper {
         overflow-x: auto;
         margin-bottom: 1rem;
@@ -395,6 +423,15 @@
                            data-role="admin-farmdata-search">
                 </div>
                 <div class="farmdata-card-meta" style="align-items: flex-start; min-width: 240px; gap: 0.35rem;">
+                    <label class="farmdata-sort-control">
+                        <span>Сортировка</span>
+                        <select data-role="admin-farmdata-tariff-sort">
+                            <option value="default">По умолчанию</option>
+                            <option value="tariff-desc">Тариф: дороже</option>
+                            <option value="tariff-asc">Тариф: дешевле</option>
+                            <option value="tariff-empty">Без тарифа</option>
+                        </select>
+                    </label>
                     <div class="farmdata-loader" data-role="farmdata-loader">
                         <div class="farmdata-loader__spinner"></div>
                         <div>
@@ -903,6 +940,9 @@ document.addEventListener("DOMContentLoaded", function () {
         tr.dataset.isActive = item.is_active ? "1" : "0";
         tr.dataset.paymentBlocked = item.blocked_for_payment ? "1" : "0";
         tr.dataset.dirty = "0";
+        tr.dataset.originalIndex = String(document.querySelectorAll(
+            '[data-role="admin-farmdata-table"] tbody tr[data-account-id]'
+        ).length);
 
         const nextPayment = item.next_payment_at || "";
         const instanceId = item.instance_id ? String(item.instance_id) : "";
@@ -921,6 +961,7 @@ document.addEventListener("DOMContentLoaded", function () {
         const selectedTariffStr = tariffPlanStr || tariffStr;
         const hideTariffPrice = selectedTariffStr && HIDE_PRICE_TARIFFS.has(selectedTariffStr);
         const tariffInputValue = hideTariffPrice ? "" : tariffVal;
+        tr.dataset.tariffValue = selectedTariffStr || tariffStr || "";
         const tariffCellAttrs = selectedTariffStr
             ? ` data-selected-tariff-price="${escapeHtml(selectedTariffStr)}"`
             : "";
@@ -1053,7 +1094,7 @@ document.addEventListener("DOMContentLoaded", function () {
             loaded += items.length;
             offset += items.length;
             setFarmdataLoaderState({ loaded, total, isDone: loaded >= total });
-            updateFarmdataVisibleTotal();
+            applyFarmdataFiltersAndSort();
 
             if (!items.length || loaded >= total) {
                 break;
@@ -1541,19 +1582,38 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     });
 
-    document.addEventListener("input", function (e) {
-        const searchInput = e.target.closest('[data-role="admin-farmdata-search"]');
-        if (!searchInput) return;
+    function getAdminFarmdataTariffValue(row) {
+        if (!row) return null;
 
-        const query = searchInput.value.trim().toLowerCase();
-        const searchEmail = query.includes("@");
+        const cachedValue = row.dataset.tariffValue || "";
+        const input = row.querySelector('input[name="tariff"]');
+        const rawValue = cachedValue || (input ? input.value : "");
+        const { normalized, isValid } = normalizeTariffInput(rawValue);
+        return isValid && normalized !== "" ? parseInt(normalized, 10) : null;
+    }
+
+    function syncAdminFarmdataRowTariffValue(row) {
+        if (!row) return;
+
+        const cell = row.querySelector('[data-role="tariff-cell"]');
+        const selectedTariff = cell ? getTariffSelection(cell) : "";
+        const input = row.querySelector('input[name="tariff"]');
+        row.dataset.tariffValue = selectedTariff || (input ? input.value.trim() : "");
+    }
+
+    function applyFarmdataFiltersAndSort() {
         const table = document.querySelector('[data-role="admin-farmdata-table"]');
-        if (!table) return;
+        const body = table ? table.querySelector('tbody') : null;
+        if (!body) return;
 
-        const rows = table.querySelectorAll("tbody tr[data-account-id]");
+        const searchInput = document.querySelector('[data-role="admin-farmdata-search"]');
+        const query = searchInput ? searchInput.value.trim().toLowerCase() : "";
+        const searchEmail = query.includes("@");
+        const rows = Array.from(body.querySelectorAll('tr[data-account-id]'));
+
         rows.forEach(function (tr) {
             const farmName = (tr.dataset.farmName || "").toLowerCase();
-            let isMatch = farmName.includes(query);
+            let isMatch = !query || farmName.includes(query);
             if (!isMatch && searchEmail) {
                 const emailInput = tr.querySelector('input[name="email"]');
                 const email = emailInput ? emailInput.value.toLowerCase() : "";
@@ -1562,23 +1622,50 @@ document.addEventListener("DOMContentLoaded", function () {
             tr.style.display = isMatch ? "" : "none";
         });
 
+        const sortMode = document.querySelector('[data-role="admin-farmdata-tariff-sort"]')?.value || "default";
+        const sortedRows = rows.slice().sort(function (a, b) {
+            const aIndex = parseInt(a.dataset.originalIndex || "0", 10) || 0;
+            const bIndex = parseInt(b.dataset.originalIndex || "0", 10) || 0;
+
+            if (sortMode === "default") {
+                return aIndex - bIndex;
+            }
+
+            const aTariff = getAdminFarmdataTariffValue(a);
+            const bTariff = getAdminFarmdataTariffValue(b);
+            const aEmpty = aTariff === null;
+            const bEmpty = bTariff === null;
+
+            if (sortMode === "tariff-empty") {
+                if (aEmpty !== bEmpty) return aEmpty ? -1 : 1;
+                if (aEmpty && bEmpty) return aIndex - bIndex;
+                return aTariff - bTariff || aIndex - bIndex;
+            }
+
+            if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+            if (aEmpty && bEmpty) return aIndex - bIndex;
+
+            const tariffDiff = sortMode === "tariff-desc" ? bTariff - aTariff : aTariff - bTariff;
+            return tariffDiff || aIndex - bIndex;
+        });
+
+        sortedRows.forEach(function (row) {
+            body.appendChild(row);
+        });
         updateFarmdataVisibleTotal();
+    }
+
+    document.addEventListener("input", function (e) {
+        if (e.target.closest('[data-role="admin-farmdata-search"]')) {
+            applyFarmdataFiltersAndSort();
+        }
     });
 
-    function updateFarmdataVisibleTotal() {
-        const totalSpan = document.querySelector('[data-role="farmdata-total"]');
-        const rows = document.querySelectorAll('[data-role="admin-farmdata-table"] tbody tr[data-account-id]');
-
-        if (!totalSpan) {
-            return;
+    document.addEventListener("change", function (e) {
+        if (e.target.closest('[data-role="admin-farmdata-tariff-sort"]')) {
+            applyFarmdataFiltersAndSort();
         }
-
-        const visibleCount = Array.from(rows).filter(function (row) {
-            return row.style.display !== "none";
-        }).length;
-
-        totalSpan.textContent = visibleCount;
-    }
+    });
 
     function updateFarmdataVisibleTotal() {
         const totalSpan = document.querySelector('[data-role="farmdata-total"]');
@@ -1603,6 +1690,8 @@ document.addEventListener("DOMContentLoaded", function () {
 
         if (target.name === "tariff") {
             updateTariffLabel(target);
+            syncAdminFarmdataRowTariffValue(target.closest('tr[data-account-id]'));
+            applyFarmdataFiltersAndSort();
         }
 
         const row = target.closest('tr[data-account-id]');

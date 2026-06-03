@@ -52,6 +52,42 @@
         color: #6b7280;
     }
 
+    .farmdata-header-tools {
+        display: flex;
+        align-items: center;
+        gap: 0.65rem;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .farmdata-sort-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.25rem 0.35rem 0.25rem 0.7rem;
+        border: 1px solid rgba(75, 85, 99, 0.7);
+        border-radius: 999px;
+        background: rgba(2, 6, 23, 0.72);
+        color: #9ca3af;
+        font-size: 0.8rem;
+    }
+
+    .farmdata-sort-control select {
+        min-height: 30px;
+        border: none;
+        border-radius: 999px;
+        padding: 0.2rem 1.8rem 0.2rem 0.55rem;
+        background: #111827;
+        color: #e5e7eb;
+        font-size: 0.82rem;
+        outline: none;
+        cursor: pointer;
+    }
+
+    .farmdata-sort-control select:focus {
+        box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+    }
+
     .farmdata-badge-required {
         display: inline-flex;
         align-items: center;
@@ -308,12 +344,23 @@
                     </div>
                 </div>
 
-                {% if farmdata_required %}
-                    <div class="farmdata-badge-required">
-                        <span class="farmdata-badge-dot"></span>
-                        Требуется заполнить
-                    </div>
-                {% endif %}
+                <div class="farmdata-header-tools">
+                    <label class="farmdata-sort-control">
+                        <span>Сортировка</span>
+                        <select data-role="farmdata-tariff-sort">
+                            <option value="default">По умолчанию</option>
+                            <option value="tariff-desc">Тариф: дороже</option>
+                            <option value="tariff-asc">Тариф: дешевле</option>
+                            <option value="tariff-empty">Без тарифа</option>
+                        </select>
+                    </label>
+                    {% if farmdata_required %}
+                        <div class="farmdata-badge-required">
+                            <span class="farmdata-badge-dot"></span>
+                            Требуется заполнить
+                        </div>
+                    {% endif %}
+                </div>
             </div>
 
             <div class="farmdata-table-wrapper">
@@ -337,7 +384,10 @@
                             {% set acc = item.account %}
                             {% set fd = item.farmdata %}
                             {% set has_required = fd and fd.email and fd.password and fd.igg_id and fd.server and fd.telegram_tag %}
-                            <tr data-account-id="{{ acc.id }}" data-dirty="0">
+                            <tr data-account-id="{{ acc.id }}"
+                                data-dirty="0"
+                                data-original-index="{{ loop.index0 }}"
+                                data-tariff-value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
                                 <td class="farmdata-name-cell">
                                     <div class="farmdata-name-main">
                                         {{ acc.name }}
