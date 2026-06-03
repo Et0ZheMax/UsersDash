@@ -24,6 +24,18 @@ from UsersDash.models import Server, db
 log = logging.getLogger(__name__)
 
 
+def _is_truthy(value: Any) -> bool:
+    """Нормализует флаг из JSON/query в bool."""
+
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
 # Таймауты для HTTP-запросов (в секундах)
 DEFAULT_TIMEOUT = 15
 HEALTH_TIMEOUT = 5
@@ -494,7 +506,6 @@ def fetch_resources_for_accounts(
         by_server.setdefault(acc.server_id, []).append(acc)
 
     result: Dict[int, Dict[str, Any]] = {}
-    reactivated_accounts: List[Any] = []
 
     if not by_server:
         return result
@@ -558,18 +569,6 @@ def fetch_resources_for_accounts(
                 "last_updated_fmt": last_fmt,
                 "remote_id": remote_id,
             }
-            if not getattr(acc, "is_active", True) and not getattr(acc, "blocked_for_payment", False):
-                reactivated_accounts.append(acc)
-
-    if reactivated_accounts:
-        try:
-            # Если ферма отдаёт ресурсы, считаем её активной и синхронизируем флаг.
-            for acc in reactivated_accounts:
-                acc.is_active = True
-            db.session.commit()
-        except Exception as exc:
-            log.warning("Не удалось обновить статус активных ферм: %s", exc)
-            db.session.rollback()
 
     return result
 
@@ -1083,6 +1082,112 @@ def _build_server_base_url(server: Server) -> str:
 
     return base_url
 
+
+
+def _remote_account_active_value(item: Dict[str, Any]) -> bool:
+    """Нормализует флаг активности аккаунта из ответа RssV7."""
+
+    for key in ("Active", "active", "IsActive", "is_active"):
+        if key in item:
+            return _is_truthy(item.get(key))
+    return True
+
+
+def fetch_rssv7_manage_accounts(server: Server) -> Tuple[List[Dict], str]:
+    """Запрашивает полный список профилей RssV7, включая Active:false."""
+
+    base_url = _build_server_base_url(server)
+    if not base_url:
+        err = f"Не задан URL для сервера id={server.id} name={server.name}"
+        log.warning(err)
+        return [], err
+
+    url = f"{base_url}/api/manage/accounts"
+
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+    except RequestException as exc:
+        err = f"Ошибка запроса к {url}: {exc}"
+        log.error(err)
+        return [], err
+
+    try:
+        data = resp.json()
+    except ValueError as exc:
+        err = f"Некорректный JSON от {url}: {exc}"
+        log.error(err)
+        return [], err
+
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("items") or data.get("accounts") or data.get("data") or []
+    else:
+        items = []
+
+    if not isinstance(items, list):
+        err = f"{url}: неожиданный формат ответа"
+        log.error(err)
+        return [], err
+
+    return [item for item in items if isinstance(item, dict)], ""
+
+
+def sync_accounts_active_from_remote(server: Server, accounts: List[Any]) -> str:
+    """Синхронизирует Account.is_active с Active из полного профиля RssV7."""
+
+    if not accounts:
+        return ""
+
+    remote_items, err = fetch_rssv7_manage_accounts(server)
+    if err:
+        return err
+
+    by_id: Dict[str, Dict[str, Any]] = {}
+    by_instance: Dict[str, Dict[str, Any]] = {}
+    by_name: Dict[str, Dict[str, Any]] = {}
+
+    for item in remote_items:
+        remote_id = item.get("Id") or item.get("id") or item.get("internal_id")
+        if remote_id is not None:
+            by_id[str(remote_id)] = item
+
+        instance_id = item.get("InstanceId") or item.get("instanceId")
+        if instance_id is not None:
+            by_instance[str(instance_id)] = item
+
+        name = item.get("Name") or item.get("name") or item.get("nickname")
+        if name:
+            by_name[str(name)] = item
+
+    changed = False
+    for acc in accounts:
+        internal_id = str(getattr(acc, "internal_id", "") or "").strip()
+        name = str(getattr(acc, "name", "") or "").strip()
+        remote = None
+        if internal_id:
+            remote = by_id.get(internal_id) or by_instance.get(internal_id)
+        if remote is None and name:
+            remote = by_name.get(name)
+        if remote is None:
+            continue
+
+        remote_active = _remote_account_active_value(remote)
+        if bool(getattr(acc, "is_active", True)) != remote_active:
+            acc.is_active = remote_active
+            changed = True
+
+    if changed:
+        try:
+            db.session.commit()
+        except Exception as exc:
+            db.session.rollback()
+            err = f"Не удалось сохранить статусы Active для сервера {server.name}: {exc}"
+            log.warning(err)
+            return err
+
+    return ""
 
 def fetch_rssv7_accounts_meta(server: Server) -> Tuple[List[Dict], str]:
     """
