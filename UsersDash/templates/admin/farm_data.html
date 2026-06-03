@@ -171,6 +171,33 @@
         box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
     }
 
+    .farmdata-filter-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.35rem 0.7rem;
+        border: 1px solid rgba(75, 85, 99, 0.7);
+        border-radius: 999px;
+        background: rgba(2, 6, 23, 0.72);
+        color: #d1d5db;
+        font-size: 0.82rem;
+        cursor: pointer;
+        user-select: none;
+    }
+
+    .farmdata-filter-toggle input {
+        width: 15px;
+        height: 15px;
+        margin: 0;
+        accent-color: #3b82f6;
+        cursor: pointer;
+    }
+
+    .farmdata-filter-toggle:hover {
+        border-color: rgba(96, 165, 250, 0.85);
+        color: #f9fafb;
+    }
+
     .farmdata-table-wrapper {
         overflow-x: auto;
         margin-bottom: 1rem;
@@ -431,6 +458,10 @@
                             <option value="tariff-asc">Тариф: дешевле</option>
                             <option value="tariff-empty">Без тарифа</option>
                         </select>
+                    </label>
+                    <label class="farmdata-filter-toggle">
+                        <input type="checkbox" data-role="admin-farmdata-hide-disabled" checked>
+                        <span>Скрыть отключенные</span>
                     </label>
                     <div class="farmdata-loader" data-role="farmdata-loader">
                         <div class="farmdata-loader__spinner"></div>
@@ -809,6 +840,10 @@ document.addEventListener("DOMContentLoaded", function () {
         const unpaidBtn = row.querySelector('[data-role="farmdata-mark-unpaid"]');
         if (unpaidBtn) {
             unpaidBtn.title = blocked ? "Ферма уже отключена за неоплату" : "Отключить за неоплату";
+        }
+
+        if (row.isConnected) {
+            applyFarmdataFiltersAndSort();
         }
 
         const paidBtn = row.querySelector('[data-role="farmdata-mark-paid"]');
@@ -1607,18 +1642,26 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!body) return;
 
         const searchInput = document.querySelector('[data-role="admin-farmdata-search"]');
+        const hideDisabledInput = document.querySelector('[data-role="admin-farmdata-hide-disabled"]');
         const query = searchInput ? searchInput.value.trim().toLowerCase() : "";
         const searchEmail = query.includes("@");
+        const hideDisabled = hideDisabledInput ? hideDisabledInput.checked : false;
         const rows = Array.from(body.querySelectorAll('tr[data-account-id]'));
 
         rows.forEach(function (tr) {
             const farmName = (tr.dataset.farmName || "").toLowerCase();
-            let isMatch = !query || farmName.includes(query);
-            if (!isMatch && searchEmail) {
-                const emailInput = tr.querySelector('input[name="email"]');
-                const email = emailInput ? emailInput.value.toLowerCase() : "";
-                isMatch = email.includes(query);
+            const isActive = tr.dataset.isActive === "1";
+            let isMatch = !hideDisabled || isActive;
+
+            if (isMatch && query) {
+                isMatch = farmName.includes(query);
+                if (!isMatch && searchEmail) {
+                    const emailInput = tr.querySelector('input[name="email"]');
+                    const email = emailInput ? emailInput.value.toLowerCase() : "";
+                    isMatch = email.includes(query);
+                }
             }
+
             tr.style.display = isMatch ? "" : "none";
         });
 
@@ -1662,7 +1705,8 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     document.addEventListener("change", function (e) {
-        if (e.target.closest('[data-role="admin-farmdata-tariff-sort"]')) {
+        if (e.target.closest('[data-role="admin-farmdata-tariff-sort"]') ||
+                e.target.closest('[data-role="admin-farmdata-hide-disabled"]')) {
             applyFarmdataFiltersAndSort();
         }
     });
