@@ -50,6 +50,11 @@ from UsersDash.models import (
 )
 from UsersDash.config import Config
 from UsersDash.services.db_backup import backup_database
+from UsersDash.services.farmdata_backup_restore import (
+    apply_farmdata_backup_restore,
+    list_farmdata_backups,
+    preview_farmdata_backup,
+)
 from UsersDash.services import client_config_visibility
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.remote_api import (
@@ -3127,6 +3132,76 @@ def admin_farm_data_autocreate_clients():
         }
     )
 
+
+@admin_bp.route("/farm-data/backups", methods=["GET"])
+@login_required
+def admin_farm_data_backups():
+    """Возвращает список бэкапов БД для модального восстановления данных ферм."""
+
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    try:
+        backups = list_farmdata_backups(limit=40)
+    except Exception as exc:
+        current_app.logger.exception("farm-data backups list error")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    return jsonify({"ok": True, "backups": backups})
+
+
+@admin_bp.route("/farm-data/backups/preview", methods=["GET"])
+@login_required
+def admin_farm_data_backup_preview():
+    """Показывает отличия выбранного бэкапа от текущих данных ферм."""
+
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    backup_name = (request.args.get("backup") or "").strip()
+    if not backup_name:
+        return jsonify({"ok": False, "error": "Выберите бэкап."}), 400
+
+    try:
+        preview = preview_farmdata_backup(backup_name)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except Exception as exc:
+        current_app.logger.exception("farm-data backup preview error")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    preview["ok"] = True
+    return jsonify(preview)
+
+
+@admin_bp.route("/farm-data/backups/restore", methods=["POST"])
+@login_required
+def admin_farm_data_backup_restore():
+    """Применяет выбранные поля из бэкапа к текущим данным ферм."""
+
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    backup_name = (payload.get("backup") or "").strip()
+    changes = payload.get("changes") or []
+    if not backup_name:
+        return jsonify({"ok": False, "error": "Выберите бэкап."}), 400
+    if not isinstance(changes, list) or not changes:
+        return jsonify({"ok": False, "error": "Не выбрано ни одного поля."}), 400
+
+    try:
+        result = apply_farmdata_backup_restore(backup_name, changes)
+    except FileNotFoundError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    except Exception as exc:
+        current_app.logger.exception("farm-data backup restore error")
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    result["ok"] = True
+    return jsonify(result)
 
 @admin_bp.route("/farm-data/save", methods=["POST"])
 @login_required
