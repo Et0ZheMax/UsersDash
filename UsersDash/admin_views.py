@@ -58,6 +58,7 @@ from UsersDash.services.remote_api import (
     fetch_resources_for_accounts,
     fetch_resources_for_server,
     fetch_rssv7_accounts_meta,
+    sync_accounts_active_from_remote,
     fetch_template_payload,
     fetch_template_schema,
     fetch_templates_list,
@@ -2659,7 +2660,12 @@ def admin_farm_data():
     if current_user.role != "admin":
         abort(403)
 
-    total_accounts = Account.query.count()
+    total_accounts = (
+        Account.query
+        .join(Server, Account.server_id == Server.id)
+        .filter(Account.is_active.is_(True), Server.is_active.is_(True))
+        .count()
+    )
 
     return render_template(
         "admin/farm_data.html",
@@ -2676,7 +2682,12 @@ def admin_farm_data_chunk():
     if current_user.role != "admin":
         return jsonify({"ok": False, "error": "Access denied"}), 403
 
-    total_accounts = Account.query.count()
+    total_accounts = (
+        Account.query
+        .join(Server, Account.server_id == Server.id)
+        .filter(Account.is_active.is_(True), Server.is_active.is_(True))
+        .count()
+    )
 
     try:
         offset = max(0, int(request.args.get("offset", 0)))
@@ -2696,11 +2707,29 @@ def admin_farm_data_chunk():
         .join(User, Account.owner_id == User.id)
         .join(Server, Account.server_id == Server.id)
         .options(joinedload(Account.owner), joinedload(Account.server))
+        .filter(Account.is_active.is_(True), Server.is_active.is_(True))
         .order_by(User.username.asc(), Account.name.asc())
         .offset(offset)
         .limit(limit)
         .all()
     )
+
+    sync_errors: list[str] = []
+    accounts_by_server: dict[int, list[Account]] = {}
+    for acc in accounts:
+        if acc.server_id and acc.server:
+            accounts_by_server.setdefault(acc.server_id, []).append(acc)
+
+    for server_accounts in accounts_by_server.values():
+        err = sync_accounts_active_from_remote(server_accounts[0].server, server_accounts)
+        if err:
+            sync_errors.append(err)
+
+    accounts = [
+        acc
+        for acc in accounts
+        if acc.is_active and acc.server and acc.server.is_active
+    ]
 
     account_ids = [acc.id for acc in accounts]
     farmdata_entries = []
@@ -2764,6 +2793,7 @@ def admin_farm_data_chunk():
             "offset": offset,
             "limit": limit,
             "items": items,
+            "errors": sync_errors,
         }
     )
 
