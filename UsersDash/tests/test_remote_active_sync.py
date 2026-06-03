@@ -20,15 +20,21 @@ class RemoteActiveSyncTestCase(unittest.TestCase):
         self.ctx = self.app.app_context()
         self.ctx.push()
 
+        self.admin = User(username="admin_remote_active", password_hash="hash", role="admin")
         self.owner = User(username="client_remote_active", password_hash="hash", role="client")
         self.server = Server(name="RemoteActiveServer", host="127.0.0.1", is_active=True)
-        db.session.add_all([self.owner, self.server])
+        db.session.add_all([self.admin, self.owner, self.server])
         db.session.commit()
 
     def tearDown(self):
         db.session.remove()
         self.ctx.pop()
         self.tmp.cleanup()
+
+    def _login_admin(self, client):
+        with client.session_transaction() as sess:
+            sess["_user_id"] = str(self.admin.id)
+            sess["_fresh"] = True
 
     def test_sync_accounts_active_from_remote_disables_active_false_profile(self):
         account = Account(
@@ -77,6 +83,44 @@ class RemoteActiveSyncTestCase(unittest.TestCase):
 
         self.assertIn(account.id, result)
         self.assertFalse(account.is_active)
+
+    def test_farm_data_chunk_keeps_inactive_accounts_for_hide_checkbox(self):
+        active_account = Account(
+            name="VisibleActiveFarm",
+            internal_id="active-id",
+            owner_id=self.owner.id,
+            server_id=self.server.id,
+            is_active=True,
+        )
+        inactive_account = Account(
+            name="VisibleInactiveFarm",
+            internal_id="inactive-id",
+            owner_id=self.owner.id,
+            server_id=self.server.id,
+            is_active=False,
+        )
+        db.session.add_all([active_account, inactive_account])
+        db.session.commit()
+
+        client = self.app.test_client()
+        self._login_admin(client)
+
+        with patch("UsersDash.admin_views.sync_accounts_active_from_remote", return_value=""), patch(
+            "UsersDash.admin_views._get_cached_resources_for_server",
+            return_value={},
+        ):
+            resp = client.get("/admin/farm-data/chunk?offset=0&limit=50")
+
+        self.assertEqual(resp.status_code, 200)
+        payload = resp.get_json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["total"], 2)
+
+        by_name = {item["farm_name"]: item for item in payload["items"]}
+        self.assertIn("VisibleActiveFarm", by_name)
+        self.assertIn("VisibleInactiveFarm", by_name)
+        self.assertTrue(by_name["VisibleActiveFarm"]["is_active_local"])
+        self.assertFalse(by_name["VisibleInactiveFarm"]["is_active_local"])
 
 
 if __name__ == "__main__":
