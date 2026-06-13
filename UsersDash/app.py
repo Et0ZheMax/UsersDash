@@ -35,7 +35,11 @@ from UsersDash.auth import auth_bp
 from UsersDash.admin_views import admin_bp
 from UsersDash.client_views import client_bp
 from UsersDash.api_views import api_bp
-from UsersDash.services.db_backup import backup_database, ensure_backup_dir
+from UsersDash.services.db_backup import (
+    ensure_backup_dir,
+    ensure_daily_backup,
+    sqlite_uri_to_path,
+)
 from UsersDash.services.farmdata_status import collect_farmdata_status
 from UsersDash.services.health_check import run_health_check
 
@@ -703,24 +707,37 @@ def ensure_farm_data_account_id_column() -> None:
 
 
 def _run_midnight_backup(app: Flask):
-    """Фоновая задача: ежедневный бэкап БД в 00:00."""
+    """Фоновая задача: гарантирует ежедневный бэкап БД и догоняет пропущенные запуски."""
+
+    def run_once(reason: str) -> None:
+        try:
+            with app.app_context():
+                db_path = sqlite_uri_to_path(app.config["SQLALCHEMY_DATABASE_URI"])
+                backup_dir = db_path.parent / "backups"
+                path = ensure_daily_backup(db_file=db_path, backup_dir=backup_dir)
+                if path is None:
+                    print(f"[backup] Daily-бэкап уже есть, причина проверки: {reason}")
+                else:
+                    print(f"[backup] Ежедневный бэкап сохранён: {path}, причина: {reason}")
+        except Exception as exc:
+            print(f"[backup] Не удалось сделать ежедневный бэкап ({reason}): {exc}")
+            traceback.print_exc()
 
     def worker():
+        # Важно: проверяем сразу при старте. Если приложение/сервер не работали в 00:00,
+        # старый вариант ждал следующей полуночи и оставлял дыру в бэкапах.
+        run_once("startup")
+
         while True:
             now = datetime.now()
-            next_run = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            next_run = (now + timedelta(days=1)).replace(
+                hour=0, minute=5, second=0, microsecond=0
+            )
             sleep_seconds = max(60, (next_run - now).total_seconds())
             time.sleep(sleep_seconds)
+            run_once("schedule")
 
-            try:
-                with app.app_context():
-                    path = backup_database("daily")
-                    print(f"[backup] Ежедневный бэкап сохранён: {path}")
-            except Exception as exc:
-                print(f"[backup] Не удалось сделать ежедневный бэкап: {exc}")
-                traceback.print_exc()
-
-    thread = threading.Thread(target=worker, daemon=True)
+    thread = threading.Thread(target=worker, daemon=True, name="usersdash-daily-backup")
     thread.start()
     return thread
 
@@ -772,7 +789,7 @@ def _run_rental_bot_worker() -> threading.Thread | None:
 # -------------------------------------------------
 
 
-def create_app(enable_background_workers: bool = True) -> Flask:
+def create_app(enable_background_workers: bool = False) -> Flask:
     """
     Фабрика Flask-приложения.
     """
