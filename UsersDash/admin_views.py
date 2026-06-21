@@ -2665,12 +2665,7 @@ def admin_farm_data():
     if current_user.role != "admin":
         abort(403)
 
-    total_accounts = (
-        Account.query
-        .join(Server, Account.server_id == Server.id)
-        .filter(Account.is_active.is_(True), Server.is_active.is_(True))
-        .count()
-    )
+    total_accounts = Account.query.count()
 
     return render_template(
         "admin/farm_data.html",
@@ -2687,12 +2682,7 @@ def admin_farm_data_chunk():
     if current_user.role != "admin":
         return jsonify({"ok": False, "error": "Access denied"}), 403
 
-    total_accounts = (
-        Account.query
-        .join(Server, Account.server_id == Server.id)
-        .filter(Account.is_active.is_(True), Server.is_active.is_(True))
-        .count()
-    )
+    total_accounts = Account.query.count()
 
     try:
         offset = max(0, int(request.args.get("offset", 0)))
@@ -2712,8 +2702,7 @@ def admin_farm_data_chunk():
         .join(User, Account.owner_id == User.id)
         .join(Server, Account.server_id == Server.id)
         .options(joinedload(Account.owner), joinedload(Account.server))
-        .filter(Account.is_active.is_(True), Server.is_active.is_(True))
-        .order_by(User.username.asc(), Account.name.asc())
+        .order_by(Account.is_active.desc(), User.username.asc(), Account.name.asc())
         .offset(offset)
         .limit(limit)
         .all()
