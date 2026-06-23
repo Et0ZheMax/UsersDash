@@ -36,6 +36,10 @@ def _load_root_env() -> None:
 
     load_root_env_file(current_file)
 
+# Загружаем переменные окружения и при импорте из веб-сервера, иначе TG/пороги
+# могут оставаться пустыми до ручного запуска скрипта.
+_load_root_env()
+
 # ─────────────────────────── Константы / настройка ───────────────────────────
 BASE_DIR = Path(__file__).resolve().parent
 RESOURCES_DB = BASE_DIR / "resources_web.db"
@@ -171,29 +175,28 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
         if not dt:
             continue
 
-        # Считаем dayGain (по food+wood+stone+gold)
+        # Считаем dayGain (по food+wood+stone+gold). Если baseline за сегодня
+        # не успел создаться, всё равно не скрываем критичный простой: stale-last_updated
+        # важнее точной оценки дневного прироста.
         base_row = baseline.get(acc_id)
+        day_gain = None
         if base_row:
             bf, bw, bs, bg = base_row
             day_gain = (f - bf) + (w - bw) + (s - bs) + (g - bg)
-        else:
-            # Без baseline нельзя корректно судить о dayGain, поэтому пропускаем запись,
-            # чтобы не держать «вечные» ложные алерты.
-            continue
 
         hours_inactive = (now - dt).total_seconds() / 3600
         is_stale = now - dt >= threshold
         not_too_old = now - dt <= max_last_seen
-        zero_gain = day_gain == 0
+        zero_gain_or_unknown = day_gain in (0, None)
 
-        if is_stale and not_too_old and zero_gain:
+        if is_stale and not_too_old and zero_gain_or_unknown:
             offenders.append({
                 "id": acc_id,
                 "nickname": nick,
                 "last": dt.isoformat(),
                 "hours": round(hours_inactive, 1),
-                "day_gain": 0,
-                "tag": TAG_TEXT,
+                "day_gain": day_gain,
+                "tag": TAG_TEXT if day_gain == 0 else "stale⏱️",
             })
 
     # ── сохраняем json ────────────────────────────────────────────────
@@ -232,7 +235,7 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
 
         # шлём только, если что-то изменилось
         if diff_added or diff_removed:
-            lines = [f"⚠️ <b>Без прироста > {threshold_hrs} ч</b> (dayGain=0)"]
+            lines = [f"⚠️ <b>Без фарма > {threshold_hrs} ч</b> (dayGain=0 или нет baseline)"]
             if diff_added:
                 for o in sorted(diff_added, key=lambda x: x["hours"], reverse=True):
                     ts = _tz_aware_from_iso(o["last"]).astimezone() if o["last"] else None

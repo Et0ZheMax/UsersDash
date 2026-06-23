@@ -166,6 +166,12 @@ GATHER_TILES_PATTERNS = (
     "gather: cannot find tile",
     "gather: cannot find level menu",
 )
+LAUNCH_FAILURE_LOG_LIMIT = 800
+LAUNCH_FAILURE_MIN_RESTARTS = 3
+LAUNCH_FAILURE_PATTERNS = (
+    "many restarts detected",
+    "we will now restart the instance",
+)
 
 # 3) БД
 RESOURCES_DB   = os.path.join(BASE_DIR, "resources_web.db")
@@ -3698,6 +3704,74 @@ def _collect_gather_watch() -> list[dict[str, t.Any]]:
     return alerts
 
 
+def _line_has_launch_failure(line: str) -> bool:
+    """Проверяет явные критичные ошибки запуска игры в строке лога."""
+
+    low = line.lower()
+    return any(pattern in low for pattern in LAUNCH_FAILURE_PATTERNS)
+
+
+def _collect_launch_failure_watch() -> list[dict[str, t.Any]]:
+    """Подмешивает критичные циклы рестартов игры из cached_logs.
+
+    LD_problems иногда не видит сценарии, где бот сам завершает аккаунт после серии
+    `Launch: Restarting Game N/3` и `Launch: Many restarts detected`. Поэтому
+    проверяем последние строки активных аккаунтов напрямую из кеша логов.
+    """
+
+    active = load_active_names()
+    if not active:
+        return []
+
+    alerts: list[dict[str, t.Any]] = []
+    conn = open_db(LOGS_DB)
+    c = conn.cursor()
+
+    try:
+        for acc_id, nick in active:
+            rows = c.execute(
+                """
+                  SELECT dt, raw_line, COALESCE(nickname, '')
+                  FROM cached_logs
+                  WHERE acc_id = ?
+                  ORDER BY id DESC
+                  LIMIT ?
+                """,
+                (acc_id, LAUNCH_FAILURE_LOG_LIMIT),
+            ).fetchall()
+
+            if not rows:
+                continue
+
+            rows = list(reversed(rows))
+            _, last_cycle, last_done_dt = _extract_last_cycles(rows)
+            scan_rows = last_cycle or [raw for _, raw, _ in rows[-120:]]
+            restart_count = sum(1 for raw in scan_rows if "launch: restarting game" in raw.lower())
+            has_failure_marker = any(_line_has_launch_failure(raw) for raw in scan_rows)
+
+            if not has_failure_marker and restart_count < LAUNCH_FAILURE_MIN_RESTARTS:
+                continue
+
+            last_dt = last_done_dt or rows[-1][0]
+            alerts.append(
+                {
+                    "acc_id": acc_id,
+                    "nickname": nick or rows[-1][2] or acc_id,
+                    "summary": (
+                        "🚨 Критичная ошибка запуска: серия рестартов игры"
+                        f" ({restart_count}/{LAUNCH_FAILURE_MIN_RESTARTS}+), last {last_dt}"
+                    ),
+                    "kind": "launch_restarts",
+                    "total": 1,
+                    "last_seen": last_dt,
+                    "restarts": restart_count,
+                }
+            )
+    finally:
+        conn.close()
+
+    return alerts
+
 def _load_inactive_watch(max_age_hours: int = 3) -> list[dict[str, t.Any]]:
     """Подмешиваем список неактивных аккаунтов (dayGain=0 > THRESH)."""
 
@@ -5113,6 +5187,7 @@ def api_problems_summary():
 
     data = _safe_json_load(LD_PROBLEMS_SUMMARY_PATH) or {}
     gather_alerts = _collect_gather_watch()
+    launch_alerts = _collect_launch_failure_watch()
     inactive_alerts = _load_inactive_watch()
 
     accounts = []
@@ -5120,13 +5195,19 @@ def api_problems_summary():
         accounts.extend(data.get("accounts") or [])
 
     accounts.extend(gather_alerts)
+    accounts.extend(launch_alerts)
     accounts.extend(inactive_alerts)
 
     payload = {
         "server": data.get("server") or SERVER_NAME,
         "generated_at": data.get("generated_at"),
         "total_accounts": data.get("total_accounts", 0),
-        "total_problems": data.get("total_problems", 0) + len(inactive_alerts),
+        "total_problems": (
+            data.get("total_problems", 0)
+            + len(gather_alerts)
+            + len(launch_alerts)
+            + len(inactive_alerts)
+        ),
         "accounts": accounts,
     }
 
