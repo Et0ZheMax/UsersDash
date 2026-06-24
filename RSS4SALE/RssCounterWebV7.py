@@ -1556,9 +1556,9 @@ def api_problems_summary():
 
 @app.route("/api/cycle_time")
 def api_cycle_time():
-    window_hours = _int_arg("window_hours", 24)
-    min_gap_minutes = _int_arg("min_gap_minutes", 30)
-    max_gap_hours = _int_arg("max_gap_hours", 12)
+    window_hours = _int_arg("window_hours", 72)
+    min_gap_minutes = _int_arg("min_gap_minutes", 5)
+    max_gap_hours = _int_arg("max_gap_hours", 24)
 
     try:
         cycles = _calculate_cycle_times(
