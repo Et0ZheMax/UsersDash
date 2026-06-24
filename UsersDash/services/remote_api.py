@@ -1501,30 +1501,60 @@ def fetch_server_cycle_time(
     if not base:
         return None, "api_base_url не задан"
 
-    url = (
-        f"{base}/cycle_time?window_hours={window_hours}"
-        f"&min_gap_minutes={min_gap_minutes}&max_gap_hours={max_gap_hours}"
-    )
-    data = _safe_get_json(
-        url, timeout=HEALTH_TIMEOUT, source=f"cycle_time {server.name}"
-    )
-    if data is None:
-        return None, f"Нет ответа от {url}"
-    if not isinstance(data, dict):
-        return None, f"Некорректный ответ от {url}"
-
-    if "avg_cycle_hms" not in data:
-        overall = data.get("overall") if isinstance(data.get("overall"), dict) else {}
-        avg_minutes = (
-            overall.get("avg_minutes") if isinstance(overall.get("avg_minutes"), (int, float)) else None
+    def _request_cycle_time(wh: int, mg: int, mx: int) -> Tuple[Optional[Dict[str, Any]], str]:
+        url = (
+            f"{base}/cycle_time?window_hours={wh}"
+            f"&min_gap_minutes={mg}&max_gap_hours={mx}"
         )
-        if avg_minutes is not None:
-            try:
-                data["avg_cycle_hms"] = _format_hms(int(avg_minutes * 60))
-            except Exception:
-                pass
+        data = _safe_get_json(
+            url, timeout=HEALTH_TIMEOUT, source=f"cycle_time {server.name}"
+        )
+        if data is None:
+            return None, f"Нет ответа от {url}"
+        if not isinstance(data, dict):
+            return None, f"Некорректный ответ от {url}"
+        return data, ""
 
-    return data, ""
+    def _normalize_cycle_payload(data: Dict[str, Any]) -> Dict[str, Any]:
+        if "avg_cycle_hms" not in data:
+            overall = data.get("overall") if isinstance(data.get("overall"), dict) else {}
+            avg_minutes = (
+                overall.get("avg_minutes")
+                if isinstance(overall.get("avg_minutes"), (int, float))
+                else None
+            )
+            if avg_minutes is not None:
+                try:
+                    data["avg_cycle_hms"] = _format_hms(int(avg_minutes * 60))
+                except Exception:
+                    pass
+        return data
+
+    def _has_cycle_value(data: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(data, dict):
+            return False
+        avg = str(data.get("avg_cycle_hms") or "").strip()
+        if avg and avg != "—":
+            return True
+        return bool(data.get("avg_cycle_seconds") or data.get("intervals_used"))
+
+    data, err = _request_cycle_time(window_hours, min_gap_minutes, max_gap_hours)
+    if data is not None:
+        data = _normalize_cycle_payload(data)
+        if _has_cycle_value(data) or (window_hours, max_gap_hours) == (24, 6):
+            return data, ""
+
+    # Совместимость с уже запущенными RSS-серверами и прежним поведением панели:
+    # если расширенное окно не нашло точки круга, пробуем старые параметры 24ч/6ч.
+    fallback_data, fallback_err = _request_cycle_time(24, min_gap_minutes, 6)
+    if fallback_data is not None:
+        fallback_data = _normalize_cycle_payload(fallback_data)
+        if _has_cycle_value(fallback_data) or data is None:
+            return fallback_data, ""
+
+    if data is not None:
+        return data, ""
+    return None, err or fallback_err
 
 
 
