@@ -80,6 +80,7 @@ PROBLEM_LABELS = {
     "login": "Login🔑",
     "update": "UPD🔄",
     "restart": "Restart X4❌",
+    "launch_restart": "Launch restart🔁",
     "crash": "Crash💥",
     "idle": "Idle⌛",
     "no_tasks": "No tasks🤷🏼‍♀️📋",
@@ -124,6 +125,7 @@ regex_list = [
     re.compile(r'no actions'),
     re.compile(r'Found\s+0\s+active\s+Actions'),
     re.compile(r'Ignoring'),
+    re.compile(r'Launch:\s*Many restarts detected', re.I),
 ]
 
 # 2️⃣  Шаблоны для «кластеров»
@@ -131,6 +133,8 @@ cluster_regex_list = [
     re.compile(r'Account expired'),
     re.compile(r'crashed'),
     re.compile(r'Booting timeout. Restarting'),
+    re.compile(r'Launch:\s*Restarting Game', re.I),
+    re.compile(r'Launch:\s*We will now restart the instance', re.I),
 ]
 
 CLUSTER_WINDOW_MIN = 25
@@ -251,6 +255,12 @@ def _classify_problem(raw_line: str) -> tuple[str, str]:
         return "update", PROBLEM_LABELS["update"]
     if "booting timeout" in lower:
         return "restart", PROBLEM_LABELS["restart"]
+    if (
+        "launch: restarting game" in lower
+        or "launch: many restarts detected" in lower
+        or "launch: we will now restart the instance" in lower
+    ):
+        return "launch_restart", PROBLEM_LABELS["launch_restart"]
     if "crash" in lower:
         return "crash", PROBLEM_LABELS["crash"]
     if "no actions" in lower:
@@ -281,7 +291,7 @@ def _save_summary(per_account: dict[str, Counter], total_problems: int) -> None:
     for acc, counter in sorted(per_account.items()):
         problems = []
         for key, cnt in sorted(counter.items()):
-            _, label = _classify_problem(key)
+            label = PROBLEM_LABELS.get(key, PROBLEM_LABELS["other"])
             problems.append({"kind": key, "label": label, "count": cnt})
         summary = _format_summary(counter)
         accounts.append(
@@ -470,8 +480,14 @@ async def check_logs_and_notify() -> None:
     old_keys = {(r["account"], r["file"], r["line"]) for r in old if isinstance(r, dict)}
     new = [r for r in deduplicate(found) if (r["account"], r["file"], r["line"]) not in old_keys]
 
+    all_found = deduplicate(found)
+    per_account_all: dict[str, Counter] = defaultdict(Counter)
+    for rec in all_found:
+        kind, _ = _classify_problem(rec["line"])
+        per_account_all[rec["account"]][kind] += 1
+
     if not new:
-        _save_summary({}, 0)
+        _save_summary(per_account_all, len(all_found))
         print("Новых проблем нет.")
         return
 
@@ -494,7 +510,7 @@ async def check_logs_and_notify() -> None:
     summary_txt = "\n".join(summary_lines) if summary_lines else "—"
     await safe_send(bot, f"{SERVER_LABEL}📊 Сводка: {header}\n{summary_txt}")
 
-    _save_summary(per_account, len(new))
+    _save_summary(per_account_all, len(all_found))
 
     try:
         with open(PROBLEMS_FILE, "w", encoding="utf-8") as f:
