@@ -3828,6 +3828,16 @@ def _load_inactive_watch(max_age_hours: int = 3) -> list[dict[str, t.Any]]:
 
     return alerts
 
+def _is_cycle_done_log(raw_line: str | None) -> bool:
+    """Проверяет, что строка лога фиксирует завершение обхода аккаунта."""
+    text = (raw_line or "").lower()
+    compact = re.sub(r"[^a-zа-я0-9]+", "", text)
+    return (
+        "accountdone" in compact
+        or "accountfinished" in compact
+        or "аккаунтзаверш" in compact
+    )
+
 def _compute_cycle_stats(window_hours: int = 24,
                          min_gap_minutes: int = 5,
                          max_gap_hours: int = 3) -> dict:
@@ -3879,14 +3889,14 @@ def _compute_cycle_stats(window_hours: int = 24,
         rows = c.execute("""
           SELECT dt, raw_line
           FROM cached_logs
-          WHERE acc_id=? AND dt >= ? AND raw_line LIKE '%Account Done%'
+          WHERE acc_id=? AND dt >= ?
           ORDER BY id ASC
         """, (acc_id, window_str)).fetchall()
 
         times = []
         for dt_text, raw in rows:
-            # подстрахуемся: проверим префикс даты точно в raw_line
-            # но лучше парсить dt из столбца dt (он уже с таймзоной)
+            if not _is_cycle_done_log(raw):
+                continue
             d = _parse_dt_iso_with_tz(dt_text)
             if d is not None:
                 times.append(d)
@@ -4003,15 +4013,17 @@ def _estimate_account_cycle(acc_id: str,
     c = conn.cursor()
     window_start = (_utcnow_local() - timedelta(hours=window_hours)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + _utcnow_local().strftime(" %z")
     rows = c.execute("""
-      SELECT dt
+      SELECT dt, raw_line
       FROM cached_logs
-      WHERE acc_id = ? AND dt >= ? AND raw_line LIKE '%Account Done%'
+      WHERE acc_id = ? AND dt >= ?
       ORDER BY id ASC
     """, (acc_id, window_start)).fetchall()
 
     times = []
     last_done = None
-    for (dt_text,) in rows:
+    for dt_text, raw in rows:
+        if not _is_cycle_done_log(raw):
+            continue
         d = _parse_dt_iso_with_tz(dt_text)
         if d:
             times.append(d)

@@ -747,7 +747,7 @@ def _collect_watch_cards(servers: list[Server]) -> list[dict[str, Any]]:
         raw_updated = summary.get("generated_at") if summary else None
 
         return {
-            "server": summary.get("server") if summary else srv.name,
+            "server": srv.name,
             "updated": _format_checked_at(raw_updated) if raw_updated else None,
             "updated_raw": raw_updated,
             "accounts": summary.get("accounts") if summary else [],
