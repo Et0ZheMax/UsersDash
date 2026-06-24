@@ -1395,8 +1395,12 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
             }
         )
 
+    remote_server_name = data.get("server")
     payload = {
-        "server": data.get("server") or getattr(server, "name", ""),
+        # В интерфейсе наблюдения показываем имя из UsersDash, а не имя ПК/сборки,
+        # которое может прийти от удалённого RSS-сервера.
+        "server": getattr(server, "name", "") or remote_server_name,
+        "remote_server": remote_server_name,
         "generated_at": data.get("generated_at"),
         "generated_at_fmt": _fmt_generated_at(data.get("generated_at")),
         "accounts": accounts,
@@ -1484,9 +1488,9 @@ def fetch_server_self_status(server) -> Tuple[Optional[Dict[str, Any]], str]:
 def fetch_server_cycle_time(
     server,
     *,
-    window_hours: int = 24,
+    window_hours: int = 72,
     min_gap_minutes: int = 5,
-    max_gap_hours: int = 6,
+    max_gap_hours: int = 24,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
     """
     Получает статистику «времени круга» с /api/cycle_time.

@@ -1218,6 +1218,16 @@ def _collect_problem_summary(window_hours: int = 24) -> dict:
     return stats
 
 
+def _is_cycle_done_log(raw_line: str | None) -> bool:
+    """Проверяет, что строка лога фиксирует завершение обхода аккаунта."""
+    text = (raw_line or "").lower()
+    compact = re.sub(r"[^a-zа-я0-9]+", "", text)
+    return (
+        "accountdone" in compact
+        or "accountfinished" in compact
+        or "аккаунтзаверш" in compact
+    )
+
 def _calculate_cycle_times(
     *, window_hours: int, min_gap_minutes: int, max_gap_hours: int
 ) -> list[dict]:
@@ -1230,7 +1240,7 @@ def _calculate_cycle_times(
         conn = sqlite3.connect(LOGS_DB)
         c = conn.cursor()
         rows = c.execute(
-            "SELECT acc_id, dt FROM cached_logs ORDER BY id DESC LIMIT 5000"
+            "SELECT acc_id, dt, raw_line FROM cached_logs ORDER BY id DESC LIMIT 10000"
         ).fetchall()
         conn.close()
     except Exception:
@@ -1238,7 +1248,9 @@ def _calculate_cycle_times(
         return []
 
     per_acc: dict[str, list[datetime]] = {}
-    for acc_id, dt_str in rows:
+    for acc_id, dt_str, raw_line in rows:
+        if not _is_cycle_done_log(raw_line):
+            continue
         dt_val = _safe_parse_dt(dt_str)
         if not dt_val or dt_val < cutoff:
             continue
@@ -1544,9 +1556,9 @@ def api_problems_summary():
 
 @app.route("/api/cycle_time")
 def api_cycle_time():
-    window_hours = _int_arg("window_hours", 24)
-    min_gap_minutes = _int_arg("min_gap_minutes", 30)
-    max_gap_hours = _int_arg("max_gap_hours", 12)
+    window_hours = _int_arg("window_hours", 72)
+    min_gap_minutes = _int_arg("min_gap_minutes", 5)
+    max_gap_hours = _int_arg("max_gap_hours", 24)
 
     try:
         cycles = _calculate_cycle_times(

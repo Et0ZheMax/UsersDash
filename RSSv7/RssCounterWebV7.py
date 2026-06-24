@@ -3828,9 +3828,19 @@ def _load_inactive_watch(max_age_hours: int = 3) -> list[dict[str, t.Any]]:
 
     return alerts
 
-def _compute_cycle_stats(window_hours: int = 24,
+def _is_cycle_done_log(raw_line: str | None) -> bool:
+    """Проверяет, что строка лога фиксирует завершение обхода аккаунта."""
+    text = (raw_line or "").lower()
+    compact = re.sub(r"[^a-zа-я0-9]+", "", text)
+    return (
+        "accountdone" in compact
+        or "accountfinished" in compact
+        or "аккаунтзаверш" in compact
+    )
+
+def _compute_cycle_stats(window_hours: int = 72,
                          min_gap_minutes: int = 5,
-                         max_gap_hours: int = 3) -> dict:
+                         max_gap_hours: int = 24) -> dict:
     """
     Считает среднее время круга:
       • берём по каждому активному аккаунту точки 'Account Done'
@@ -3879,14 +3889,14 @@ def _compute_cycle_stats(window_hours: int = 24,
         rows = c.execute("""
           SELECT dt, raw_line
           FROM cached_logs
-          WHERE acc_id=? AND dt >= ? AND raw_line LIKE '%Account Done%'
+          WHERE acc_id=? AND dt >= ?
           ORDER BY id ASC
         """, (acc_id, window_str)).fetchall()
 
         times = []
         for dt_text, raw in rows:
-            # подстрахуемся: проверим префикс даты точно в raw_line
-            # но лучше парсить dt из столбца dt (он уже с таймзоной)
+            if not _is_cycle_done_log(raw):
+                continue
             d = _parse_dt_iso_with_tz(dt_text)
             if d is not None:
                 times.append(d)
@@ -3949,22 +3959,22 @@ def api_cycle_time():
     Возвращает оценку "времени круга" по cached_logs:
       { avg_cycle_seconds, avg_cycle_hms, accounts_used, intervals_used, window_hours, ... }
     Параметры (query):
-      window_hours=24  — окно анализа
+      window_hours=72  — окно анализа
       min_gap_minutes=5 — игнорировать интервалы меньше (защита от глюков)
-      max_gap_hours=6   — отсекать слишком длинные простои
+      max_gap_hours=24  — отсекать слишком длинные простои
     """
     try:
-        wh = int(request.args.get("window_hours", 24))
+        wh = int(request.args.get("window_hours", 72))
     except:
-        wh = 24
+        wh = 72
     try:
         mg = int(request.args.get("min_gap_minutes", 5))
     except:
         mg = 5
     try:
-        mx = int(request.args.get("max_gap_hours", 6))
+        mx = int(request.args.get("max_gap_hours", 24))
     except:
-        mx = 6
+        mx = 24
 
     stats = _compute_cycle_stats(window_hours=wh, min_gap_minutes=mg, max_gap_hours=mx)
     return jsonify(stats)
@@ -3994,8 +4004,8 @@ def _range_start_end(range_key: str) -> tuple[str, str]:
 
 def _estimate_account_cycle(acc_id: str,
                             min_gap_minutes: int = 5,
-                            max_gap_hours: int = 6,
-                            window_hours: int = 48) -> tuple[int|None, datetime|None]:
+                            max_gap_hours: int = 24,
+                            window_hours: int = 72) -> tuple[int|None, datetime|None]:
     """
     Оцениваем средний цикл аккаунта (сек) и ищем последний Account Done.
     """
@@ -4003,15 +4013,17 @@ def _estimate_account_cycle(acc_id: str,
     c = conn.cursor()
     window_start = (_utcnow_local() - timedelta(hours=window_hours)).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + _utcnow_local().strftime(" %z")
     rows = c.execute("""
-      SELECT dt
+      SELECT dt, raw_line
       FROM cached_logs
-      WHERE acc_id = ? AND dt >= ? AND raw_line LIKE '%Account Done%'
+      WHERE acc_id = ? AND dt >= ?
       ORDER BY id ASC
     """, (acc_id, window_start)).fetchall()
 
     times = []
     last_done = None
-    for (dt_text,) in rows:
+    for dt_text, raw in rows:
+        if not _is_cycle_done_log(raw):
+            continue
         d = _parse_dt_iso_with_tz(dt_text)
         if d:
             times.append(d)
