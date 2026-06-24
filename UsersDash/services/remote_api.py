@@ -1395,8 +1395,12 @@ def fetch_watch_summary(server) -> Tuple[Optional[Dict[str, Any]], str]:
             }
         )
 
+    remote_server_name = data.get("server")
     payload = {
-        "server": data.get("server") or getattr(server, "name", ""),
+        # В интерфейсе наблюдения показываем имя из UsersDash, а не имя ПК/сборки,
+        # которое может прийти от удалённого RSS-сервера.
+        "server": getattr(server, "name", "") or remote_server_name,
+        "remote_server": remote_server_name,
         "generated_at": data.get("generated_at"),
         "generated_at_fmt": _fmt_generated_at(data.get("generated_at")),
         "accounts": accounts,
