@@ -4809,6 +4809,15 @@ def _run_ld_check():
         env["LDCHECK_PROFILE_FILE"] = PROFILE_PATH
     if SERVER_NAME:
         env["SERVER_NAME"] = SERVER_NAME
+
+    # LD_check.py запускается из веб-приложения отдельным процессом и для автофикса
+    # вызывает тот же API, что и кнопка «Починить всё» на странице /fix. Раньше
+    # скрипт полагался на дефолтный http://127.0.0.1:5001, из-за чего при запуске
+    # RSSv7 на другом порту автофикс уходил не в тот backend или не доходил вовсе.
+    # Если DASH_API уже задан системно — не перетираем, иначе берём текущий host.
+    if not env.get("DASH_API"):
+        env["DASH_API"] = request.host_url.rstrip("/")
+
     env.setdefault("PYTHONIOENCODING", "utf-8")
 
     try:
