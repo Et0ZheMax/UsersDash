@@ -4797,6 +4797,14 @@ def api_replace_configs():
     return jsonify({"logs": logs})
 
 
+
+def _local_request_base_url() -> str:
+    """Возвращает локальный корень текущего Flask-приложения для внутренних subprocess-вызовов."""
+    port = str(request.environ.get("SERVER_PORT") or "").strip()
+    if port and port not in ("80", "443"):
+        return f"http://127.0.0.1:{port}"
+    return "http://127.0.0.1"
+
 def _run_ld_check():
     """Запускает LD_check.py, подставляя пути и имя сервера из config.json."""
     script_path = os.path.join(BASE_DIR, "LD_check.py")
@@ -4809,6 +4817,13 @@ def _run_ld_check():
         env["LDCHECK_PROFILE_FILE"] = PROFILE_PATH
     if SERVER_NAME:
         env["SERVER_NAME"] = SERVER_NAME
+
+    # LD_check.py запускается из веб-приложения отдельным процессом и для автофикса
+    # вызывает тот же API, что и кнопка «Починить всё» на странице /fix. Host header
+    # может быть публичным cloudpub-доменом, где POST на Flask API возвращает 405,
+    # поэтому для внутреннего автофикса берём локальный порт текущего RSSv7.
+    env["DASH_API"] = _local_request_base_url()
+
     env.setdefault("PYTHONIOENCODING", "utf-8")
 
     try:
