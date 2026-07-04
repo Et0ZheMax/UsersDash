@@ -4809,6 +4809,13 @@ def _run_ld_check():
         env["LDCHECK_PROFILE_FILE"] = PROFILE_PATH
     if SERVER_NAME:
         env["SERVER_NAME"] = SERVER_NAME
+
+    # LD_check.py запускается из веб-приложения отдельным процессом и для автофикса
+    # вызывает тот же API, что и кнопка «Починить всё» на странице /fix. Поэтому при
+    # ручном запуске /ldcheck всегда передаём текущий корень RSSv7: системный DASH_API
+    # может указывать на публичную страницу /fix или другой порт и приводить к HTTP 405.
+    env["DASH_API"] = request.host_url.rstrip("/")
+
     env.setdefault("PYTHONIOENCODING", "utf-8")
 
     try:
