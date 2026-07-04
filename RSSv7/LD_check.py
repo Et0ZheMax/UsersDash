@@ -10,6 +10,7 @@ import ctypes
 import asyncio
 import platform
 import requests                     # ← для вызова /api/fix/config_batch
+from urllib.parse import urlparse, urlunparse
 from typing import Dict, Tuple, Optional, List
 
 # Telegram (asynchronous API)
@@ -129,8 +130,25 @@ def get_telegram_config() -> tuple[str, str]:
     """[SECURITY] Ленивая загрузка Telegram-конфига без падения при импорте модуля."""
     return require_env(TELEGRAM_TOKEN_ENV), require_env(TELEGRAM_CHAT_ID_ENV)
 
+def normalize_api_base(raw_url: str) -> str:
+    """Возвращает корневой URL RSSv7 для вызовов API автофикса."""
+    value = (raw_url or "http://127.0.0.1:5001").strip().rstrip("/")
+    parsed = urlparse(value)
+    if not parsed.scheme or not parsed.netloc:
+        return value
+
+    # В DASH_API иногда ошибочно кладут ссылку на страницу /fix или конкретный API-route.
+    # Для автофикса нужен именно корень backend, иначе POST может уйти в HTML-страницу и дать 405.
+    path = parsed.path.rstrip("/")
+    if path in ("/fix", "/api/fix/config_batch") or path.startswith("/api/fix/"):
+        cleaned = parsed._replace(path="", params="", query="", fragment="")
+        return urlunparse(cleaned).rstrip("/")
+
+    return value
+
+
 # Бэкенд Dashboard (куда «эмулируем клик»)
-API_BASE = os.getenv("DASH_API", "http://127.0.0.1:5001").rstrip("/")
+API_BASE = normalize_api_base(os.getenv("DASH_API", "http://127.0.0.1:5001"))
 
 # URL-ы серверов (для кликабельной ссылки в Telegram)
 SERVERS: Dict[str, str] = {
@@ -378,6 +396,7 @@ async def check_all_configs_and_notify():
                 # ЭТО и есть «нажатие кнопки Починить всё» (фронт бьёт в тот же роут)
                 # /api/fix/config_batch → копирует ТОЛЬКО .config’и (без полного переноса ВМ)
                 url = f"{API_BASE}/api/fix/config_batch"
+                print(f"[AUTO-FIX] POST {url}")
                 resp = requests.post(url, json={"acc_ids": acc_ids}, timeout=600)
                 if resp.ok:
                     print(f"[AUTO-FIX] OK: fixed {len(acc_ids)} accounts")
