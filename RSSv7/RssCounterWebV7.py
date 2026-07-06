@@ -151,6 +151,41 @@ SRC_VMS         = CONFIG.get("SRC_VMS", "")
 DST_VMS         = CONFIG.get("DST_VMS", "")
 GNBOTS_SHORTCUT = CONFIG.get("GNBOTS_SHORTCUT", "")
 GNBOTS_PROFILES_PATH = PROFILE_PATH
+
+PROFILE_FILE_LOCK = threading.RLock()
+
+
+def _read_profiles_locked() -> list:
+    """Читает profiles.json; вызывать только внутри PROFILE_FILE_LOCK."""
+
+    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write_profiles_locked(profiles: list, *, indent: int = 2) -> None:
+    """Атомарно записывает profiles.json; вызывать только внутри PROFILE_FILE_LOCK."""
+
+    profile_path = Path(PROFILE_PATH)
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{profile_path.name}.",
+        suffix=".tmp",
+        dir=str(profile_path.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(profiles, f, ensure_ascii=False, indent=indent)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, PROFILE_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 SCHEMA_TTL_SECONDS   = 600  # 10 минут
 SERVER_NAME     = os.getenv("SERVER_NAME", CONFIG.get("SERVER_NAME", socket.gethostname()))
 USERSDASH_API_URL = (os.getenv("USERSDASH_API_URL") or CONFIG.get("USERSDASH_API_URL", "")).strip()
@@ -2838,28 +2873,27 @@ def apply_profile_updates(payload: list[dict]):
     if not os.path.exists(PROFILE_PATH):
         raise FileNotFoundError(PROFILE_PATH)
 
-    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
-        prof = json.load(f)
+    with PROFILE_FILE_LOCK:
+        prof = _read_profiles_locked()
 
-    for acc in prof:
-        rid = str(acc.get("Id")) if acc.get("Id") is not None else None
-        if rid not in rec_map:      # не меняем
-            continue
-        upd = rec_map[rid]
+        for acc in prof:
+            rid = str(acc.get("Id")) if acc.get("Id") is not None else None
+            if rid not in rec_map:      # не меняем
+                continue
+            upd = rec_map[rid]
 
-        # --- правим MenuData.Config ---
-        try:
-            md = json.loads(acc.get("MenuData","{}"))
-        except Exception:
-            md = {}
-        cfg = md.setdefault("Config", {})
-        cfg["Email"]    = upd.get("email","")
-        cfg["Password"] = upd.get("passwd","")
-        cfg["Custom"]   = upd.get("igg","")          # IGG
-        acc["MenuData"] = json.dumps(md, ensure_ascii=False)
+            # --- правим MenuData.Config ---
+            try:
+                md = json.loads(acc.get("MenuData", "{}"))
+            except Exception:
+                md = {}
+            cfg = md.setdefault("Config", {})
+            cfg["Email"]    = upd.get("email", "")
+            cfg["Password"] = upd.get("passwd", "")
+            cfg["Custom"]   = upd.get("igg", "")          # IGG
+            acc["MenuData"] = json.dumps(md, ensure_ascii=False, separators=(",", ":"))
 
-    with open(PROFILE_PATH, "w", encoding="utf-8") as f:
-        json.dump(prof, f, ensure_ascii=False, indent=2)
+        _write_profiles_locked(prof, indent=2)
 
     sync_account_meta()      # ← NEW
 
@@ -4661,28 +4695,27 @@ def api_manage_account_settings_update(acc_id):
     if menu_data is not None and not isinstance(menu_data, dict):
         return jsonify({"error": "invalid MenuData format"}), 400
 
-    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
-        all_accs = json.load(f)
+    with PROFILE_FILE_LOCK:
+        all_accs = _read_profiles_locked()
 
-    for acc in all_accs:
-        if acc.get("Id") == acc_id:
-            acc["Data"] = json.dumps(
-                data_list,
-                ensure_ascii=False,
-                separators=(',', ':'),
-            )
-            if menu_data is not None:
-                acc["MenuData"] = json.dumps(
-                    menu_data,
+        for acc in all_accs:
+            if acc.get("Id") == acc_id:
+                acc["Data"] = json.dumps(
+                    data_list,
                     ensure_ascii=False,
                     separators=(',', ':'),
                 )
-            break
-    else:
-        return jsonify({"error": "acc not found"}), 404
+                if menu_data is not None:
+                    acc["MenuData"] = json.dumps(
+                        menu_data,
+                        ensure_ascii=False,
+                        separators=(',', ':'),
+                    )
+                break
+        else:
+            return jsonify({"error": "acc not found"}), 404
 
-    with open(PROFILE_PATH, "w", encoding="utf-8") as f:
-        json.dump(all_accs, f, indent=2, ensure_ascii=False)
+        _write_profiles_locked(all_accs, indent=2)
 
     return jsonify({"status": "ok"})
 
@@ -4700,52 +4733,51 @@ def api_manage_account_setting_step(acc_id, step_idx):
     new_active  = payload.get("IsActive", None)
     new_rules   = payload.get("ScheduleRules", None)
 
-    # 1) читаем текущий профиль
-    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
-        all_accs = json.load(f)
+    with PROFILE_FILE_LOCK:
+        # 1) читаем текущий профиль
+        all_accs = _read_profiles_locked()
 
-    # 2) ищем нужный аккаунт
-    for acc in all_accs:
-        if acc.get("Id") == acc_id:
-            data_list = _parse_json_field(acc.get("Data", "[]"), [])
-            if not isinstance(data_list, list):
-                return jsonify({"error": "invalid data format"}), 400
+        # 2) ищем нужный аккаунт
+        for acc in all_accs:
+            if acc.get("Id") == acc_id:
+                data_list = _parse_json_field(acc.get("Data", "[]"), [])
+                if not isinstance(data_list, list):
+                    return jsonify({"error": "invalid data format"}), 400
 
-            # проверяем step_idx
-            if step_idx < 0 or step_idx >= len(data_list):
-                return jsonify({"error": "step_idx out of range"}), 400
+                # проверяем step_idx
+                if step_idx < 0 or step_idx >= len(data_list):
+                    return jsonify({"error": "step_idx out of range"}), 400
 
-            step = data_list[step_idx]
+                step = data_list[step_idx]
 
-            # 3a) обновляем активность
-            if new_active is not None:
-                step["IsActive"] = bool(new_active)
+                # 3a) обновляем активность
+                if new_active is not None:
+                    step["IsActive"] = bool(new_active)
 
-            # 3b) обновляем конфиг
-            conf = step.get("Config", {})
-            for key, val in cfg_updates.items():
-                if isinstance(conf.get(key), dict) and "value" in conf[key]:
-                    conf[key]["value"] = val
-                else:
-                    conf[key] = val
+                # 3b) обновляем конфиг
+                conf = step.get("Config", {})
+                for key, val in cfg_updates.items():
+                    if isinstance(conf.get(key), dict) and "value" in conf[key]:
+                        conf[key]["value"] = val
+                    else:
+                        conf[key] = val
 
-            # 3c) обновляем расписание, если передали
-            if new_rules is not None:
-                step["ScheduleRules"] = new_rules
+                # 3c) обновляем расписание, если передали
+                if new_rules is not None:
+                    step["ScheduleRules"] = new_rules
 
-            # 4) сохраняем обратно в JSON-профиль (компактно, без пробелов)
-            acc["Data"] = json.dumps(
-                data_list,
-                ensure_ascii=False,
-                separators=(',', ':')   # ← убираем лишние пробелы
-            )
-            break
-    else:
-        return jsonify({"error": "acc not found"}), 404
+                # 4) сохраняем обратно в JSON-профиль (компактно, без пробелов)
+                acc["Data"] = json.dumps(
+                    data_list,
+                    ensure_ascii=False,
+                    separators=(',', ':')   # ← убираем лишние пробелы
+                )
+                break
+        else:
+            return jsonify({"error": "acc not found"}), 404
 
-    # 5) перезаписываем файл
-    with open(PROFILE_PATH, "w", encoding="utf-8") as f:
-        json.dump(all_accs, f, indent=2, ensure_ascii=False)
+        # 5) перезаписываем файл
+        _write_profiles_locked(all_accs, indent=2)
 
     return jsonify({"status": "ok"})
 
@@ -5002,24 +5034,23 @@ def api_manage_account_update(acc_id):
     # Читаем JSON
     if not os.path.exists(PROFILE_PATH):
         return jsonify({"error":"profile not found"}),404
-    with open(PROFILE_PATH,"r",encoding="utf-8") as f:
-        data = json.load(f)  # массив
+    with PROFILE_FILE_LOCK:
+        data = _read_profiles_locked()  # массив
 
-    # Ищем нужный аккаунт
-    found = None
-    for acc in data:
-        if acc.get("Id")==acc_id:
-            found=acc
-            break
-    if not found:
-        return jsonify({"error":"acc not found"}),404
+        # Ищем нужный аккаунт
+        found = None
+        for acc in data:
+            if acc.get("Id") == acc_id:
+                found = acc
+                break
+        if not found:
+            return jsonify({"error": "acc not found"}), 404
 
-    # меняем
-    found["Active"] = new_active
+        # меняем
+        found["Active"] = new_active
 
-    # сохраняем
-    with open(PROFILE_PATH,"w",encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+        # сохраняем
+        _write_profiles_locked(data, indent=4)
 
     return jsonify({"status":"ok","acc_id":acc_id,"Active":new_active})
 
@@ -5177,33 +5208,32 @@ def api_copy_settings():
     if not src_id or not dest_ids:
         return jsonify({"err":"bad"}),400
 
-    with open(PROFILE_PATH, "r", encoding="utf-8") as f:
-        prof = json.load(f)
+    with PROFILE_FILE_LOCK:
+        prof = _read_profiles_locked()
 
-    # находим источник
-    src = next((a for a in prof if a.get("Id")==src_id), None)
-    if not src:
-        return jsonify({"err":"src not found"}),404
+        # находим источник
+        src = next((a for a in prof if a.get("Id") == src_id), None)
+        if not src:
+            return jsonify({"err": "src not found"}), 404
 
-    # Нормализуем JSON-текст Data источника (убираем лишние пробелы).
-    src_data_raw = src.get("Data", "[]")
-    try:
-        src_data_norm = json.dumps(
-            json.loads(src_data_raw),
-            ensure_ascii=False,
-            separators=(',', ':')  # ← компактный вид: без пробелов
-        )
-    except Exception:
-        # Если вдруг не распарсилось — переносим как есть.
-        src_data_norm = src_data_raw
+        # Нормализуем JSON-текст Data источника (убираем лишние пробелы).
+        src_data_raw = src.get("Data", "[]")
+        try:
+            src_data_norm = json.dumps(
+                json.loads(src_data_raw),
+                ensure_ascii=False,
+                separators=(',', ':')  # ← компактный вид: без пробелов
+            )
+        except Exception:
+            # Если вдруг не распарсилось — переносим как есть.
+            src_data_norm = src_data_raw
 
-    for acc in prof:
-        if acc.get("Id") in dest_ids:
-            # копируем ТОЛЬКО Data (шаги), MenuData не трогаем
-            acc["Data"] = src_data_norm
+        for acc in prof:
+            if acc.get("Id") in dest_ids:
+                # копируем ТОЛЬКО Data (шаги), MenuData не трогаем
+                acc["Data"] = src_data_norm
 
-    with open(PROFILE_PATH, "w", encoding="utf-8") as f:
-        json.dump(prof, f, ensure_ascii=False, indent=2)
+        _write_profiles_locked(prof, indent=2)
 
     return jsonify({"status":"ok"})
 

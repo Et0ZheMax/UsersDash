@@ -843,6 +843,56 @@ def update_account_settings_full(
     return False, _format_http_error(resp)
 
 
+
+def update_account_profile_menu_data(
+    account,
+    *,
+    email: str | None,
+    password: str | None,
+    igg_id: str | None,
+) -> Tuple[bool, str]:
+    """Обновляет только MenuData через профильный PATCH без перезаписи Data."""
+
+    server = getattr(account, "server", None)
+    if not server:
+        return False, "server is not set for account"
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return False, "api_base_url is empty"
+
+    server_resources = fetch_resources_for_server(server)
+    remote_id, _ = _resolve_remote_account(account, server_resources)
+    if not remote_id:
+        fallback_remote = getattr(account, "internal_id", None) or getattr(account, "name", None)
+        if fallback_remote:
+            remote_id = str(fallback_remote)
+
+    if not remote_id:
+        return False, "unable to resolve remote_id for account"
+
+    root_base = base[:-4] if base.endswith("/api") else base
+    url = f"{root_base}/api/accounts_profile"
+    payload = [
+        {
+            "id": str(remote_id),
+            "email": email or "",
+            "passwd": password or "",
+            "igg": igg_id or "",
+        }
+    ]
+
+    try:
+        resp = requests.patch(url, json=payload, timeout=DEFAULT_TIMEOUT)
+    except Exception as exc:
+        print(f"[remote_api] ERROR: PATCH {url} failed: {exc}")
+        return False, str(exc)
+
+    if 200 <= resp.status_code < 300:
+        return True, "OK"
+
+    return False, _format_http_error(resp)
+
 def update_account_menu_data(
     account,
     *,
@@ -885,13 +935,6 @@ def update_account_menu_data(
 
     menu_data["Config"] = menu_config
 
-    data_section = settings.get("Data") or settings.get("data")
-    if not isinstance(data_section, list):
-        msg = "в настройках аккаунта отсутствует список шагов Data"
-        log.warning("[farm-data menu sync] %s", msg)
-        return False, msg
-
-    payload = {"Data": data_section, "MenuData": menu_data}
     acc_id = getattr(account, "id", None)
     acc_name = getattr(account, "name", None)
     server_name = getattr(getattr(account, "server", None), "name", None)
@@ -902,7 +945,28 @@ def update_account_menu_data(
         acc_name,
         server_name,
     )
-    ok, msg = update_account_settings_full(account, payload)
+    ok, msg = update_account_profile_menu_data(
+        account,
+        email=email,
+        password=password,
+        igg_id=igg_id,
+    )
+    if not ok:
+        log.warning(
+            "[farm-data menu sync] точечное обновление MenuData не удалось для аккаунта "
+            "id=%s name=%s server=%s: %s; пробуем полный endpoint",
+            acc_id,
+            acc_name,
+            server_name,
+            msg,
+        )
+        data_section = settings.get("Data") or settings.get("data")
+        if not isinstance(data_section, list):
+            msg = "в настройках аккаунта отсутствует список шагов Data"
+            log.warning("[farm-data menu sync] %s", msg)
+            return False, msg
+        payload = {"Data": data_section, "MenuData": menu_data}
+        ok, msg = update_account_settings_full(account, payload)
     if ok:
         log.info(
             "[farm-data menu sync] MenuData обновлена для аккаунта id=%s name=%s server=%s",
