@@ -780,6 +780,10 @@
 
 <p>Используйте верхнее меню для управления пользователями, серверами и фермами.</p>
 
+<div class="admin-actions-row">
+    <a href="{{ url_for('admin.farm_logs_page') }}" class="btn btn-primary">Открыть базу логов ферм</a>
+</div>
+
 {% if payment_cards %}
     <div class="admin-payment-modal" data-role="payment-modal" hidden>
         <div class="admin-payment-modal__dialog">

@@ -39,6 +39,7 @@ from UsersDash.models import (
     Account,
     ClientConfigVisibility,
     FarmData,
+    FarmLogEntry,
     RentalNotificationLog,
     Server,
     SettingsAuditLog,
@@ -93,6 +94,7 @@ from UsersDash.services.info_message import (
     set_global_info_message_text,
 )
 from UsersDash.services.notifications import send_notification
+from UsersDash.services.farm_logs import query_logs, save_account_logs, sync_account_logs
 from UsersDash.services.rental_bot import (
     admin_dashboard_snapshot,
     generate_link_token,
@@ -1388,7 +1390,77 @@ def api_account_logs_view():
         status = 404 if _is_remote_account_missing(error) else 502
         return jsonify({"ok": False, "error": error}), status
 
+    if payload:
+        save_account_logs(account, payload)
+
     return jsonify(payload or {"ok": True, "items": [], "summary": {}})
+
+
+@admin_bp.route("/logs", methods=["GET", "POST"])
+@login_required
+def farm_logs_page():
+    """Показывает централизованную базу логов ферм с фильтрами и ручным сбором."""
+
+    admin_required()
+
+    selected_account_id = request.values.get("account_id", type=int)
+    selected_server_id = request.values.get("server_id", type=int)
+    date_raw = (request.values.get("date") or datetime.utcnow().date().isoformat()).strip()
+    selected_date = None
+    try:
+        selected_date = datetime.strptime(date_raw, "%Y-%m-%d").date()
+    except ValueError:
+        flash("Дата должна быть в формате ГГГГ-ММ-ДД.", "error")
+        date_raw = datetime.utcnow().date().isoformat()
+        selected_date = datetime.utcnow().date()
+
+    if request.method == "POST":
+        accounts_query = Account.query.options(joinedload(Account.server), joinedload(Account.owner))
+        if selected_account_id:
+            accounts_query = accounts_query.filter(Account.id == selected_account_id)
+        elif selected_server_id:
+            accounts_query = accounts_query.filter(Account.server_id == selected_server_id)
+        else:
+            accounts_query = accounts_query.join(Account.server).filter(Server.is_active.is_(True))
+
+        added_total = 0
+        errors: list[str] = []
+        for account in accounts_query.order_by(Account.name.asc()).all():
+            added, error = sync_account_logs(account, limit=300)
+            added_total += added
+            if error:
+                errors.append(f"{account.name}: {error}")
+
+        if errors:
+            flash(f"Сбор завершён с ошибками: {'; '.join(errors[:5])}", "warning")
+        flash(f"Добавлено новых строк логов: {added_total}.", "success")
+        return redirect(url_for(
+            "admin.farm_logs_page",
+            account_id=selected_account_id or "",
+            server_id=selected_server_id or "",
+            date=date_raw,
+        ))
+
+    accounts = Account.query.options(joinedload(Account.server)).order_by(Account.name.asc()).all()
+    servers = Server.query.order_by(Server.name.asc()).all()
+    logs = query_logs(
+        account_id=selected_account_id,
+        server_id=selected_server_id,
+        day=selected_date,
+        limit=800,
+    )
+    total_saved = FarmLogEntry.query.count()
+
+    return render_template(
+        "admin/farm_logs.html",
+        accounts=accounts,
+        servers=servers,
+        logs=logs,
+        selected_account_id=selected_account_id,
+        selected_server_id=selected_server_id,
+        selected_date=date_raw,
+        total_saved=total_saved,
+    )
 
 
 @admin_bp.route("/api/incomplete-farm-data", methods=["GET"])

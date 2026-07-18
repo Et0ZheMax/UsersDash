@@ -130,12 +130,46 @@ class Account(db.Model):
         cascade="all, delete-orphan",
     )
 
+    farm_log_entries = db.relationship(
+        "FarmLogEntry",
+        back_populates="account",
+        lazy="dynamic",
+        cascade="all, delete-orphan",
+    )
+
     __table_args__ = (
         db.UniqueConstraint("owner_id", "name", name="uq_accounts_owner_name"),
     )
 
     def __repr__(self) -> str:
         return f"<Account id={self.id} name={self.name}>"
+
+
+class FarmLogEntry(db.Model):
+    """Сохранённая строка логов фермы, полученная с удалённого RSS-сервера."""
+
+    __tablename__ = "farm_log_entries"
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(db.Integer, db.ForeignKey("accounts.id"), nullable=False, index=True)
+    server_id = db.Column(db.Integer, db.ForeignKey("servers.id"), nullable=True, index=True)
+    owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    remote_acc_id = db.Column(db.String(128), nullable=True, index=True)
+    event_time = db.Column(db.DateTime, nullable=True, index=True)
+    event_date = db.Column(db.Date, nullable=True, index=True)
+    group = db.Column(db.String(32), nullable=True, index=True)
+    group_label = db.Column(db.String(64), nullable=True)
+    event_text = db.Column(db.Text, nullable=False)
+    raw_text = db.Column(db.Text, nullable=True)
+    event_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    account = db.relationship("Account", back_populates="farm_log_entries")
+    server = db.relationship("Server")
+    owner = db.relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<FarmLogEntry account_id={self.account_id} event_time={self.event_time}>"
 
 
 class ClientConfigVisibility(db.Model):
