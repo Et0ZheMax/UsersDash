@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Логи ферм{% endblock %}
+
+{% block content %}
+<h1>Логи ферм</h1>
+
+<div class="admin-actions-row">
+    <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline">← На главную админку</a>
+</div>
+
+<form method="get" class="logs-filter-panel">
+    <div class="filter-block">
+        <label class="filter-label" for="logs-date">Дата</label>
+        <input id="logs-date" class="form-input" type="date" name="date" value="{{ selected_date }}">
+    </div>
+    <div class="filter-block">
+        <label class="filter-label" for="logs-server">Сервер</label>
+        <select id="logs-server" class="form-input" name="server_id">
+            <option value="">Все серверы</option>
+            {% for server in servers %}
+                <option value="{{ server.id }}" {% if selected_server_id == server.id %}selected{% endif %}>
+                    {{ server.name }}
+                </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-block">
+        <label class="filter-label" for="logs-account">Ферма</label>
+        <select id="logs-account" class="form-input" name="account_id">
+            <option value="">Все фермы</option>
+            {% for account in accounts %}
+                <option value="{{ account.id }}" {% if selected_account_id == account.id %}selected{% endif %}>
+                    {{ account.name }}{% if account.server %} · {{ account.server.name }}{% endif %}
+                </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-actions">
+        <button class="btn" type="submit">Показать</button>
+    </div>
+</form>
+
+<form method="post" class="logs-sync-panel">
+    <input type="hidden" name="date" value="{{ selected_date }}">
+    <input type="hidden" name="server_id" value="{{ selected_server_id or '' }}">
+    <input type="hidden" name="account_id" value="{{ selected_account_id or '' }}">
+    <button class="btn btn-primary" type="submit">Собрать свежие логи</button>
+    <span class="muted">Всего в базе: {{ total_saved }}. Без выбранной фермы сбор идёт по активным серверам.</span>
+</form>
+
+<div class="table-responsive">
+    <table class="table logs-table">
+        <thead>
+        <tr>
+            <th>Время</th>
+            <th>Ферма</th>
+            <th>Сервер</th>
+            <th>Владелец</th>
+            <th>Тип</th>
+            <th>Событие</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for log in logs %}
+            <tr>
+                <td>{{ log.event_time.strftime('%d.%m.%Y %H:%M:%S') if log.event_time else '—' }}</td>
+                <td>{{ log.account.name if log.account else '—' }}</td>
+                <td>{{ log.server.name if log.server else '—' }}</td>
+                <td>{{ log.owner.username if log.owner else '—' }}</td>
+                <td>
+                    <span class="farm-logs-group farm-logs-group--{{ log.group or 'system' }}">
+                        {{ log.group_label or log.group or 'Система' }}
+                    </span>
+                </td>
+                <td class="logs-table__event">{{ log.event_text }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="6" class="muted">На выбранную дату сохранённых логов пока нет.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
