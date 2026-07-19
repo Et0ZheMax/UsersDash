@@ -32,7 +32,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from werkzeug.security import generate_password_hash
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import joinedload
 
 from UsersDash.models import (
@@ -40,6 +40,8 @@ from UsersDash.models import (
     ClientConfigVisibility,
     FarmData,
     FarmLogEntry,
+    FarmLogPendingEvent,
+    FarmLogSyncState,
     RentalNotificationLog,
     Server,
     SettingsAuditLog,
@@ -72,7 +74,6 @@ from UsersDash.services.remote_api import (
     fetch_server_self_status,
     fetch_server_cycle_time,
     fetch_watch_summary,
-    fetch_account_logs_view,
     rename_template_payload,
     save_template_payload,
     update_account_active,
@@ -94,7 +95,8 @@ from UsersDash.services.info_message import (
     set_global_info_message_text,
 )
 from UsersDash.services.notifications import send_notification
-from UsersDash.services.farm_logs import query_logs, save_account_logs, sync_account_logs
+from UsersDash.services.farm_log_collector import queue_farm_log_sync
+from UsersDash.services.farm_logs import build_account_logs_payload, query_logs_page
 from UsersDash.services.rental_bot import (
     admin_dashboard_snapshot,
     generate_link_token,
@@ -196,6 +198,16 @@ def _to_moscow_time(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(MOSCOW_TZ)
+
+
+def _utc_isoformat(dt: datetime | None) -> str | None:
+    """Возвращает ISO timestamp с явным UTC, чтобы JS не трактовал naive-время как local."""
+
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _get_unassigned_user(return_created: bool = False):
@@ -1385,71 +1397,152 @@ def api_account_logs_view():
     if not account:
         return jsonify({"ok": False, "error": "account not found"}), 404
 
-    payload, error = fetch_account_logs_view(account, limit=limit, include_debug=include_debug)
-    if error:
-        status = 404 if _is_remote_account_missing(error) else 502
-        return jsonify({"ok": False, "error": error}), status
+    payload = build_account_logs_payload(
+        account,
+        limit=limit,
+        include_debug=include_debug,
+    )
+    sync_state = db.session.get(FarmLogSyncState, account.server_id)
+    payload["sync_state"] = {
+        "status": sync_state.status if sync_state else "idle",
+        "last_success_at": _utc_isoformat(sync_state.last_success_at if sync_state else None),
+        "last_error": sync_state.last_error if sync_state else None,
+    }
+    return jsonify(payload)
 
-    if payload:
-        save_account_logs(account, payload)
 
-    return jsonify(payload or {"ok": True, "items": [], "summary": {}})
+@admin_bp.route("/api/farm-log-sync-status", methods=["GET"])
+@login_required
+def api_farm_log_sync_status():
+    """Возвращает компактное состояние фонового сбора для polling страницы логов."""
+
+    admin_required()
+    pending_counts = dict(
+        db.session.query(FarmLogPendingEvent.server_id, func.count(FarmLogPendingEvent.id))
+        .group_by(FarmLogPendingEvent.server_id)
+        .all()
+    )
+    states = {state.server_id: state for state in FarmLogSyncState.query.all()}
+    servers = Server.query.order_by(Server.name.asc()).all()
+    return jsonify(
+        {
+            "ok": True,
+            "items": [
+                {
+                    "server_id": server.id,
+                    "server_name": server.name,
+                    "status": states[server.id].status if server.id in states else "idle",
+                    "last_success_at": _utc_isoformat(
+                        states[server.id].last_success_at if server.id in states else None
+                    ),
+                    "cursor": int(states[server.id].cursor or 0) if server.id in states else 0,
+                    "collected_total": (
+                        int(states[server.id].collected_total or 0) if server.id in states else 0
+                    ),
+                    "pending_count": int(pending_counts.get(server.id, 0)),
+                    "last_error": states[server.id].last_error if server.id in states else None,
+                }
+                for server in servers
+            ],
+        }
+    )
 
 
 @admin_bp.route("/logs", methods=["GET", "POST"])
 @login_required
 def farm_logs_page():
-    """Показывает централизованную базу логов ферм с фильтрами и ручным сбором."""
+    """Показывает cursor-страницу централизованных логов и ставит сбор в очередь."""
 
     admin_required()
 
     selected_account_id = request.values.get("account_id", type=int)
     selected_server_id = request.values.get("server_id", type=int)
-    date_raw = (request.values.get("date") or datetime.utcnow().date().isoformat()).strip()
+    selected_level = (request.values.get("level") or "").strip().lower()
+    selected_event_code = (request.values.get("event_code") or "").strip()
+    search_query = (request.values.get("q") or "").strip()
+    before_id = request.args.get("before_id", type=int)
+    current_log_date = datetime.now(MOSCOW_TZ).date()
+    date_raw = (request.values.get("date") or current_log_date.isoformat()).strip()
     selected_date = None
     try:
         selected_date = datetime.strptime(date_raw, "%Y-%m-%d").date()
     except ValueError:
         flash("Дата должна быть в формате ГГГГ-ММ-ДД.", "error")
-        date_raw = datetime.utcnow().date().isoformat()
-        selected_date = datetime.utcnow().date()
+        date_raw = current_log_date.isoformat()
+        selected_date = current_log_date
 
     if request.method == "POST":
-        accounts_query = Account.query.options(joinedload(Account.server), joinedload(Account.owner))
+        server_ids: list[int] = []
         if selected_account_id:
-            accounts_query = accounts_query.filter(Account.id == selected_account_id)
+            selected_account = db.session.get(Account, selected_account_id)
+            if not selected_account:
+                flash("Выбранная ферма не найдена.", "error")
+            elif selected_server_id and selected_account.server_id != selected_server_id:
+                flash("Выбранная ферма не относится к указанному серверу.", "error")
+            else:
+                server_ids = [selected_account.server_id]
         elif selected_server_id:
-            accounts_query = accounts_query.filter(Account.server_id == selected_server_id)
+            selected_server = db.session.get(Server, selected_server_id)
+            if not selected_server:
+                flash("Выбранный сервер не найден.", "error")
+            else:
+                server_ids = [selected_server.id]
         else:
-            accounts_query = accounts_query.join(Account.server).filter(Server.is_active.is_(True))
+            server_ids = [
+                server.id for server in Server.query.filter(Server.is_active.is_(True)).all()
+            ]
 
-        added_total = 0
-        errors: list[str] = []
-        for account in accounts_query.order_by(Account.name.asc()).all():
-            added, error = sync_account_logs(account, limit=300)
-            added_total += added
-            if error:
-                errors.append(f"{account.name}: {error}")
-
-        if errors:
-            flash(f"Сбор завершён с ошибками: {'; '.join(errors[:5])}", "warning")
-        flash(f"Добавлено новых строк логов: {added_total}.", "success")
+        queued_count = queue_farm_log_sync(current_app._get_current_object(), server_ids)
+        if queued_count:
+            flash(f"Сбор логов поставлен в очередь для серверов: {queued_count}.", "success")
+        else:
+            flash("Нет серверов для запуска сбора логов.", "warning")
         return redirect(url_for(
             "admin.farm_logs_page",
             account_id=selected_account_id or "",
             server_id=selected_server_id or "",
             date=date_raw,
+            level=selected_level,
+            event_code=selected_event_code,
+            q=search_query,
         ))
 
     accounts = Account.query.options(joinedload(Account.server)).order_by(Account.name.asc()).all()
     servers = Server.query.order_by(Server.name.asc()).all()
-    logs = query_logs(
+    page_size = max(20, min(int(current_app.config.get("FARM_LOG_PAGE_SIZE", 200)), 500))
+    logs, next_before_id = query_logs_page(
         account_id=selected_account_id,
         server_id=selected_server_id,
         day=selected_date,
-        limit=800,
+        level=selected_level or None,
+        event_code=selected_event_code or None,
+        search=search_query or None,
+        before_id=before_id,
+        limit=page_size,
     )
-    total_saved = FarmLogEntry.query.count()
+    event_codes = [
+        row[0]
+        for row in (
+            db.session.query(FarmLogEntry.event_code)
+            .filter(FarmLogEntry.event_code.isnot(None), FarmLogEntry.event_code != "")
+            .distinct()
+            .order_by(FarmLogEntry.event_code.asc())
+            .all()
+        )
+    ]
+    sync_states = {
+        state.server_id: state for state in FarmLogSyncState.query.order_by(FarmLogSyncState.server_id).all()
+    }
+    sync_success_labels = {
+        server_id: _to_moscow_time(state.last_success_at).strftime("%d.%m.%Y %H:%M:%S")
+        for server_id, state in sync_states.items()
+        if state.last_success_at
+    }
+    pending_counts = dict(
+        db.session.query(FarmLogPendingEvent.server_id, func.count(FarmLogPendingEvent.id))
+        .group_by(FarmLogPendingEvent.server_id)
+        .all()
+    )
 
     return render_template(
         "admin/farm_logs.html",
@@ -1459,7 +1552,14 @@ def farm_logs_page():
         selected_account_id=selected_account_id,
         selected_server_id=selected_server_id,
         selected_date=date_raw,
-        total_saved=total_saved,
+        selected_level=selected_level,
+        selected_event_code=selected_event_code,
+        search_query=search_query,
+        event_codes=event_codes,
+        next_before_id=next_before_id,
+        sync_states=sync_states,
+        sync_success_labels=sync_success_labels,
+        pending_counts=pending_counts,
     )
 
 

@@ -41,6 +41,8 @@ from UsersDash.services.db_backup import (
     sqlite_uri_to_path,
 )
 from UsersDash.services.farmdata_status import collect_farmdata_status
+from UsersDash.services.farm_log_collector import start_farm_log_collector
+from UsersDash.services.farm_logs_migration import ensure_farm_logs_schema
 from UsersDash.services.health_check import run_health_check
 
 
@@ -807,6 +809,7 @@ def create_app(enable_background_workers: bool = False) -> Flask:
     # Создаём таблицы, если их ещё нет
     with app.app_context():
         db.create_all()
+        ensure_farm_logs_schema()
         ensure_blocked_for_payment_column()
         ensure_farm_data_account_id_column()
         ensure_default_admin()
@@ -873,6 +876,8 @@ def create_app(enable_background_workers: bool = False) -> Flask:
         _run_midnight_backup(app)
         # Автозапуск Telegram-бота продления аренды вместе с приложением
         _run_rental_bot_worker()
+        # Инкрементальный cursor-сбор логов по одному запросу на RSS-сервер.
+        start_farm_log_collector(app)
 
     return app
 

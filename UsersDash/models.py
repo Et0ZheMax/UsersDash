@@ -155,12 +155,19 @@ class FarmLogEntry(db.Model):
     server_id = db.Column(db.Integer, db.ForeignKey("servers.id"), nullable=True, index=True)
     owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     remote_acc_id = db.Column(db.String(128), nullable=True, index=True)
+    source_id = db.Column(db.String(128), nullable=True)
+    source_cursor = db.Column(db.Integer, nullable=True)
     event_time = db.Column(db.DateTime, nullable=True, index=True)
     event_date = db.Column(db.Date, nullable=True, index=True)
+    event_at_source = db.Column(db.String(64), nullable=True)
+    source_timezone = db.Column(db.String(16), nullable=True)
+    level = db.Column(db.String(16), nullable=False, default="info", index=True)
     group = db.Column(db.String(32), nullable=True, index=True)
     group_label = db.Column(db.String(64), nullable=True)
+    event_code = db.Column(db.String(64), nullable=True, index=True)
     event_text = db.Column(db.Text, nullable=False)
     raw_text = db.Column(db.Text, nullable=True)
+    parser_version = db.Column(db.Integer, nullable=False, default=1)
     event_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
     collected_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
 
@@ -168,8 +175,91 @@ class FarmLogEntry(db.Model):
     server = db.relationship("Server")
     owner = db.relationship("User")
 
+    __table_args__ = (
+        db.Index("uq_farm_log_server_source", "server_id", "source_id", unique=True),
+        db.Index(
+            "idx_farm_logs_account_date_time_id",
+            "account_id",
+            "event_date",
+            "event_time",
+            "id",
+        ),
+        db.Index(
+            "idx_farm_logs_server_date_time_id",
+            "server_id",
+            "event_date",
+            "event_time",
+            "id",
+        ),
+        db.Index(
+            "idx_farm_logs_date_level_time_id",
+            "event_date",
+            "level",
+            "event_time",
+            "id",
+        ),
+    )
+
+    @property
+    def display_event_time(self) -> str:
+        """Возвращает локальное время источника, не смешивая его с UTC хранения."""
+
+        if self.event_at_source:
+            try:
+                parsed = datetime.fromisoformat(self.event_at_source.replace("Z", "+00:00"))
+                formatted = parsed.strftime("%d.%m.%Y %H:%M:%S")
+                return f"{formatted} {self.source_timezone}" if self.source_timezone else formatted
+            except ValueError:
+                pass
+        if self.event_time:
+            return self.event_time.strftime("%d.%m.%Y %H:%M:%S UTC")
+        return "—"
+
     def __repr__(self) -> str:
         return f"<FarmLogEntry account_id={self.account_id} event_time={self.event_time}>"
+
+
+class FarmLogSyncState(db.Model):
+    """Checkpoint и состояние фонового сбора логов одного RSS-сервера."""
+
+    __tablename__ = "farm_log_sync_states"
+
+    server_id = db.Column(db.Integer, db.ForeignKey("servers.id"), primary_key=True)
+    cursor = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(16), nullable=False, default="idle", index=True)
+    last_started_at = db.Column(db.DateTime, nullable=True)
+    last_success_at = db.Column(db.DateTime, nullable=True)
+    last_event_at = db.Column(db.DateTime, nullable=True)
+    last_error = db.Column(db.Text, nullable=True)
+    collected_total = db.Column(db.Integer, nullable=False, default=0)
+    skipped_total = db.Column(db.Integer, nullable=False, default=0)
+
+    server = db.relationship("Server")
+
+
+class FarmLogPendingEvent(db.Model):
+    """Событие RSS, для которого пока не найден локальный Account."""
+
+    __tablename__ = "farm_log_pending_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, db.ForeignKey("servers.id"), nullable=False, index=True)
+    source_id = db.Column(db.String(128), nullable=False)
+    source_cursor = db.Column(db.Integer, nullable=True, index=True)
+    remote_acc_id = db.Column(db.String(128), nullable=True, index=True)
+    account_name = db.Column(db.String(128), nullable=True)
+    payload_json = db.Column(db.Text, nullable=False)
+    first_seen_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = db.Column(
+        db.DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    __table_args__ = (
+        db.Index("uq_farm_log_pending_server_source", "server_id", "source_id", unique=True),
+    )
 
 
 class ClientConfigVisibility(db.Model):

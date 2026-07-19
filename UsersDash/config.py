@@ -85,6 +85,11 @@ class Config:
     TELEGRAM_REMINDER_DAYS = _get_int_env("TELEGRAM_REMINDER_DAYS", 3)
     TELEGRAM_REMINDER_HOUR = _get_int_env("TELEGRAM_REMINDER_HOUR", 10)
 
+    # Централизованные логи ферм
+    FARM_LOG_SYNC_INTERVAL_SECONDS = _get_int_env("FARM_LOG_SYNC_INTERVAL_SECONDS", 60)
+    FARM_LOG_RETENTION_DAYS = _get_int_env("FARM_LOG_RETENTION_DAYS", 90)
+    FARM_LOG_PAGE_SIZE = _get_int_env("FARM_LOG_PAGE_SIZE", 200)
+
 
     # Настройки Telegram-бота продления аренды
     RENTAL_REMINDER_DAYS = os.environ.get("RENTAL_REMINDER_DAYS", "3,1,0,-1")
