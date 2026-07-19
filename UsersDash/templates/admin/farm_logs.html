@@ -9,7 +9,7 @@
     <a href="{{ url_for('admin.admin_dashboard') }}" class="btn btn-outline">← На главную админку</a>
 </div>
 
-<form method="get" class="logs-filter-panel">
+<form method="get" class="logs-filter-panel" data-role="farm-log-filters">
     <div class="filter-block">
         <label class="filter-label" for="logs-date">Дата</label>
         <input id="logs-date" class="form-input" type="date" name="date" value="{{ selected_date }}">

@@ -96,7 +96,12 @@ from UsersDash.services.info_message import (
 )
 from UsersDash.services.notifications import send_notification
 from UsersDash.services.farm_log_collector import queue_farm_log_sync
-from UsersDash.services.farm_logs import build_account_logs_payload, query_logs_page
+from UsersDash.services.farm_logs import (
+    build_account_logs_payload,
+    query_farm_log_filter_accounts,
+    query_farm_log_filter_servers,
+    query_logs_page,
+)
 from UsersDash.services.rental_bot import (
     admin_dashboard_snapshot,
     generate_link_token,
@@ -1471,26 +1476,37 @@ def farm_logs_page():
         date_raw = current_log_date.isoformat()
         selected_date = current_log_date
 
+    servers = query_farm_log_filter_servers()
+    active_server_ids = {server.id for server in servers}
+
     if request.method == "POST":
         server_ids: list[int] = []
         if selected_account_id:
-            selected_account = db.session.get(Account, selected_account_id)
-            if not selected_account:
-                flash("Выбранная ферма не найдена.", "error")
+            selected_account = (
+                Account.query.options(joinedload(Account.server))
+                .filter(Account.id == selected_account_id)
+                .first()
+            )
+            if (
+                not selected_account
+                or not selected_account.is_active
+                or selected_account.blocked_for_payment
+                or not selected_account.server
+                or not selected_account.server.is_active
+            ):
+                flash("Выбранная ферма неактивна или заблокирована по оплате.", "error")
             elif selected_server_id and selected_account.server_id != selected_server_id:
                 flash("Выбранная ферма не относится к указанному серверу.", "error")
             else:
                 server_ids = [selected_account.server_id]
         elif selected_server_id:
             selected_server = db.session.get(Server, selected_server_id)
-            if not selected_server:
-                flash("Выбранный сервер не найден.", "error")
+            if not selected_server or not selected_server.is_active:
+                flash("Выбранный сервер неактивен или не найден.", "error")
             else:
                 server_ids = [selected_server.id]
         else:
-            server_ids = [
-                server.id for server in Server.query.filter(Server.is_active.is_(True)).all()
-            ]
+            server_ids = [server.id for server in servers]
 
         queued_count = queue_farm_log_sync(current_app._get_current_object(), server_ids)
         if queued_count:
@@ -1507,8 +1523,14 @@ def farm_logs_page():
             q=search_query,
         ))
 
-    accounts = Account.query.options(joinedload(Account.server)).order_by(Account.name.asc()).all()
-    servers = Server.query.order_by(Server.name.asc()).all()
+    if selected_server_id not in active_server_ids:
+        selected_server_id = None
+
+    accounts = query_farm_log_filter_accounts(selected_server_id)
+    available_account_ids = {account.id for account in accounts}
+    if selected_account_id not in available_account_ids:
+        selected_account_id = None
+
     page_size = max(20, min(int(current_app.config.get("FARM_LOG_PAGE_SIZE", 200)), 500))
     logs, next_before_id = query_logs_page(
         account_id=selected_account_id,
