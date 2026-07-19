@@ -26,6 +26,8 @@ from UsersDash.services.farm_logs import (
     _build_legacy_event_hash,
     _parse_event_timestamp,
     build_account_logs_payload,
+    query_farm_log_filter_accounts,
+    query_farm_log_filter_servers,
     query_logs_page,
     save_log_items,
 )
@@ -168,6 +170,56 @@ class FarmLogsTestCase(unittest.TestCase):
 
         self.assertIsNone(resolved)
         self.assertEqual(exact.id, self.account.id)
+
+    def test_log_filters_only_return_active_paid_farms_and_active_servers(self):
+        other_active_server = Server(name="RSS-other", host="127.0.0.2", is_active=True)
+        inactive_server = Server(name="RSS-inactive", host="127.0.0.3", is_active=False)
+        db.session.add_all([other_active_server, inactive_server])
+        db.session.flush()
+        db.session.add_all(
+            [
+                Account(
+                    name="Other active farm",
+                    owner_id=self.owner.id,
+                    server_id=other_active_server.id,
+                    is_active=True,
+                ),
+                Account(
+                    name="Inactive bot farm",
+                    owner_id=self.owner.id,
+                    server_id=self.server.id,
+                    is_active=False,
+                ),
+                Account(
+                    name="Payment blocked farm",
+                    owner_id=self.owner.id,
+                    server_id=self.server.id,
+                    is_active=True,
+                    blocked_for_payment=True,
+                ),
+                Account(
+                    name="Farm on inactive server",
+                    owner_id=self.owner.id,
+                    server_id=inactive_server.id,
+                    is_active=True,
+                ),
+            ]
+        )
+        db.session.commit()
+
+        servers = query_farm_log_filter_servers()
+        all_accounts = query_farm_log_filter_accounts()
+        selected_server_accounts = query_farm_log_filter_accounts(self.server.id)
+
+        self.assertEqual({server.id for server in servers}, {self.server.id, other_active_server.id})
+        self.assertEqual(
+            {account.name for account in all_accounts},
+            {self.account.name, "Other active farm"},
+        )
+        self.assertEqual(
+            [account.id for account in selected_server_accounts],
+            [self.account.id],
+        )
 
     def test_keyset_pagination_and_modal_contract(self):
         events = [

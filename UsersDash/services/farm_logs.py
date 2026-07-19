@@ -10,13 +10,36 @@ from sqlalchemy import and_, or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import joinedload
 
-from UsersDash.models import Account, FarmLogEntry, db
+from UsersDash.models import Account, FarmLogEntry, Server, db
 
 
 def _utcnow() -> datetime:
     """Возвращает UTC как naive datetime для совместимости с текущей SQLite-схемой."""
 
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def query_farm_log_filter_servers() -> list[Server]:
+    """Возвращает только активные серверы для фильтра логов."""
+
+    return Server.query.filter(Server.is_active.is_(True)).order_by(Server.name.asc()).all()
+
+
+def query_farm_log_filter_accounts(server_id: int | None = None) -> list[Account]:
+    """Возвращает оплаченные активные фермы, при необходимости — одного сервера."""
+
+    query = (
+        Account.query.options(joinedload(Account.server))
+        .join(Account.server)
+        .filter(
+            Account.is_active.is_(True),
+            Account.blocked_for_payment.is_(False),
+            Server.is_active.is_(True),
+        )
+    )
+    if server_id:
+        query = query.filter(Account.server_id == server_id)
+    return query.order_by(Account.name.asc()).all()
 
 
 def _format_timezone_offset(value: datetime) -> str | None:

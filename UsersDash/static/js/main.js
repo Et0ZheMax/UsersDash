@@ -977,6 +977,18 @@
         refreshStatus();
     }
 
+    function setupFarmLogFilters() {
+        const form = document.querySelector('[data-role="farm-log-filters"]');
+        const serverSelect = form ? form.querySelector('select[name="server_id"]') : null;
+        const accountSelect = form ? form.querySelector('select[name="account_id"]') : null;
+        if (!form || !serverSelect || !accountSelect) return;
+
+        serverSelect.addEventListener("change", function () {
+            accountSelect.value = "";
+            form.requestSubmit();
+        });
+    }
+
     function setFarmDataRowDirtyState(row, isDirty) {
         if (!row) return;
         row.dataset.dirty = isDirty ? "1" : "0";
@@ -1311,6 +1323,7 @@
         setupClientFarmdataTariffSort();
         loadAdminAccountResources();
         setupAccountLogsModal();
+        setupFarmLogFilters();
         setupFarmLogSyncStatus();
         setupServerStatesSection();
         setupWatchCardsSection();
