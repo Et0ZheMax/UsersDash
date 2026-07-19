@@ -1526,8 +1526,12 @@ def farm_logs_page():
     if selected_server_id not in active_server_ids:
         selected_server_id = None
 
-    accounts = query_farm_log_filter_accounts(selected_server_id)
-    available_account_ids = {account.id for account in accounts}
+    accounts = query_farm_log_filter_accounts()
+    available_account_ids = {
+        account.id
+        for account in accounts
+        if selected_server_id is None or account.server_id == selected_server_id
+    }
     if selected_account_id not in available_account_ids:
         selected_account_id = None
 

@@ -983,10 +983,28 @@
         const accountSelect = form ? form.querySelector('select[name="account_id"]') : null;
         if (!form || !serverSelect || !accountSelect) return;
 
-        serverSelect.addEventListener("change", function () {
-            accountSelect.value = "";
-            form.requestSubmit();
+        const accountOptions = Array.from(accountSelect.options).filter(function (option) {
+            return Boolean(option.value);
         });
+
+        function applyServerFilter() {
+            const serverId = String(serverSelect.value || "");
+
+            accountOptions.forEach(function (option) {
+                const isVisible = !serverId || option.dataset.serverId === serverId;
+                option.hidden = !isVisible;
+                option.disabled = !isVisible;
+                option.style.display = isVisible ? "" : "none";
+            });
+
+            const selectedOption = accountSelect.selectedOptions[0];
+            if (selectedOption && selectedOption.value && selectedOption.disabled) {
+                accountSelect.value = "";
+            }
+        }
+
+        serverSelect.addEventListener("change", applyServerFilter);
+        applyServerFilter();
     }
 
     function setFarmDataRowDirtyState(row, isDirty) {
