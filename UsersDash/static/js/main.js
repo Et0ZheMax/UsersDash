@@ -884,6 +884,15 @@
                 if (requestId !== currentRequestId) return;
 
                 renderSummary(data.summary || {});
+                if (summaryEl && data.sync_state) {
+                    const syncStatus = escapeHtml(data.sync_state.status || 'idle');
+                    const syncTime = escapeHtml(formatLogTime(data.sync_state.last_success_at));
+                    summaryEl.insertAdjacentHTML(
+                        'beforeend',
+                        `<span class="farm-logs-chip">Синхронизация: ${syncStatus}</span>` +
+                        `<span class="farm-logs-chip">Последний сбор: ${syncTime}</span>`,
+                    );
+                }
                 const items = Array.isArray(data.items) ? data.items : [];
                 if (!items.length) {
                     setState({ loading: false, error: false, empty: true });
@@ -929,6 +938,43 @@
             event.preventDefault();
             fetchLogs(btn);
         });
+    }
+
+    function setupFarmLogSyncStatus() {
+        const table = document.querySelector('[data-role="farm-log-sync-status"]');
+        const endpoint = table ? table.dataset.statusEndpoint : '';
+        if (!table || !endpoint) return;
+
+        const refreshStatus = async () => {
+            if (document.hidden) return;
+            try {
+                const response = await fetch(endpoint, { headers: { 'x-skip-loader': '1' } });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.ok || !Array.isArray(data.items)) return;
+
+                data.items.forEach((item) => {
+                    const row = table.querySelector(`tbody tr[data-server-id="${item.server_id}"]`);
+                    if (!row) return;
+                    const statusEl = row.querySelector('[data-role="sync-status"]');
+                    const successEl = row.querySelector('[data-role="sync-success-at"]');
+                    const cursorEl = row.querySelector('[data-role="sync-cursor"]');
+                    const countsEl = row.querySelector('[data-role="sync-counts"]');
+                    const errorEl = row.querySelector('[data-role="sync-error"]');
+                    if (statusEl) statusEl.textContent = item.status || 'idle';
+                    if (successEl) successEl.textContent = formatLogTime(item.last_success_at);
+                    if (cursorEl) cursorEl.textContent = String(item.cursor || 0);
+                    if (countsEl) {
+                        countsEl.textContent = `${item.collected_total || 0} / ${item.pending_count || 0}`;
+                    }
+                    if (errorEl) errorEl.textContent = item.last_error || '—';
+                });
+            } catch (error) {
+                console.debug('farm log sync polling failed', error);
+            }
+        };
+
+        window.setInterval(refreshStatus, 5000);
+        refreshStatus();
     }
 
     function setFarmDataRowDirtyState(row, isDirty) {
@@ -1265,6 +1311,7 @@
         setupClientFarmdataTariffSort();
         loadAdminAccountResources();
         setupAccountLogsModal();
+        setupFarmLogSyncStatus();
         setupServerStatesSection();
         setupWatchCardsSection();
     });

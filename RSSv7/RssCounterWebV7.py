@@ -23,6 +23,7 @@ import wmi
 import sys
 import csv
 import threading
+import uuid
 import inactive_monitor
 from copy import deepcopy
 from icmplib import ping as icmp_ping
@@ -153,6 +154,7 @@ GNBOTS_SHORTCUT = CONFIG.get("GNBOTS_SHORTCUT", "")
 GNBOTS_PROFILES_PATH = PROFILE_PATH
 
 PROFILE_FILE_LOCK = threading.RLock()
+PARSE_LOGS_LOCK = threading.RLock()
 
 
 def _read_profiles_locked() -> list:
@@ -1319,8 +1321,10 @@ def init_logs_db():
       - files_offset: смещения прочитанного для больших логов
       - cached_logs: кэшированные строки (с индексами)
       - resource_snapshots: снапшоты ресурсов с индексами
-      - дедупликация по (acc_id, dt) и создание UNIQUE-индекса
+      - устойчивый source_id и UNIQUE-индекс для идемпотентного перечтения
     """
+    import hashlib
+
     conn = open_db(LOGS_DB)
     try:
         c = conn.cursor()
@@ -1329,9 +1333,22 @@ def init_logs_db():
         c.execute("""
             CREATE TABLE IF NOT EXISTS files_offset (
                 filename TEXT PRIMARY KEY,
-                last_pos INTEGER NOT NULL
+                last_pos INTEGER NOT NULL,
+                last_size INTEGER,
+                last_mtime REAL,
+                head_hash TEXT,
+                generation_id TEXT
             )
         """)
+        offset_columns = {row[1] for row in c.execute("PRAGMA table_info(files_offset)").fetchall()}
+        for column_name, column_ddl in (
+            ("last_size", "INTEGER"),
+            ("last_mtime", "REAL"),
+            ("head_hash", "TEXT"),
+            ("generation_id", "TEXT"),
+        ):
+            if column_name not in offset_columns:
+                c.execute(f"ALTER TABLE files_offset ADD COLUMN {column_name} {column_ddl}")
 
         # 2) Кэш логов по аккаунтам
         c.execute("""
@@ -1340,11 +1357,53 @@ def init_logs_db():
                 acc_id TEXT,
                 nickname TEXT,
                 dt TEXT,         -- 'YYYY-MM-DD HH:MM:SS.mmm +HH:MM'
-                raw_line TEXT
+                raw_line TEXT,
+                source_id TEXT,
+                source_file TEXT,
+                source_offset INTEGER
             )
         """)
+        log_columns = {row[1] for row in c.execute("PRAGMA table_info(cached_logs)").fetchall()}
+        for column_name, column_ddl in (
+            ("source_id", "TEXT"),
+            ("source_file", "TEXT"),
+            ("source_offset", "INTEGER"),
+        ):
+            if column_name not in log_columns:
+                c.execute(f"ALTER TABLE cached_logs ADD COLUMN {column_name} {column_ddl}")
+
+        # Старый hard refresh мог многократно сохранить одну и ту же строку. До включения
+        # уникального source_id оставляем одну запись каждого исходного события.
+        c.execute("""
+            DELETE FROM cached_logs
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM cached_logs
+                GROUP BY acc_id, dt, raw_line
+            )
+        """)
+        legacy_rows = c.execute("""
+            SELECT id, acc_id, dt, raw_line
+            FROM cached_logs
+            WHERE source_id IS NULL OR source_id = ''
+        """).fetchall()
+        for row in legacy_rows:
+            source_material = "\x1f".join(
+                str(value or "") for value in (row["acc_id"], row["dt"], row["raw_line"])
+            )
+            source_id = "legacy:" + hashlib.sha256(source_material.encode("utf-8")).hexdigest()
+            c.execute("UPDATE cached_logs SET source_id=? WHERE id=?", (source_id, row["id"]))
+
         c.execute("CREATE INDEX IF NOT EXISTS idx_cached_logs_acc ON cached_logs(acc_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_cached_logs_id ON cached_logs(id DESC)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_cached_logs_acc_id ON cached_logs(acc_id, id)")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_cached_logs_source_id ON cached_logs(source_id)")
+        # Fallback защищает legacy-строки первого развёртывания: их source_id
+        # ещё не был привязан к file offset, но hard refresh не должен их удвоить.
+        c.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_cached_logs_event_fallback
+            ON cached_logs(acc_id, dt, raw_line)
+        """)
 
         # 3) Снапшоты ресурсов
         c.execute("""
@@ -1527,17 +1586,20 @@ def ensure_active_in_db(active_accounts):
 ##############################
 
 def parse_logs():
-    global LAST_UPDATE_TIME
-    acts= load_profiles()
-    if not acts:
-        print("Нет активных аккаунтов => parse_logs skip")
-        return
-    ensure_active_in_db(acts)
-    acc_map= {a["Id"]: a["Name"] for a in acts}
+    """Инкрементально читает логи, не допуская параллельных проходов по одним offsets."""
 
-    do_resources_update(acc_map)
-    LAST_UPDATE_TIME= datetime.now(timezone.utc)
-    print("parse_logs done. LAST_UPDATE_TIME =", LAST_UPDATE_TIME.isoformat())
+    global LAST_UPDATE_TIME
+    with PARSE_LOGS_LOCK:
+        acts = load_profiles()
+        if not acts:
+            print("Нет активных аккаунтов => parse_logs skip")
+            return
+        ensure_active_in_db(acts)
+        acc_map = {a["Id"]: a["Name"] for a in acts}
+
+        do_resources_update(acc_map)
+        LAST_UPDATE_TIME = datetime.now(timezone.utc)
+        print("parse_logs done. LAST_UPDATE_TIME =", LAST_UPDATE_TIME.isoformat())
 
 def do_resources_update(acc_map):
     import os
@@ -1559,11 +1621,21 @@ def do_resources_update(acc_map):
         c_log.execute("ALTER TABLE files_offset ADD COLUMN last_mtime REAL")
     if "head_hash" not in cols:
         c_log.execute("ALTER TABLE files_offset ADD COLUMN head_hash TEXT")
+    if "generation_id" not in cols:
+        c_log.execute("ALTER TABLE files_offset ADD COLUMN generation_id TEXT")
+
+    log_cols = {row[1] for row in c_log.execute("PRAGMA table_info(cached_logs)").fetchall()}
+    if "source_id" not in log_cols:
+        c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_id TEXT")
+    if "source_file" not in log_cols:
+        c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_file TEXT")
+    if "source_offset" not in log_cols:
+        c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_offset INTEGER")
 
     # ── загружаем offsets + мету
     offsets: dict[str, dict] = {}
-    for fn, ps, sz, mt, hh in c_log.execute("""
-        SELECT filename, last_pos, last_size, last_mtime, head_hash
+    for fn, ps, sz, mt, hh, generation_id in c_log.execute("""
+        SELECT filename, last_pos, last_size, last_mtime, head_hash, generation_id
         FROM files_offset
     """).fetchall():
         offsets[fn] = {
@@ -1571,6 +1643,7 @@ def do_resources_update(acc_map):
             "size": int(sz) if sz is not None else None,
             "mtime": float(mt) if mt is not None else None,
             "head": str(hh) if hh else None,
+            "generation": str(generation_id) if generation_id else None,
         }
 
     dt_now_str = datetime.now().strftime("%Y%m%d")
@@ -1603,9 +1676,14 @@ def do_resources_update(acc_map):
         except OSError:
             continue
 
-        meta = offsets.get(fname, {"pos": 0, "size": None, "mtime": None, "head": None})
+        meta = offsets.get(
+            fname,
+            {"pos": 0, "size": None, "mtime": None, "head": None, "generation": None},
+        )
         prev_pos = int(meta.get("pos") or 0)
+        prev_size = meta.get("size")
         prev_head = meta.get("head")
+        generation_id = meta.get("generation") or uuid.uuid4().hex
 
         try:
             with open(fullp, "rb") as f:
@@ -1613,13 +1691,24 @@ def do_resources_update(acc_map):
                 head_bytes = f.read(256)
                 head_hash = hashlib.sha1(head_bytes).hexdigest()
 
-                # ── truncate/обнуление
-                if prev_pos > fsize:
-                    prev_pos = 0
+                # Сравниваем только ту часть головы, которая существовала при прошлом проходе.
+                # Иначе обычный рост файла меньше 256 байт выглядел бы как его замена.
+                compare_length = min(int(prev_size or 0), 256)
+                comparable_head_hash = (
+                    hashlib.sha1(head_bytes[:compare_length]).hexdigest() if compare_length else None
+                )
+                file_replaced = bool(
+                    prev_size is not None
+                    and (
+                        fsize < int(prev_size)
+                        or (prev_head and comparable_head_hash and prev_head != comparable_head_hash)
+                    )
+                )
 
-                # ── файл заменили (первые байты другие) → начинаем с нуля
-                if prev_head and prev_head != head_hash:
+                # ── truncate/обнуление или замена файла с тем же именем
+                if prev_pos > fsize or file_replaced:
                     prev_pos = 0
+                    generation_id = uuid.uuid4().hex
 
                 # фиксируем в памяти актуальную мету (и, если надо, сброс позиции)
                 offsets[fname] = {
@@ -1627,16 +1716,22 @@ def do_resources_update(acc_map):
                     "size": fsize,
                     "mtime": mtime,
                     "head": head_hash,
+                    "generation": generation_id,
                 }
 
                 f.seek(prev_pos, 0)
 
                 while True:
+                    line_start = f.tell()
                     line_bytes = f.readline()
                     if not line_bytes:
                         break
 
                     new_pos = f.tell()
+                    # Писатель мог ещё не дописать последнюю строку. Не двигаем offset,
+                    # чтобы следующий проход прочитал её уже целиком.
+                    if new_pos >= fsize and not line_bytes.endswith((b"\n", b"\r")):
+                        break
                     line_str = line_bytes.decode("utf-8", "replace").rstrip("\r\n")
 
                     # ── 1) Обновление resources + daily_baseline (через LOG_PATTERN)
@@ -1694,12 +1789,25 @@ def do_resources_update(acc_map):
                             m = _DT_RE.match(line_str)  # ^YYYY-MM-DD ... +ZZ:ZZ
                             if m:
                                 dt_part = m.group(1)
+                                # Хэш строки защищает от редкой замены содержимого при
+                                # неизменных имени, offset и первых 256 байтах файла.
+                                line_hash = hashlib.sha256(line_bytes.rstrip(b"\r\n")).hexdigest()
+                                source_material = (
+                                    f"{fname}\x1f{generation_id}\x1f{line_start}\x1f{line_hash}"
+                                )
+                                source_id = hashlib.sha256(source_material.encode("utf-8")).hexdigest()
 
                                 # кешируем строку
                                 c_log.execute("""
-                                  INSERT INTO cached_logs(acc_id, nickname, dt, raw_line)
-                                  VALUES(?,?,?,?)
-                                """, (acid, nick, dt_part, line_str))
+                                  INSERT OR IGNORE INTO cached_logs(
+                                      acc_id, nickname, dt, raw_line,
+                                      source_id, source_file, source_offset
+                                  )
+                                  VALUES(?,?,?,?,?,?,?)
+                                """, (
+                                    acid, nick, dt_part, line_str,
+                                    source_id, fname, line_start,
+                                ))
 
                                 # если это CityResourcesAmount — пишем снапшот (для inactive/графиков)
                                 if "CityResourcesAmount:" in line_str:
@@ -1725,9 +1833,18 @@ def do_resources_update(acc_map):
     # ── сохраняем offsets в БД
     for fn, m in offsets.items():
         c_log.execute("""
-          INSERT OR REPLACE INTO files_offset(filename, last_pos, last_size, last_mtime, head_hash)
-          VALUES(?,?,?,?,?)
-        """, (fn, int(m.get("pos") or 0), m.get("size"), m.get("mtime"), m.get("head")))
+          INSERT OR REPLACE INTO files_offset(
+              filename, last_pos, last_size, last_mtime, head_hash, generation_id
+          )
+          VALUES(?,?,?,?,?,?)
+        """, (
+            fn,
+            int(m.get("pos") or 0),
+            m.get("size"),
+            m.get("mtime"),
+            m.get("head"),
+            m.get("generation"),
+        ))
 
     conn_res.commit()
     conn_log.commit()
@@ -1828,7 +1945,7 @@ def transformLogLine(dt_part, line_str):
 
 
 _LOG_LEVEL_RE = re.compile(r"\[(DBG|INF|WRN|ERR)\]", re.IGNORECASE)
-_LOG_INFO_PREFIX_RE = re.compile(r"^(?:INFO|WARN|WARNING|ERROR|ERR|DEBUG)\|", re.IGNORECASE)
+_LOG_INFO_PREFIX_RE = re.compile(r"^(INFO|WARN|WARNING|ERROR|ERR|DEBUG)\|", re.IGNORECASE)
 _LOG_SESSION_PREFIX_RE = re.compile(r"^[0-9a-f]{8,64}\|", re.IGNORECASE)
 _LOG_SAWMILL_LEVEL_RE = re.compile(r"^Gather:\s*Sawmill\s+Level\s+(\d+)\s*$", re.IGNORECASE)
 _LOG_MARCHES_PROGRESS_RE = re.compile(r"^Marches:\s*(\d+)\s*/\s*(\d+)\s*$", re.IGNORECASE)
@@ -1867,20 +1984,49 @@ def _format_log_time(dt_part: str) -> str:
     return hms_match.group(1) if hms_match else value
 
 
+def _format_log_event_at(dt_part: str) -> str:
+    """Возвращает полный ISO 8601 timestamp с исходным часовым поясом."""
+
+    value = (dt_part or "").strip()
+    if not value:
+        return ""
+
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S.%f %z",
+        "%Y-%m-%d %H:%M:%S %z",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%d %H:%M:%S",
+    ):
+        try:
+            parsed = datetime.strptime(value, fmt)
+            return parsed.isoformat(timespec="milliseconds")
+        except (TypeError, ValueError):
+            continue
+
+    return value
+
+
 def _extract_log_level(raw_line: str) -> str:
     """Определяет уровень логирования, если он явно указан в raw_line."""
 
     marker = _LOG_LEVEL_RE.search(raw_line or "")
-    if not marker:
-        return "info"
-
     level_map = {
         "DBG": "debug",
+        "DEBUG": "debug",
         "INF": "info",
+        "INFO": "info",
         "WRN": "warning",
+        "WARN": "warning",
+        "WARNING": "warning",
         "ERR": "error",
+        "ERROR": "error",
     }
-    return level_map.get(marker.group(1).upper(), "info")
+    if marker:
+        return level_map.get(marker.group(1).upper(), "info")
+
+    without_timestamp = _LOG_TIMESTAMP_PREFIX_RE.sub("", raw_line or "", count=1).strip()
+    pipe_marker = _LOG_INFO_PREFIX_RE.match(without_timestamp)
+    return level_map.get(pipe_marker.group(1).upper(), "info") if pipe_marker else "info"
 
 
 def _is_debug_log(raw_line: str) -> bool:
@@ -1889,7 +2035,7 @@ def _is_debug_log(raw_line: str) -> bool:
     return _extract_log_level(raw_line) == "debug"
 
 
-def _clean_log_message(raw_line: str) -> str:
+def _clean_log_message(raw_line: str, account_id: str = "") -> str:
     """Убирает служебный префикс ([INF], INFO|session|...) и оставляет только текст события."""
 
     if not raw_line:
@@ -1902,7 +2048,11 @@ def _clean_log_message(raw_line: str) -> str:
 
     text = _LOG_LEVEL_RE.sub("", text).strip()
     text = _LOG_INFO_PREFIX_RE.sub("", text).strip()
-    text = _LOG_SESSION_PREFIX_RE.sub("", text).strip()
+    normalized_account_id = str(account_id or "").strip()
+    if normalized_account_id and text.startswith(normalized_account_id + "|"):
+        text = text[len(normalized_account_id) + 1:].strip()
+    else:
+        text = _LOG_SESSION_PREFIX_RE.sub("", text).strip()
     return text
 
 
@@ -1911,6 +2061,7 @@ def parse_human_log_line(
     raw_line: str,
     account_name: t.Optional[str] = None,
     include_debug: bool = False,
+    account_id: str = "",
 ):
     """Нормализует строку лога в человекочитаемый объект для UI/API."""
 
@@ -1921,19 +2072,22 @@ def parse_human_log_line(
     if level == "debug" and not include_debug:
         return None
 
-    cleaned = _clean_log_message(raw_line)
+    cleaned = _clean_log_message(raw_line, account_id=account_id)
     if not cleaned:
         return None
 
     item = {
         "time": _format_log_time(dt_part),
+        "event_at": _format_log_event_at(dt_part),
         "level": level,
         "group": "system",
         "group_label": "Система",
         "event_code": "system_message",
         "event_text": cleaned,
-        "raw_text": cleaned,
+        "raw_text": raw_line,
     }
+    if account_name:
+        item["account_name"] = account_name
 
     preset = _HUMAN_LOG_EXACT_MAP.get(cleaned)
     if preset:
@@ -1997,9 +2151,6 @@ def parse_human_log_line(
                 "level": "warning",
             }
         )
-
-    if account_name and item["event_text"]:
-        item["account_name"] = account_name
 
     return item
 
@@ -5009,19 +5160,21 @@ def api_force_refresh_today():
     """
     today_str = datetime.now().strftime("%Y%m%d")
 
-    # 1) Сбрасываем offsets для любых файлов, у которых fname.startswith("bot" + today_str)
-    conn_log = open_db(LOGS_DB)
-    c_log = conn_log.cursor()
-    # Получим все offsets
-    rows = c_log.execute("SELECT filename FROM files_offset").fetchall()
-    for (fname,) in rows:
-        if fname.startswith("bot"+today_str) and fname.endswith(".txt"):
-            c_log.execute("DELETE FROM files_offset WHERE filename=?", (fname,))
-    conn_log.commit()
-    conn_log.close()
+    with PARSE_LOGS_LOCK:
+        # Сохраняем generation_id: повторное чтение получает те же source_id и не создаёт дубли.
+        conn_log = open_db(LOGS_DB)
+        try:
+            c_log = conn_log.cursor()
+            rows = c_log.execute("SELECT filename FROM files_offset").fetchall()
+            for (fname,) in rows:
+                if fname.startswith("bot" + today_str) and fname.endswith(".txt"):
+                    c_log.execute("UPDATE files_offset SET last_pos=0 WHERE filename=?", (fname,))
+            conn_log.commit()
+        finally:
+            conn_log.close()
 
-    # 2) parse_logs() заново всё перечитает
-    parse_logs()
+        # RLock допускает повторный захват внутри parse_logs().
+        parse_logs()
 
     return {"status":"ok","message":"All logs for today re-read.", "timestamp": datetime.now().isoformat()}
 
@@ -5405,6 +5558,8 @@ def api_logs():
       SELECT dt, raw_line
       FROM cached_logs
       WHERE acc_id=?
+        AND instr(upper(raw_line), '[DBG]') = 0
+        AND instr(upper(raw_line), 'DEBUG|') = 0
       ORDER BY id DESC
       LIMIT 300
     """,(acc_id,)).fetchall()
@@ -5452,11 +5607,16 @@ def api_logs_view():
         if not exists:
             return jsonify({"ok": False, "error": "acc_id not found"}), 404
 
+        debug_filter = "" if include_debug else """
+            AND instr(upper(raw_line), '[DBG]') = 0
+            AND instr(upper(raw_line), 'DEBUG|') = 0
+        """
         rows = c.execute(
-            """
+            f"""
             SELECT dt, raw_line
             FROM cached_logs
             WHERE acc_id=?
+              {debug_filter}
             ORDER BY id DESC
             LIMIT ?
             """,
@@ -5480,6 +5640,7 @@ def api_logs_view():
             raw_line or "",
             account_name=account_name,
             include_debug=include_debug,
+            account_id=acc_id,
         )
         if normalized:
             items.append(normalized)
@@ -5493,6 +5654,125 @@ def api_logs_view():
             "account_name": account_name,
             "items": items,
             "summary": build_human_logs_summary(items),
+        }
+    )
+
+
+@app.route("/api/v2/logs")
+def api_logs_v2():
+    """Отдаёт серверный поток логов после устойчивого числового cursor."""
+
+    after_raw = (request.args.get("after_id") or "0").strip()
+    limit_raw = (request.args.get("limit") or "1000").strip()
+    try:
+        after_id = max(0, int(after_raw))
+        limit = max(1, min(int(limit_raw), 2000))
+    except ValueError:
+        return jsonify({"ok": False, "error": "after_id and limit must be integers"}), 400
+
+    include_debug_raw = (request.args.get("include_debug") or "0").strip().lower()
+    include_debug = include_debug_raw in ("1", "true", "yes", "on")
+    account_filter = (request.args.get("acc_id") or "").strip()
+
+    conn = None
+    try:
+        conn = open_db(LOGS_DB)
+        c = conn.cursor()
+        where_parts = ["id > ?"]
+        params: list[t.Any] = [after_id]
+        max_where_parts: list[str] = []
+        max_params: list[t.Any] = []
+
+        if account_filter:
+            where_parts.append("acc_id = ?")
+            params.append(account_filter)
+            max_where_parts.append("acc_id = ?")
+            max_params.append(account_filter)
+        if not include_debug:
+            where_parts.append("instr(upper(raw_line), '[DBG]') = 0")
+            where_parts.append("instr(upper(raw_line), 'DEBUG|') = 0")
+
+        max_where = f" WHERE {' AND '.join(max_where_parts)}" if max_where_parts else ""
+        max_row = c.execute(
+            f"SELECT COALESCE(MAX(id), 0) AS max_id FROM cached_logs{max_where}",
+            max_params,
+        ).fetchone()
+        max_id = int(max_row["max_id"] if max_row else 0)
+
+        if after_id > max_id:
+            return jsonify(
+                {
+                    "ok": True,
+                    "items": [],
+                    "next_cursor": 0,
+                    "max_id": max_id,
+                    "has_more": max_id > 0,
+                    "reset_required": True,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+
+        params.append(limit)
+        rows = c.execute(
+            f"""
+            SELECT id, acc_id, nickname, dt, raw_line, source_id, source_file, source_offset
+            FROM cached_logs
+            WHERE {' AND '.join(where_parts)}
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    except Exception as exc:
+        print(f"[api/v2/logs] failed after cursor {after_id}: {exc}")
+        return jsonify({"ok": False, "error": "Не удалось загрузить поток логов"}), 500
+    finally:
+        if conn:
+            conn.close()
+
+    account_names: dict[str, str] = {}
+    items = []
+    for row in rows:
+        acc_id = str(row["acc_id"] or "")
+        account_name = str(row["nickname"] or "")
+        if not account_name:
+            account_name = account_names.setdefault(acc_id, _resolve_account_name_for_logs(acc_id))
+        normalized = parse_human_log_line(
+            row["dt"] or "",
+            row["raw_line"] or "",
+            account_name=account_name,
+            include_debug=include_debug,
+            account_id=acc_id,
+        )
+        if not normalized:
+            continue
+        normalized.update(
+            {
+                "source_cursor": int(row["id"]),
+                "source_id": str(row["source_id"] or f"row:{row['id']}"),
+                "source_file": row["source_file"],
+                "source_offset": row["source_offset"],
+                "acc_id": acc_id,
+                "parser_version": 2,
+            }
+        )
+        items.append(normalized)
+
+    if rows:
+        next_cursor = int(rows[-1]["id"])
+    else:
+        # Если после cursor были только отфильтрованные debug-строки, всё равно продвигаемся.
+        next_cursor = max_id
+
+    return jsonify(
+        {
+            "ok": True,
+            "items": items,
+            "next_cursor": next_cursor,
+            "max_id": max_id,
+            "has_more": next_cursor < max_id,
+            "reset_required": False,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
 

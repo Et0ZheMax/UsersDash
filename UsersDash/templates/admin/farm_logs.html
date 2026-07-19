@@ -36,6 +36,31 @@
             {% endfor %}
         </select>
     </div>
+    <div class="filter-block">
+        <label class="filter-label" for="logs-level">Уровень</label>
+        <select id="logs-level" class="form-input" name="level">
+            <option value="">Все уровни</option>
+            {% for level, label in [('debug', 'Debug'), ('info', 'Информация'), ('warning', 'Предупреждение'), ('error', 'Ошибка')] %}
+                <option value="{{ level }}" {% if selected_level == level %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-block">
+        <label class="filter-label" for="logs-event-code">Событие</label>
+        <select id="logs-event-code" class="form-input" name="event_code">
+            <option value="">Все события</option>
+            {% for event_code in event_codes %}
+                <option value="{{ event_code }}" {% if selected_event_code == event_code %}selected{% endif %}>
+                    {{ event_code }}
+                </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-block">
+        <label class="filter-label" for="logs-search">Поиск</label>
+        <input id="logs-search" class="form-input" type="search" name="q"
+               value="{{ search_query }}" placeholder="Текст, raw log или acc_id">
+    </div>
     <div class="filter-actions">
         <button class="btn" type="submit">Показать</button>
     </div>
@@ -45,9 +70,41 @@
     <input type="hidden" name="date" value="{{ selected_date }}">
     <input type="hidden" name="server_id" value="{{ selected_server_id or '' }}">
     <input type="hidden" name="account_id" value="{{ selected_account_id or '' }}">
-    <button class="btn btn-primary" type="submit">Собрать свежие логи</button>
-    <span class="muted">Всего в базе: {{ total_saved }}. Без выбранной фермы сбор идёт по активным серверам.</span>
+    <input type="hidden" name="level" value="{{ selected_level }}">
+    <input type="hidden" name="event_code" value="{{ selected_event_code }}">
+    <input type="hidden" name="q" value="{{ search_query }}">
+    <button class="btn btn-primary" type="submit">Поставить сбор в очередь</button>
+    <span class="muted">Сбор выполняется в фоне по серверам и не блокирует страницу.</span>
 </form>
+
+<div class="table-responsive">
+    <table class="table logs-sync-status-table" data-role="farm-log-sync-status"
+           data-status-endpoint="{{ url_for('admin.api_farm_log_sync_status') }}">
+        <thead>
+        <tr>
+            <th>Сервер</th>
+            <th>Статус</th>
+            <th>Последний успех</th>
+            <th>Cursor</th>
+            <th>Собрано / ожидает mapping</th>
+            <th>Ошибка</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for server in servers %}
+            {% set state = sync_states.get(server.id) %}
+            <tr data-server-id="{{ server.id }}">
+                <td>{{ server.name }}</td>
+                <td data-role="sync-status">{{ state.status if state else 'idle' }}</td>
+                <td data-role="sync-success-at">{{ sync_success_labels.get(server.id, '—') }}</td>
+                <td data-role="sync-cursor">{{ state.cursor if state else 0 }}</td>
+                <td data-role="sync-counts">{{ state.collected_total if state else 0 }} / {{ pending_counts.get(server.id, 0) }}</td>
+                <td class="logs-table__event" data-role="sync-error">{{ state.last_error if state and state.last_error else '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
 
 <div class="table-responsive">
     <table class="table logs-table">
@@ -57,6 +114,7 @@
             <th>Ферма</th>
             <th>Сервер</th>
             <th>Владелец</th>
+            <th>Уровень</th>
             <th>Тип</th>
             <th>Событие</th>
         </tr>
@@ -64,10 +122,11 @@
         <tbody>
         {% for log in logs %}
             <tr>
-                <td>{{ log.event_time.strftime('%d.%m.%Y %H:%M:%S') if log.event_time else '—' }}</td>
+                <td>{{ log.display_event_time }}</td>
                 <td>{{ log.account.name if log.account else '—' }}</td>
                 <td>{{ log.server.name if log.server else '—' }}</td>
                 <td>{{ log.owner.username if log.owner else '—' }}</td>
+                <td>{{ log.level or 'info' }}</td>
                 <td>
                     <span class="farm-logs-group farm-logs-group--{{ log.group or 'system' }}">
                         {{ log.group_label or log.group or 'Система' }}
@@ -76,9 +135,35 @@
                 <td class="logs-table__event">{{ log.event_text }}</td>
             </tr>
         {% else %}
-            <tr><td colspan="6" class="muted">На выбранную дату сохранённых логов пока нет.</td></tr>
+            <tr><td colspan="7" class="muted">По выбранным фильтрам сохранённых логов пока нет.</td></tr>
         {% endfor %}
         </tbody>
     </table>
+</div>
+
+<div class="admin-actions-row">
+    {% if next_before_id %}
+        <a class="btn btn-outline" href="{{ url_for(
+            'admin.farm_logs_page',
+            account_id=selected_account_id or '',
+            server_id=selected_server_id or '',
+            date=selected_date,
+            level=selected_level,
+            event_code=selected_event_code,
+            q=search_query,
+            before_id=next_before_id
+        ) }}">Показать более старые</a>
+    {% endif %}
+    {% if request.args.get('before_id') %}
+        <a class="btn btn-outline" href="{{ url_for(
+            'admin.farm_logs_page',
+            account_id=selected_account_id or '',
+            server_id=selected_server_id or '',
+            date=selected_date,
+            level=selected_level,
+            event_code=selected_event_code,
+            q=search_query
+        ) }}">К началу</a>
+    {% endif %}
 </div>
 {% endblock %}

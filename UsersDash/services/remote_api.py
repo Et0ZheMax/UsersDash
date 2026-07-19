@@ -48,6 +48,7 @@ _RESOURCES_CACHE_LOCK = threading.Lock()
 _RESOURCES_CACHE: Dict[int, Dict[str, Any]] = {}
 _REMOTE_REFRESH_LOCK = threading.Lock()
 _REMOTE_REFRESH_TS: Dict[int, float] = {}
+_REMOTE_REFRESH_SERVER_LOCKS: Dict[int, threading.Lock] = {}
 REMOTE_REFRESH_MIN_INTERVAL_SECONDS = 15
 
 
@@ -267,28 +268,54 @@ def fetch_resources_for_server(server, *, force_refresh: bool = False) -> Dict[s
     return result
 
 
-def _refresh_remote_logs_cache(server, *, base: Optional[str] = None, hard: bool = False) -> None:
+def _refresh_remote_logs_cache(server, *, base: Optional[str] = None, hard: bool = False) -> str:
     """Просит RSSv7 сначала обновить кэш логов/ресурсов, чтобы отдать максимально актуальные данные."""
 
     server_id = getattr(server, "id", None)
-    now_ts = time.monotonic()
     if isinstance(server_id, int):
         with _REMOTE_REFRESH_LOCK:
-            last_ts = _REMOTE_REFRESH_TS.get(server_id, 0.0)
-            if now_ts - last_ts < REMOTE_REFRESH_MIN_INTERVAL_SECONDS:
-                return
-            _REMOTE_REFRESH_TS[server_id] = now_ts
+            server_lock = _REMOTE_REFRESH_SERVER_LOCKS.setdefault(server_id, threading.Lock())
+    else:
+        server_lock = threading.Lock()
 
-    api_base = base or _get_effective_api_base(server)
-    if not api_base:
-        return
+    with server_lock:
+        if isinstance(server_id, int):
+            with _REMOTE_REFRESH_LOCK:
+                last_ts = _REMOTE_REFRESH_TS.get(server_id, 0.0)
+            if time.monotonic() - last_ts < REMOTE_REFRESH_MIN_INTERVAL_SECONDS:
+                return ""
 
-    endpoint = "/forceRefreshToday" if hard else "/refresh"
-    url = f"{api_base}{endpoint}"
-    try:
-        requests.post(url, timeout=DEFAULT_TIMEOUT)
-    except RequestException as exc:
-        log.warning("Не удалось обновить кэш на сервере %s (%s): %s", getattr(server, "name", "—"), endpoint, exc)
+        api_base = base or _get_effective_api_base(server)
+        if not api_base:
+            return "api_base_url не задан"
+
+        endpoint = "/forceRefreshToday" if hard else "/refresh"
+        url = f"{api_base}{endpoint}"
+        try:
+            response = requests.post(url, timeout=DEFAULT_TIMEOUT)
+        except RequestException as exc:
+            log.warning(
+                "Не удалось обновить кэш на сервере %s (%s): %s",
+                getattr(server, "name", "—"),
+                endpoint,
+                exc,
+            )
+            return f"Ошибка обновления кэша {getattr(server, 'name', '—')}: {exc}"
+
+        if not response.ok:
+            error = _format_http_error(response)
+            log.warning(
+                "RSS-сервер %s не обновил кэш (%s): %s",
+                getattr(server, "name", "—"),
+                endpoint,
+                error,
+            )
+            return error
+
+        if isinstance(server_id, int):
+            with _REMOTE_REFRESH_LOCK:
+                _REMOTE_REFRESH_TS[server_id] = time.monotonic()
+        return ""
 
 
 def _build_resource_indexes(server_resources: Dict[str, Dict[str, Any]]) -> Tuple[
@@ -1643,6 +1670,77 @@ def _resolve_remote_acc_id_for_logs(account) -> Optional[str]:
 
     name = str(getattr(account, "name", "") or "").strip()
     return name or None
+
+
+def fetch_server_logs_v2(
+    server,
+    *,
+    after_id: int = 0,
+    limit: int = 1000,
+    include_debug: bool = False,
+    refresh: bool = True,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Получает одну cursor-страницу логов сразу для всех ферм RSSv7-сервера."""
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return None, "api_base_url не задан"
+
+    if refresh:
+        refresh_error = _refresh_remote_logs_cache(server, base=base, hard=False)
+        if refresh_error:
+            return None, refresh_error
+
+    safe_after_id = max(0, int(after_id or 0))
+    safe_limit = max(1, min(int(limit or 1000), 2000))
+    debug_flag = "1" if include_debug else "0"
+    url = (
+        f"{base}/v2/logs?after_id={safe_after_id}&limit={safe_limit}"
+        f"&include_debug={debug_flag}"
+    )
+
+    try:
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+    except Timeout:
+        return None, f"Таймаут при запросе потока логов ({server.name})"
+    except RequestException as exc:
+        return None, f"Ошибка сети при запросе потока логов: {exc}"
+
+    if not response.ok:
+        return None, _format_http_error(response)
+
+    try:
+        data = response.json()
+    except ValueError:
+        return None, "RSS-сервер вернул невалидный JSON потока логов"
+
+    if not isinstance(data, dict) or not data.get("ok", False):
+        if isinstance(data, dict):
+            return None, str(data.get("error") or "RSS-сервер вернул ошибку потока логов")
+        return None, "Некорректный формат потока логов"
+
+    items = data.get("items")
+    if not isinstance(items, list):
+        return None, "Поле items потока логов должно быть массивом"
+
+    try:
+        next_cursor = max(0, int(data.get("next_cursor") or 0))
+        max_id = max(0, int(data.get("max_id") or 0))
+    except (TypeError, ValueError):
+        return None, "RSS-сервер вернул некорректный cursor логов"
+    if not data.get("reset_required") and next_cursor > max_id:
+        return None, f"RSS-сервер вернул cursor {next_cursor} больше max_id {max_id}"
+
+    return {
+        "ok": True,
+        "items": items,
+        "next_cursor": next_cursor,
+        "max_id": max_id,
+        "has_more": bool(data.get("has_more")),
+        "reset_required": bool(data.get("reset_required")),
+        "generated_at": data.get("generated_at"),
+    }, ""
+
 
 def fetch_account_logs_view(
     account,
