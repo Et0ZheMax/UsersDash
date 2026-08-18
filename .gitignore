@@ -13,3 +13,6 @@ UsersDash/.env
 .env.local
 secrets*.json
 config.local.json
+RSSv7/LD_Symbolic_move/build/
+RSSv7/LD_Symbolic_move/dist/
+RSSv7/LD_Symbolic_move/*.spec
