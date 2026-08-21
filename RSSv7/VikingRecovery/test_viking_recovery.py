@@ -17,10 +17,12 @@ from viking_recovery import (
     Instance,
     RecoveryEngine,
     RecoveryError,
+    classify_login_screen,
     choose_backup_name,
     is_resource_prompt,
     load_farms,
     parse_wm_size,
+    parse_ocr_payload,
     resolve_profile_path,
     required_free_space,
     select_igg_row,
@@ -135,6 +137,19 @@ class CloneTests(unittest.TestCase):
 
 
 class OcrSelectionTests(unittest.TestCase):
+    def test_decodes_ocr_text_with_quotes_from_base64(self) -> None:
+        payload = json.dumps(
+            [{"TextBase64": "Vid7JVMi", "X1": 22, "Y1": 10, "X2": 92, "Y2": 51}]
+        )
+        self.assertEqual(parse_ocr_payload(payload)[0].text, "V'{%S\"")
+
+    def test_waits_on_loading_screen_without_clicking(self) -> None:
+        self.assertEqual(classify_login_screen("Downloading resources, please wait"), "wait")
+
+    def test_recognizes_expired_login_and_provider_screen(self) -> None:
+        self.assertEqual(classify_login_screen("HELP Confirm"), "confirm_expired")
+        self.assertEqual(classify_login_screen("IGG Account Facebook Guest"), "choose_provider")
+
     def test_selects_row_by_custom_prefix(self) -> None:
         words = [
             OcrWord("2036890958", 168, 77, 229, 85),
