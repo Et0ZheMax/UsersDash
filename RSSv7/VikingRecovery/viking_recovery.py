@@ -224,6 +224,44 @@ def select_igg_row(words: Sequence[OcrWord], custom: str) -> tuple[int, int]:
     raise RecoveryError("В аккаунте несколько IGG ID, но поле Custom в профиле не заполнено")
 
 
+def parse_ocr_payload(payload: str) -> list[OcrWord]:
+    """Разобрать безопасный JSON OCR, поддерживая и прежний формат helper-а."""
+
+    try:
+        data = json.loads(payload.strip() or "[]")
+    except json.JSONDecodeError as exc:
+        raise RecoveryError("OCR вернул некорректный результат") from exc
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list):
+        raise RecoveryError("OCR вернул результат неожиданного типа")
+    words: list[OcrWord] = []
+    try:
+        for item in data:
+            if "TextBase64" in item:
+                text = base64.b64decode(str(item["TextBase64"]), validate=True).decode("utf-8")
+            else:
+                text = str(item["Text"])
+            words.append(
+                OcrWord(text, int(item["X1"]), int(item["Y1"]), int(item["X2"]), int(item["Y2"]))
+            )
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise RecoveryError("OCR вернул некорректные поля") from exc
+    return words
+
+
+def classify_login_screen(text: str) -> str:
+    """Определить безопасное действие на экране запуска Viking Rise."""
+
+    normalized = text.casefold()
+    if "help" in normalized:
+        return "confirm_expired"
+    provider_markers = ("igg account", "1gg account", "facebook", "google account", "guest")
+    if any(marker in normalized for marker in provider_markers):
+        return "choose_provider"
+    return "wait"
+
+
 class ProcessRunner:
     """Запуск LDPlayer/ADB без shell и без вывода секретов."""
 
@@ -578,16 +616,7 @@ class RecoveryEngine:
             ],
             timeout=60,
         )
-        try:
-            data = json.loads(result.stdout.strip() or "[]")
-        except json.JSONDecodeError as exc:
-            raise RecoveryError("OCR вернул некорректный результат") from exc
-        if isinstance(data, dict):
-            data = [data]
-        return [
-            OcrWord(str(item["Text"]), int(item["X1"]), int(item["Y1"]), int(item["X2"]), int(item["Y2"]))
-            for item in data
-        ]
+        return parse_ocr_payload(result.stdout)
 
     @staticmethod
     def _ocr_text(words: Sequence[OcrWord]) -> str:
@@ -627,18 +656,31 @@ class RecoveryEngine:
         self._step("Запуск Viking Rise и ожидание экрана авторизации")
         self._shell("am", "force-stop", PACKAGE)
         self._shell("am", "start", "-W", "-n", ACTIVITY, timeout=60)
-        deadline = time.monotonic() + 4 * 60
+        deadline = time.monotonic() + 12 * 60
+        help_confirmed = False
         while time.monotonic() < deadline:
             self._check_cancel()
             if "GPCPassportWebViewActivity" in self._current_focus():
                 break
-            words = self._ocr("login")
-            if "help" in self._ocr_text(words):
+            try:
+                words = self._ocr("login")
+            except RecoveryError as exc:
+                self.logger.warning("Временная ошибка OCR при запуске игры: %s; повтор через 5 секунд", exc)
+                time.sleep(5)
+                continue
+            action = classify_login_screen(self._ocr_text(words))
+            if action == "confirm_expired":
                 self._tap(320, 305)
+                help_confirmed = True
                 time.sleep(3)
-            # На экране загрузки и в окне HELP эта точка безопасна. На экране
-            # выбора провайдера здесь расположена кнопка IGG Account.
-            self._tap(320, 405)
+                continue
+            if action == "choose_provider" or help_confirmed:
+                # После подтверждения истёкшей сессии здесь находится IGG Account.
+                self._tap(320, 405)
+                help_confirmed = False
+                time.sleep(5)
+                continue
+            # На загрузочном экране ничего не нажимаем: ждём ресурсов и следующего кадра.
             time.sleep(5)
         else:
             raise RecoveryError("Не удалось открыть форму IGG Account")

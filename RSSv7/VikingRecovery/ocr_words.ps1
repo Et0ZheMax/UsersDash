@@ -26,7 +26,12 @@ try {
         $rect = New-Object Tesseract.Rect
         if ($text -and $iterator.TryGetBoundingBox([Tesseract.PageIteratorLevel]::Word, [ref]$rect)) {
             $words += [pscustomobject]@{
-                Text = $text.Trim()
+                # OCR иногда возвращает кавычки и управляющие символы. В старом
+                # Windows PowerShell 5.1 они могут превратить ConvertTo-Json в
+                # невалидный JSON, поэтому текст передаётся как безопасный Base64.
+                TextBase64 = [Convert]::ToBase64String(
+                    [Text.Encoding]::UTF8.GetBytes($text.Trim())
+                )
                 X1 = $rect.X1
                 Y1 = $rect.Y1
                 X2 = $rect.X2
