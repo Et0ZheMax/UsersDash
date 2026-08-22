@@ -195,7 +195,10 @@ class RecoveryApp(tk.Tk):
                     cancel_event=self.cancel_event,
                 )
                 backup, index = engine.recover(farm)
-            result = f"Ферма {farm.name} восстановлена. Новый LDPlayer ID {index}."
+            result = (
+                f"Ферма {farm.name} восстановлена. Новый LDPlayer ID {index} "
+                "записан в активный профиль GnBots."
+            )
             if backup:
                 result += f" Старый эмулятор сохранён как {backup}."
             self.events.put(("success", result))

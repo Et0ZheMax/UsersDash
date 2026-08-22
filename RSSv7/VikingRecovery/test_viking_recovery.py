@@ -26,6 +26,7 @@ from viking_recovery import (
     resolve_profile_path,
     required_free_space,
     select_igg_row,
+    update_profile_instance,
 )
 
 
@@ -43,6 +44,27 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(farm.name, "Akhm2")
         self.assertEqual(farm.custom, "203689")
         self.assertTrue(farm.ready)
+
+    def test_updates_exact_profile_record_instance_id_atomically(self) -> None:
+        menu = {"ScriptId": "appmenu", "Config": {"Email": "m", "Password": "p", "Slot": "igg"}}
+        payload = [
+            {"Id": "farm-a", "Name": "Same", "InstanceId": 7, "MenuData": json.dumps(menu)},
+            {"Id": "farm-b", "Name": "Same", "InstanceId": 8, "MenuData": json.dumps(menu)},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            farm = Farm("Same", "m", "p", "", "igg", True, "farm-b", 8)
+            old_index = update_profile_instance(path, farm, 34)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            backup = json.loads(
+                path.with_name(path.name + ".before_viking_recovery").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(old_index, 8)
+        self.assertEqual(saved[0]["InstanceId"], 7)
+        self.assertEqual(saved[1]["InstanceId"], 34)
+        self.assertEqual(backup[1]["InstanceId"], 8)
 
     def test_resolves_selected_profile(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

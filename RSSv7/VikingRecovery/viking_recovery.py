@@ -59,6 +59,8 @@ class Farm:
     custom: str
     slot: str
     active: bool
+    record_id: str = ""
+    instance_id: int | None = None
 
     @property
     def ready(self) -> bool:
@@ -139,6 +141,12 @@ def load_farms(path: Path | None = None) -> list[Farm]:
                 custom=str(config.get("Custom", "")).strip(),
                 slot=str(config.get("Slot", "")).strip(),
                 active=bool(record.get("Active", False)),
+                record_id=str(record.get("Id", "")).strip(),
+                instance_id=(
+                    int(record["InstanceId"])
+                    if str(record.get("InstanceId", "")).strip().isdigit()
+                    else None
+                ),
             )
         )
     return sorted((farm for farm in farms if farm.name), key=lambda item: item.name.casefold())
@@ -158,6 +166,79 @@ def choose_backup_name(target: str, existing_names: Iterable[str], now: datetime
         candidate = f"{preferred}_{stamp}_{suffix}"
         suffix += 1
     return candidate
+
+
+def update_profile_instance(profile_path: Path, farm: Farm, new_index: int) -> int | None:
+    """Атомарно заменить InstanceId выбранной фермы и подтвердить запись."""
+
+    try:
+        raw = profile_path.read_text(encoding="utf-8-sig")
+        records = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecoveryError(f"Не удалось прочитать профиль GnBots для обновления ID: {exc}") from exc
+    if not isinstance(records, list):
+        raise RecoveryError("Профиль GnBots имеет неожиданный формат: ожидался список")
+
+    matches = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if farm.record_id and str(record.get("Id", "")).strip() == farm.record_id:
+            matches = [record]
+            break
+        if not farm.record_id and str(record.get("Name", "")).strip() == farm.name:
+            matches.append(record)
+    if not matches:
+        raise RecoveryError(f"Ферма {farm.name} больше не найдена в активном профиле GnBots")
+    if len(matches) != 1:
+        raise RecoveryError(f"В профиле найдено несколько записей фермы {farm.name}")
+
+    record = matches[0]
+    old_raw = record.get("InstanceId")
+    old_index = int(old_raw) if str(old_raw).strip().isdigit() else None
+    record["InstanceId"] = int(new_index)
+
+    backup_path = profile_path.with_name(profile_path.name + ".before_viking_recovery")
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{profile_path.name}.",
+        suffix=".tmp",
+        dir=str(profile_path.parent),
+        text=True,
+    )
+    try:
+        shutil.copy2(profile_path, backup_path)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(records, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, profile_path)
+    except Exception as exc:
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+        raise RecoveryError(f"Не удалось записать новый LDPlayer ID в профиль GnBots: {exc}") from exc
+
+    try:
+        saved = json.loads(profile_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecoveryError(f"Не удалось проверить профиль GnBots после записи: {exc}") from exc
+    saved_record = next(
+        (
+            item
+            for item in saved
+            if isinstance(item, dict)
+            and (
+                (farm.record_id and str(item.get("Id", "")).strip() == farm.record_id)
+                or (not farm.record_id and str(item.get("Name", "")).strip() == farm.name)
+            )
+        ),
+        None,
+    )
+    if saved_record is None or str(saved_record.get("InstanceId")) != str(int(new_index)):
+        raise RecoveryError("Профиль GnBots не подтвердил новый LDPlayer ID")
+    return old_index
 
 
 def parse_wm_size(output: str) -> tuple[int, int] | None:
@@ -790,7 +871,16 @@ class RecoveryEngine:
         self.submit_credentials(farm)
         self.select_game_id(farm)
         self.wait_for_game()
-        return self.rename_transaction(farm.name)
+        backup_name, new_index = self.rename_transaction(farm.name)
+        self._step("Обновление LDPlayer ID в профиле GnBots")
+        old_index = update_profile_instance(self.profile_path, farm, new_index)
+        self.logger.info(
+            "Профиль GnBots обновлён: ферма %s, LDPlayer ID %s -> %s",
+            farm.name,
+            old_index if old_index is not None else "—",
+            new_index,
+        )
+        return backup_name, new_index
 
 
 class SingleRunLock:
@@ -876,7 +966,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             with SingleRunLock(Path(tempfile.gettempdir()) / "VikingRecovery" / "run.lock"):
                 backup, index = engine.recover(farm)
-            print(f"Готово: {farm.name}, новый ID {index}, старый экземпляр: {backup or 'не найден'}")
+            print(
+                f"Готово: {farm.name}, новый ID {index} записан в профиль GnBots, "
+                f"старый экземпляр: {backup or 'не найден'}"
+            )
             return 0
         parser.print_help()
         return 0
