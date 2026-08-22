@@ -336,6 +336,10 @@
         color: #f87171;
     }
 
+    .farmdata-save-status--pending {
+        color: #d99500;
+    }
+
     .farmdata-actions {
         display: flex;
         justify-content: flex-end;
@@ -1008,11 +1012,13 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!statusEl) return;
 
         statusEl.textContent = text || "";
-        statusEl.classList.remove("farmdata-save-status--success", "farmdata-save-status--error");
+        statusEl.classList.remove("farmdata-save-status--success", "farmdata-save-status--error", "farmdata-save-status--pending");
         if (statusType === "success") {
             statusEl.classList.add("farmdata-save-status--success");
         } else if (statusType === "error") {
             statusEl.classList.add("farmdata-save-status--error");
+        } else if (statusType === "pending") {
+            statusEl.classList.add("farmdata-save-status--pending");
         }
     }
 
@@ -1195,6 +1201,20 @@ document.addEventListener("DOMContentLoaded", function () {
             </td>`;
 
         initFarmdataRow(tr);
+        if (item.menu_sync) {
+            const job = item.menu_sync;
+            if (job.status === "pending" || job.status === "running") {
+                adminFarmMenuSyncJobs.set(String(item.account_id), Number(job.version || 0));
+                setFarmdataRowSaveStatus(tr, "Отправляется в профиль…", "pending");
+                scheduleAdminFarmMenuSyncPoll();
+            } else if (job.status === "failed") {
+                setFarmdataRowSaveStatus(tr, "Ошибка отправки", "error");
+                const statusEl = tr.querySelector('[data-role="row-save-status"]');
+                if (statusEl) statusEl.title = job.error || "Ошибка отправки в RSSv7";
+            } else if (job.status === "succeeded") {
+                setFarmdataRowSaveStatus(tr, "✓ записано в профиль", "success");
+            }
+        }
         return tr;
     }
 
@@ -1493,6 +1513,74 @@ document.addEventListener("DOMContentLoaded", function () {
     let adminFarmDataSaveInProgress = false;
     let adminFarmDataAutoSaveQueued = false;
     let lastAdminAutoSaveToastAt = 0;
+    const adminFarmMenuSyncJobs = new Map();
+    let adminFarmMenuSyncPollTimer = null;
+
+    function scheduleAdminFarmMenuSyncPoll(delay = 1000) {
+        if (adminFarmMenuSyncPollTimer || !adminFarmMenuSyncJobs.size) return;
+        adminFarmMenuSyncPollTimer = setTimeout(pollAdminFarmMenuSync, delay);
+    }
+
+    function trackAdminFarmMenuSyncJobs(jobs) {
+        (Array.isArray(jobs) ? jobs : []).forEach(function (job) {
+            const accountId = job && job.account_id != null ? String(job.account_id) : "";
+            if (!accountId) return;
+            adminFarmMenuSyncJobs.set(accountId, Number(job.version || 0));
+            const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+            if (row) setFarmdataRowSaveStatus(row, "Отправляется в профиль…", "pending");
+        });
+        scheduleAdminFarmMenuSyncPoll();
+    }
+
+    async function pollAdminFarmMenuSync() {
+        adminFarmMenuSyncPollTimer = null;
+        const accountIds = Array.from(adminFarmMenuSyncJobs.keys());
+        if (!accountIds.length) return;
+        try {
+            const resp = await fetch("/admin/farm-data/menu-sync-status", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1"
+                },
+                body: JSON.stringify({ account_ids: accountIds })
+            });
+            const data = await resp.json().catch(() => ({}));
+            if (!resp.ok || !data.ok) throw new Error(data.error || "Ошибка проверки отправки");
+
+            const errors = [];
+            (data.jobs || []).forEach(function (job) {
+                const accountId = String(job.account_id);
+                const expectedVersion = adminFarmMenuSyncJobs.get(accountId);
+                if (expectedVersion == null || Number(job.version || 0) !== expectedVersion) return;
+                const row = document.querySelector(`tr[data-account-id="${accountId}"]`);
+                if (job.status === "succeeded") {
+                    adminFarmMenuSyncJobs.delete(accountId);
+                    if (row && row.dataset.dirty !== "1") {
+                        setFarmdataRowSaveStatus(row, "✓ записано в профиль", "success");
+                    }
+                    return;
+                }
+                if (job.status === "failed") {
+                    adminFarmMenuSyncJobs.delete(accountId);
+                    if (row) {
+                        setFarmdataRowDirtyState(row, true);
+                        setFarmdataRowSaveStatus(row, "Ошибка отправки", "error");
+                    }
+                    errors.push({
+                        account_id: Number(accountId),
+                        message: `Не отправлено в RSSv7: ${job.error || "неизвестная ошибка"}`
+                    });
+                    return;
+                }
+                if (row) setFarmdataRowSaveStatus(row, "Отправляется в профиль…", "pending");
+            });
+            if (errors.length) renderAdminFarmdataErrors(errors);
+        } catch (err) {
+            console.error(err);
+        }
+        if (adminFarmMenuSyncJobs.size) scheduleAdminFarmMenuSyncPoll(1500);
+    }
 
     function setAdminFarmSaveState(isSaving, isAuto) {
         const btn = document.querySelector('[data-role="farmdata-save"]');
@@ -1600,6 +1688,11 @@ document.addEventListener("DOMContentLoaded", function () {
             missingTable,
             hasRows
         } = collectAdminFarmDataItems();
+        const submittedVersions = new Map(
+            dirtyRows.map(function (row) {
+                return [row, Number(row.dataset.editVersion || 0)];
+            })
+        );
 
         if (missingTable) {
             if (!isAuto) {
@@ -1636,7 +1729,6 @@ document.addEventListener("DOMContentLoaded", function () {
                 return;
             }
             adminFarmDataSaveInProgress = true;
-            setAdminFarmSaveState(true, true);
         } else {
             setBtnLoading(triggerBtn, true);
             const textEl = triggerBtn ? triggerBtn.querySelector(".btn-text") : null;
@@ -1650,7 +1742,10 @@ document.addEventListener("DOMContentLoaded", function () {
         try {
             const resp = await fetch("/admin/farm-data/save", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json",
+                    "x-skip-loader": "1"
+                },
                 body: JSON.stringify({ items })
             });
             const data = await resp.json().catch(() => ({}));
@@ -1660,13 +1755,17 @@ document.addEventListener("DOMContentLoaded", function () {
             }
 
             const rowErrors = Array.isArray(data.errors) ? data.errors : [];
+            const syncJobs = Array.isArray(data.sync_jobs) ? data.sync_jobs : [];
+            const syncAccountIds = new Set(
+                syncJobs.map(function (job) { return String(job.account_id); })
+            );
             const now = Date.now();
             const toastFn = isAuto ? showMiniToast : showToast;
             if (!rowErrors.length && (!isAuto || now - lastAdminAutoSaveToastAt > 8000)) {
                 toastFn(
-                    isAuto
-                        ? "Сохранено в UsersDash и отправлено в RSSv7."
-                        : "Данные сохранены и отправлены в RSSv7.",
+                    syncJobs.length
+                        ? "Сохранено. Отправка в профиль выполняется в фоне."
+                        : "Данные сохранены в UsersDash.",
                     "success"
                 );
                 if (isAuto) {
@@ -1703,22 +1802,30 @@ document.addEventListener("DOMContentLoaded", function () {
             dirtyRows.forEach(function (row) {
                 if (!row) return;
                 const rowId = row.dataset.accountId ? String(row.dataset.accountId) : "";
+                if (Number(row.dataset.editVersion || 0) !== submittedVersions.get(row)) {
+                    setFarmdataRowDirtyState(row, true);
+                    return;
+                }
                 if (rowId && errorIds.has(rowId)) {
                     setFarmdataRowDirtyState(row, true);
                     setFarmdataRowSaveStatus(row, "Ошибка", "error");
                     return;
                 }
                 setFarmdataRowDirtyState(row, false);
-                setFarmdataRowSaveStatus(row, "✓ сохранено", "success");
+                setFarmdataRowSaveStatus(
+                    row,
+                    syncAccountIds.has(rowId) ? "Отправляется в профиль…" : "✓ сохранено",
+                    syncAccountIds.has(rowId) ? "pending" : "success"
+                );
             });
             renderAdminFarmdataErrors(rowErrors);
+            trackAdminFarmMenuSyncJobs(syncJobs);
         } catch (err) {
             console.error(err);
             showToast(err.message || "Ошибка при сохранении данных.", "error");
         } finally {
             if (isAuto) {
                 adminFarmDataSaveInProgress = false;
-                setAdminFarmSaveState(false);
                 if (adminFarmDataAutoSaveQueued) {
                     adminFarmDataAutoSaveQueued = false;
                     scheduleAdminFarmDataAutoSave();
@@ -1882,6 +1989,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
         const row = target.closest('tr[data-account-id]');
         if (row) {
+            row.dataset.editVersion = String(Number(row.dataset.editVersion || 0) + 1);
             setFarmdataRowDirtyState(row, true);
             clearAdminFarmdataErrors(row);
         }

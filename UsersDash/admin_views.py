@@ -42,6 +42,7 @@ from UsersDash.models import (
     FarmLogEntry,
     FarmLogPendingEvent,
     FarmLogSyncState,
+    FarmMenuSyncJob,
     RentalNotificationLog,
     Server,
     SettingsAuditLog,
@@ -96,6 +97,11 @@ from UsersDash.services.info_message import (
 )
 from UsersDash.services.notifications import send_notification
 from UsersDash.services.farm_log_collector import queue_farm_log_sync
+from UsersDash.services.menu_sync_queue import (
+    enqueue_menu_sync,
+    get_menu_sync_status,
+    start_menu_sync_worker,
+)
 from UsersDash.services.farm_logs import (
     build_account_logs_payload,
     query_farm_log_filter_accounts,
@@ -2926,6 +2932,14 @@ def admin_farm_data_chunk():
             .all()
         )
     fd_index = {fd.account_id: fd for fd in farmdata_entries}
+    sync_jobs = []
+    if account_ids:
+        sync_jobs = (
+            FarmMenuSyncJob.query
+            .filter(FarmMenuSyncJob.account_id.in_(account_ids))
+            .all()
+        )
+    sync_job_index = {job.account_id: job for job in sync_jobs}
 
     resources_by_server: dict[int, dict[str, Any]] = {}
     for acc in accounts:
@@ -2939,6 +2953,7 @@ def admin_farm_data_chunk():
     items: list[dict[str, Any]] = []
     for acc in accounts:
         fd = fd_index.get(acc.id)
+        sync_job = sync_job_index.get(acc.id)
         instance_id = None
         server_resources = resources_by_server.get(acc.server_id, {})
         if server_resources:
@@ -2969,6 +2984,15 @@ def admin_farm_data_chunk():
                 if acc.next_payment_tariff is not None
                 else acc.next_payment_amount,
                 "manage_url": url_for("admin.manage", account_id=acc.id),
+                "menu_sync": {
+                    "account_id": sync_job.account_id,
+                    "version": sync_job.version,
+                    "status": sync_job.status,
+                    "attempts": sync_job.attempts,
+                    "error": sync_job.error,
+                }
+                if sync_job
+                else None,
             }
         )
 
@@ -3567,7 +3591,10 @@ def admin_farm_data_save():
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
 
-    menu_sync_errors = _sync_menu_data_now(menu_sync_queue)
+    sync_jobs = enqueue_menu_sync(
+        [int(item["account_id"]) for item in menu_sync_queue]
+    )
+    start_menu_sync_worker(current_app._get_current_object())
 
     if apply_tariff_defaults:
         for acc, tariff_price in defaults_to_apply:
@@ -3594,10 +3621,26 @@ def admin_farm_data_save():
         {
             "ok": True,
             "warnings": warnings,
-            "errors": menu_sync_errors,
+            "errors": [],
+            "sync_jobs": sync_jobs,
             "defaults_results": defaults_results,
         }
     )
+
+
+@admin_bp.route("/farm-data/menu-sync-status", methods=["POST"])
+@login_required
+def admin_farm_data_menu_sync_status():
+    if current_user.role != "admin":
+        return jsonify({"ok": False, "error": "Access denied"}), 403
+    payload = request.get_json(silent=True) or {}
+    account_ids = []
+    for value in payload.get("account_ids") or []:
+        try:
+            account_ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return jsonify({"ok": True, "jobs": get_menu_sync_status(account_ids)})
 
 @admin_bp.route("/farm-data/sync-preview", methods=["GET"])
 @login_required
