@@ -3027,6 +3027,7 @@ def apply_profile_updates(payload: list[dict]):
     with PROFILE_FILE_LOCK:
         prof = _read_profiles_locked()
 
+        updated_ids = set()
         for acc in prof:
             rid = str(acc.get("Id")) if acc.get("Id") is not None else None
             if rid not in rec_map:      # не меняем
@@ -3042,11 +3043,17 @@ def apply_profile_updates(payload: list[dict]):
             cfg["Email"]    = upd.get("email", "")
             cfg["Password"] = upd.get("passwd", "")
             cfg["Custom"]   = upd.get("igg", "")          # IGG
+            cfg["Slot"]     = "igg"
             acc["MenuData"] = json.dumps(md, ensure_ascii=False, separators=(",", ":"))
+            updated_ids.add(rid)
 
-        _write_profiles_locked(prof, indent=2)
+        # Не переписываем профиль, если ни один ID не найден. Помимо лишнего I/O
+        # это исключает ненужную гонку с GnBots для ошибочного запроса.
+        if updated_ids:
+            _write_profiles_locked(prof, indent=2)
 
-    sync_account_meta()      # ← NEW
+    missing_ids = sorted(set(rec_map) - updated_ids)
+    return {"updated": len(updated_ids), "missing": missing_ids}
 
 
 @app.route("/api/accounts_profile", methods=["PATCH"])
@@ -3058,11 +3065,13 @@ def api_accounts_profile():
     payload = request.json or []
 
     try:
-        apply_profile_updates(payload)
+        result = apply_profile_updates(payload)
     except FileNotFoundError:
         return jsonify({"err":"profile not found"}),404
 
-    return jsonify({"status":"ok"})
+    if result["missing"]:
+        return jsonify({"status": "error", "error": "account not found", **result}), 404
+    return jsonify({"status": "ok", **result})
 
 @app.route("/api/log_slice")
 def log_slice():

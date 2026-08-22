@@ -3178,89 +3178,81 @@ def admin_farm_data_conflicts_resolve_batch():
     return jsonify({"ok": True, "updated": updated, "warnings": warnings})
 
 
-def _dispatch_menu_sync_background(
+def _sync_menu_data_now(
     items: list[dict[str, str | int | None]],
-) -> None:
+) -> list[dict[str, str | int]]:
+    """Отправить изменённые MenuData в RSSv7 и вернуть ошибки по строкам.
+
+    Вызов намеренно синхронный: браузер не должен показывать «сохранено», пока
+    целевой профиль GnBots не подтвердил обновление.
+    """
+
     if not items:
-        return
+        return []
 
-    app = current_app._get_current_object()
+    account_ids = [
+        item["account_id"] for item in items if isinstance(item.get("account_id"), int)
+    ]
+    accounts = (
+        Account.query.options(joinedload(Account.server))
+        .filter(Account.id.in_(account_ids))
+        .all()
+    )
+    accounts_map = {acc.id: acc for acc in accounts}
+    app_logger = current_app.logger
+    server_limits: dict[int | None, threading.Semaphore] = {}
+    for acc in accounts:
+        server_limits.setdefault(acc.server_id, threading.Semaphore(2))
 
-    def worker(payloads: list[dict[str, str | int | None]]) -> None:
-        with app.app_context():
-            account_ids = [
-                item["account_id"]
-                for item in payloads
-                if isinstance(item.get("account_id"), int)
-            ]
-            if not account_ids:
-                return
+    def sync_one(item: dict[str, str | int | None]) -> tuple[bool, str]:
+        acc = accounts_map.get(item["account_id"])
+        if not acc:
+            return False, "аккаунт не найден"
+        semaphore = server_limits.setdefault(acc.server_id, threading.Semaphore(1))
+        last_msg = "неизвестная ошибка"
+        for attempt in range(1, 4):
+            with semaphore:
+                ok, msg = update_account_menu_data(
+                    acc,
+                    email=item.get("email"),
+                    password=item.get("password"),
+                    igg_id=item.get("igg_id"),
+                )
+            last_msg = msg
+            if ok:
+                return True, msg
+            if attempt < 3:
+                app_logger.warning(
+                    "Повтор %s/3 обновления MenuData для аккаунта %s: %s",
+                    attempt,
+                    acc.id,
+                    msg,
+                )
+                time.sleep(0.5 * attempt)
+        return False, last_msg
 
-            accounts = (
-                Account.query.options(joinedload(Account.server))
-                .filter(Account.id.in_(account_ids))
-                .all()
+    errors: list[dict[str, str | int]] = []
+    with ThreadPoolExecutor(max_workers=min(4, len(items))) as executor:
+        future_map = {executor.submit(sync_one, item): item for item in items}
+        for future in as_completed(future_map):
+            item = future_map[future]
+            try:
+                ok, msg = future.result()
+            except Exception as exc:
+                ok, msg = False, str(exc)
+            if ok:
+                continue
+            account_id = int(item["account_id"])
+            app_logger.warning(
+                "Не удалось обновить MenuData для аккаунта %s: %s", account_id, msg
             )
-            accounts_map = {acc.id: acc for acc in accounts}
-            server_limits: dict[int | None, threading.Semaphore] = {}
-            for acc in accounts:
-                server_limits.setdefault(acc.server_id, threading.Semaphore(2))
-
-            max_workers = min(4, len(payloads))
-            if max_workers < 1:
-                return
-
-            def sync_one(item: dict[str, str | int | None]) -> tuple[bool, str]:
-                acc = accounts_map.get(item["account_id"])
-                if not acc:
-                    return False, "аккаунт не найден"
-                semaphore = server_limits.setdefault(acc.server_id, threading.Semaphore(1))
-                max_attempts = 3
-                last_msg = "неизвестная ошибка"
-                for attempt in range(1, max_attempts + 1):
-                    with semaphore:
-                        ok, msg = update_account_menu_data(
-                            acc,
-                            email=item.get("email"),
-                            password=item.get("password"),
-                            igg_id=item.get("igg_id"),
-                        )
-                    last_msg = msg
-                    if ok:
-                        return True, msg
-                    if attempt < max_attempts:
-                        app.logger.warning(
-                            "Повтор %s/%s обновления MenuData для аккаунта %s: %s",
-                            attempt,
-                            max_attempts,
-                            acc.id,
-                            msg,
-                        )
-                        time.sleep(0.5 * attempt)
-                return False, last_msg
-
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_map = {
-                    executor.submit(sync_one, item): item for item in payloads
+            errors.append(
+                {
+                    "account_id": account_id,
+                    "message": f"Данные сохранены в UsersDash, но не отправлены в RSSv7: {msg}",
                 }
-                for future in as_completed(future_map):
-                    item = future_map[future]
-                    try:
-                        ok, msg = future.result()
-                    except Exception as exc:
-                        ok = False
-                        msg = str(exc)
-                    if not ok:
-                        acc_id = item.get("account_id")
-                        app.logger.warning(
-                            "Не удалось обновить MenuData для аккаунта %s: %s",
-                            acc_id,
-                            msg,
-                        )
-            db.session.remove()
-
-    thread = threading.Thread(target=worker, args=(items,), daemon=True)
-    thread.start()
+            )
+    return errors
 
 
 @admin_bp.route("/farm-data/autocreate-clients", methods=["POST"])
@@ -3575,7 +3567,7 @@ def admin_farm_data_save():
         print("farm-data save error:", e)
         return jsonify({"ok": False, "error": str(e)})
 
-    _dispatch_menu_sync_background(menu_sync_queue)
+    menu_sync_errors = _sync_menu_data_now(menu_sync_queue)
 
     if apply_tariff_defaults:
         for acc, tariff_price in defaults_to_apply:
@@ -3598,7 +3590,14 @@ def admin_farm_data_save():
                     f"[defaults] applied {tariff_label} for {acc.name}: {msg}".strip()
                 )
 
-    return jsonify({"ok": True, "warnings": warnings, "defaults_results": defaults_results})
+    return jsonify(
+        {
+            "ok": True,
+            "warnings": warnings,
+            "errors": menu_sync_errors,
+            "defaults_results": defaults_results,
+        }
+    )
 
 @admin_bp.route("/farm-data/sync-preview", methods=["GET"])
 @login_required

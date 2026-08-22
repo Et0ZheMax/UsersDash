@@ -1659,13 +1659,14 @@ document.addEventListener("DOMContentLoaded", function () {
                 throw new Error(data.error || "Ошибка при сохранении данных.");
             }
 
+            const rowErrors = Array.isArray(data.errors) ? data.errors : [];
             const now = Date.now();
             const toastFn = isAuto ? showMiniToast : showToast;
-            if (!isAuto || now - lastAdminAutoSaveToastAt > 8000) {
+            if (!rowErrors.length && (!isAuto || now - lastAdminAutoSaveToastAt > 8000)) {
                 toastFn(
                     isAuto
-                        ? "Изменения сохранены автоматически."
-                        : "Данные ферм сохранены.",
+                        ? "Сохранено в UsersDash и отправлено в RSSv7."
+                        : "Данные сохранены и отправлены в RSSv7.",
                     "success"
                 );
                 if (isAuto) {
@@ -1694,7 +1695,6 @@ document.addEventListener("DOMContentLoaded", function () {
                     showToast(`Шаблон настроек применён (${appliedNames.join(", ")})`, "success");
                 }
             }
-            const rowErrors = Array.isArray(data.errors) ? data.errors : [];
             const errorIds = new Set(
                 rowErrors
                     .map(function (row) { return row && row.account_id != null ? String(row.account_id) : ""; })

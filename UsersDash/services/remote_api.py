@@ -916,6 +916,13 @@ def update_account_profile_menu_data(
         return False, str(exc)
 
     if 200 <= resp.status_code < 300:
+        try:
+            body = resp.json() or {}
+        except ValueError:
+            body = {}
+        if body.get("status") == "error" or body.get("missing"):
+            missing = ", ".join(str(value) for value in body.get("missing") or [])
+            return False, body.get("error") or f"аккаунт не найден в профиле: {missing}"
         return True, "OK"
 
     return False, _format_http_error(resp)
@@ -928,40 +935,6 @@ def update_account_menu_data(
     igg_id: str | None,
 ) -> Tuple[bool, str]:
     """Обновляет MenuData на сервере по данным из "Аккаунты / Данные"."""
-
-    settings = fetch_account_settings(account)
-    if not isinstance(settings, dict):
-        msg = "не удалось получить настройки аккаунта для обновления MenuData"
-        log.warning("[farm-data menu sync] %s", msg)
-        return False, msg
-
-    menu_data = (
-        settings.get("MenuData")
-        or settings.get("menu")
-        or settings.get("menu_data")
-        or {}
-    )
-    if not isinstance(menu_data, dict):
-        msg = "MenuData имеет неожиданный формат"
-        log.warning("[farm-data menu sync] %s", msg)
-        return False, msg
-
-    menu_config = menu_data.get("Config")
-    if not isinstance(menu_config, dict):
-        menu_config = {}
-
-    menu_config["Email"] = email or ""
-    menu_config["Password"] = password or ""
-
-    # FarmData — источник истины для меню бота: если IGG ID очистили в кабинете,
-    # старое значение Custom в конфиге тоже нужно затереть пустой строкой.
-    # Slot нужен боту даже при пустом Custom, поэтому ставим его при каждой
-    # подстановке почты и пароля из UsersDash.
-    menu_config["Custom"] = igg_id or ""
-    menu_config["Slot"] = "igg"
-
-    menu_data["Config"] = menu_config
-
     acc_id = getattr(account, "id", None)
     acc_name = getattr(account, "name", None)
     server_name = getattr(getattr(account, "server", None), "name", None)
@@ -987,6 +960,35 @@ def update_account_menu_data(
             server_name,
             msg,
         )
+        # Старые RSSv7 без профильного PATCH обновляем через совместимый полный
+        # endpoint. Получение настроек вынесено сюда, чтобы штатное автосохранение
+        # выполняло один быстрый запрос вместо GET + PATCH.
+        settings = fetch_account_settings(account)
+        if not isinstance(settings, dict):
+            msg = "не удалось получить настройки аккаунта для обновления MenuData"
+            log.warning("[farm-data menu sync] %s", msg)
+            return False, msg
+
+        menu_data = (
+            settings.get("MenuData")
+            or settings.get("menu")
+            or settings.get("menu_data")
+            or {}
+        )
+        if not isinstance(menu_data, dict):
+            msg = "MenuData имеет неожиданный формат"
+            log.warning("[farm-data menu sync] %s", msg)
+            return False, msg
+
+        menu_config = menu_data.get("Config")
+        if not isinstance(menu_config, dict):
+            menu_config = {}
+        menu_config["Email"] = email or ""
+        menu_config["Password"] = password or ""
+        menu_config["Custom"] = igg_id or ""
+        menu_config["Slot"] = "igg"
+        menu_data["Config"] = menu_config
+
         data_section = settings.get("Data") or settings.get("data")
         if not isinstance(data_section, list):
             msg = "в настройках аккаунта отсутствует список шагов Data"
