@@ -1,12 +1,62 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from UsersDash.services import remote_api
 from UsersDash.scripts import sync_menu_data
 
 
 class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
+    def test_profile_update_rejects_missing_remote_account(self):
+        account = SimpleNamespace(
+            id=10,
+            name="German1",
+            internal_id="missing-id",
+            server=SimpleNamespace(name="F99"),
+        )
+        response = Mock(status_code=200)
+        response.json.return_value = {
+            "status": "error",
+            "error": "account not found",
+            "missing": ["missing-id"],
+        }
+
+        with patch.object(remote_api, "_get_effective_api_base", return_value="http://f99/api"), patch.object(
+            remote_api, "fetch_resources_for_server", return_value={}
+        ), patch.object(remote_api.requests, "patch", return_value=response):
+            ok, msg = remote_api.update_account_profile_menu_data(
+                account,
+                email="mail@example.com",
+                password="password",
+                igg_id="1960188204",
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(msg, "account not found")
+
+    def test_profile_update_accepts_confirmed_remote_write(self):
+        account = SimpleNamespace(
+            id=10,
+            name="German1",
+            internal_id="remote-id",
+            server=SimpleNamespace(name="F99"),
+        )
+        response = Mock(status_code=200)
+        response.json.return_value = {"status": "ok", "updated": 1, "missing": []}
+
+        with patch.object(remote_api, "_get_effective_api_base", return_value="http://f99/api"), patch.object(
+            remote_api, "fetch_resources_for_server", return_value={}
+        ), patch.object(remote_api.requests, "patch", return_value=response):
+            ok, msg = remote_api.update_account_profile_menu_data(
+                account,
+                email="mail@example.com",
+                password="password",
+                igg_id="1960188204",
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(msg, "OK")
+
     def test_update_account_menu_data_matches_bot_config_shape(self):
         account = SimpleNamespace(id=10, name="Airat", server=SimpleNamespace(name="S1"))
         settings = {
@@ -38,7 +88,9 @@ class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
             captured_payloads.append(payload)
             return True, "OK"
 
-        with patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
+        with patch.object(
+            remote_api, "update_account_profile_menu_data", return_value=(False, "legacy endpoint")
+        ), patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
             remote_api,
             "update_account_settings_full",
             side_effect=fake_update,
@@ -89,7 +141,9 @@ class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
             captured_payloads.append(payload)
             return True, "OK"
 
-        with patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
+        with patch.object(
+            remote_api, "update_account_profile_menu_data", return_value=(False, "legacy endpoint")
+        ), patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
             remote_api,
             "update_account_settings_full",
             side_effect=fake_update,
@@ -124,7 +178,9 @@ class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
             captured_payloads.append(payload)
             return True, "OK"
 
-        with patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
+        with patch.object(
+            remote_api, "update_account_profile_menu_data", return_value=(False, "legacy endpoint")
+        ), patch.object(remote_api, "fetch_account_settings", return_value=settings), patch.object(
             remote_api,
             "update_account_settings_full",
             side_effect=fake_update,
@@ -146,6 +202,29 @@ class RemoteApiMenuDataSyncTestCase(unittest.TestCase):
                 "Slot": "igg",
             },
         )
+
+    def test_update_account_menu_data_uses_fast_patch_without_fetching_settings(self):
+        account = SimpleNamespace(id=10, name="German1", server=SimpleNamespace(name="F99"))
+
+        with patch.object(
+            remote_api, "update_account_profile_menu_data", return_value=(True, "OK")
+        ) as profile_update, patch.object(
+            remote_api, "fetch_account_settings"
+        ) as fetch_settings, patch.object(
+            remote_api, "update_account_settings_full"
+        ) as full_update:
+            ok, msg = remote_api.update_account_menu_data(
+                account,
+                email="mail@example.com",
+                password="pass",
+                igg_id="1960188204",
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(msg, "OK")
+        profile_update.assert_called_once()
+        fetch_settings.assert_not_called()
+        full_update.assert_not_called()
 
     def test_local_menu_config_always_contains_custom_and_slot_keys(self):
         farm_data = SimpleNamespace(email="mail@example.com", password="pass", igg_id=None)
