@@ -878,6 +878,10 @@ def create_app(enable_background_workers: bool = False) -> Flask:
         _run_rental_bot_worker()
         # Инкрементальный cursor-сбор логов по одному запросу на RSS-сервер.
         start_farm_log_collector(app)
+        # Надёжная очередь доставки реквизитов ферм в профили RSSv7.
+        from UsersDash.services.menu_sync_queue import start_menu_sync_worker
+
+        start_menu_sync_worker(app)
 
     return app
 

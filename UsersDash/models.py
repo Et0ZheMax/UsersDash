@@ -608,6 +608,35 @@ class FarmData(db.Model):
         )
 
 
+class FarmMenuSyncJob(db.Model):
+    """Устойчивая очередь доставки реквизитов фермы в профиль RSSv7."""
+
+    __tablename__ = "farm_menu_sync_jobs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    account_id = db.Column(
+        db.Integer,
+        db.ForeignKey("accounts.id"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    version = db.Column(db.Integer, nullable=False, default=1)
+    status = db.Column(db.String(16), nullable=False, default="pending", index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    error = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+    finished_at = db.Column(db.DateTime, nullable=True)
+
+    account = db.relationship("Account")
+
+
 class AccountResourceSnapshot(db.Model):
     __tablename__ = "account_resource_snapshots"
 
