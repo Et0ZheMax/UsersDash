@@ -370,10 +370,16 @@ def kill_process(name: str, soft_timeout: int = 5, hard_timeout: int = 5) -> lis
                         proc.kill()
                         proc.wait(timeout=hard_timeout)
                     except psutil.TimeoutExpired:
-                        subprocess.run(
-                            ['taskkill', '/F', '/T', '/PID', str(pid)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                        )
+                        try:
+                            subprocess.run(
+                                ['taskkill', '/F', '/T', '/PID', str(pid)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=15,
+                                check=False,
+                            )
+                        except subprocess.TimeoutExpired:
+                            print(f"[WARN] taskkill timed out for {name} pid={pid}")
                 killed.append(pid)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
@@ -712,9 +718,6 @@ def _build_alert_text(problems: List[str], metrics: dict, cfg: Settings) -> str:
 
 # ------------------------------ Main logic ----------------------------------
 async def check_and_reboot(cfg: Settings):
-    bot = build_bot(cfg)
-    await flush_spool(bot, cfg)
-
     gn_running = is_process_running("GnBots.exe")
     dn_count = count_processes("dnplayer.exe")
 
@@ -763,6 +766,13 @@ async def check_and_reboot(cfg: Settings):
         else:
             print(f"[OK] GnBots запущен, dnplayer={dn_count}/{cfg.threshold_windows}, логи найдены: {logs_found}.")
         con.close()
+        # Старую очередь Telegram отправляем только после основной проверки.
+        # Недоступность Telegram не должна мешать watchdog-проверке GN/LD.
+        try:
+            bot = build_bot(cfg)
+            await flush_spool(bot, cfg)
+        except Exception as e:
+            print(f"[WARN] Не удалось обработать очередь Telegram: {e}")
         return
 
     metrics = {
@@ -775,9 +785,8 @@ async def check_and_reboot(cfg: Settings):
     }
     alert_text = _build_alert_text(problems, metrics, cfg)
 
-    await safe_send(bot, cfg, alert_text, cfg.thread_id)
-    await safe_send(bot, cfg, "F99🔄 Ребут: убиваю процессы и запускаю ярлык…", cfg.thread_id)
-
+    # Сначала выполняем прямую задачу watchdog. Telegram вызывается только после
+    # попытки перезапуска и поэтому не может задержать восстановление GN/LD.
     kd = kill_process("dnplayer.exe", soft_timeout=5, hard_timeout=3)
     kb = kill_process("GnBots.exe", soft_timeout=5, hard_timeout=3)
     kh = kill_process("Ld9BoxHeadless.exe", soft_timeout=5, hard_timeout=3)
@@ -785,17 +794,28 @@ async def check_and_reboot(cfg: Settings):
 
     try:
         os.startfile(cfg.gnbots_shortcut)
-        await safe_send(
-            bot, cfg,
+        reboot_text = (
             "F99✅ Ребут завершён.\n"
             f"Убиты PID: dnplayer={kd}, GnBots={kb}, Headless={kh}.\n"
-            f"Запущен ярлык: {os.path.basename(cfg.gnbots_shortcut)}",
-            cfg.thread_id
+            f"Запущен ярлык: {os.path.basename(cfg.gnbots_shortcut)}"
         )
     except Exception as e:
-        await safe_send(bot, cfg, f"❗ Не удалось запустить ярлык: {e}", cfg.thread_id)
+        reboot_text = (
+            "F99❗ Перезапуск процессов выполнен, но не удалось запустить ярлык.\n"
+            f"Убиты PID: dnplayer={kd}, GnBots={kb}, Headless={kh}.\n"
+            f"Ошибка: {e}"
+        )
     finally:
         con.close()
+
+    try:
+        bot = build_bot(cfg)
+        await flush_spool(bot, cfg)
+        await safe_send(bot, cfg, alert_text, cfg.thread_id)
+        await safe_send(bot, cfg, reboot_text, cfg.thread_id)
+    except Exception as e:
+        # Ошибка инициализации Telegram также не влияет на уже выполненный ребут.
+        print(f"[WARN] Telegram недоступен после перезапуска: {e}")
 
 # -------------------------------- Entry -------------------------------------
 if __name__ == "__main__":
@@ -809,3 +829,4 @@ if __name__ == "__main__":
         print("Прерывание пользователем.")
     except Exception as e:
         print(f"[FATAL] Необработанная ошибка: {e}")
+        sys.exit(1)
