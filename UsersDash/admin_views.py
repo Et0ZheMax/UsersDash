@@ -1335,7 +1335,7 @@ def api_account_resources():
         {
             "ok": True,
             "items": items,
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
         }
     )
 
@@ -1353,7 +1353,7 @@ def api_server_states():
 
     return jsonify({
         "items": server_states,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     })
 
 
@@ -1369,7 +1369,7 @@ def api_watch_cards():
 
     return jsonify({
         "items": watch_cards,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     })
 
 

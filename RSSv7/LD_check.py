@@ -84,6 +84,12 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 DEFAULT_CONFIG_FOLDER = r'C:\LDPlayer\LDPlayer9\vms\config'
 DEFAULT_PROFILE_FILE = r'C:/Program Files/GnBots/profiles/FRESH_NOX.json'
 crashed_file = r'C:\LDPlayer\ldChecker\crashed.json'  # для UI (цвет кнопок)
+crashed_alert_state_file = os.getenv(
+    "LDCHECK_ALERT_STATE_FILE",
+    r"C:\LDPlayer\ldChecker\crashed_alert_state.json",
+)
+ALERT_AFTER_RUNS = int(os.getenv("LDCHECK_ALERT_AFTER_RUNS", "2"))
+ALERT_REMINDER_HOURS = int(os.getenv("LDCHECK_ALERT_REMINDER_HOURS", "24"))
 
 
 def _load_rss_config(path: str) -> Dict[str, str]:
@@ -326,6 +332,74 @@ def write_crashed_file(files: List[str]) -> None:
     except Exception as e:
         print(f"[ERR] Не могу записать {crashed_file}: {e}")
 
+
+def _load_crashed_alert_state() -> dict:
+    try:
+        with open(crashed_alert_state_file, encoding="utf-8") as src:
+            data = json.load(src)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, ValueError, OSError):
+        return {}
+
+
+def _save_crashed_alert_state(state: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(crashed_alert_state_file) or ".", exist_ok=True)
+        with open(crashed_alert_state_file, "w", encoding="utf-8") as out:
+            json.dump(state, out, ensure_ascii=False, indent=2)
+    except OSError as err:
+        print(f"[WARN] Не удалось сохранить состояние алертов: {err}")
+
+
+async def notify_persistent_crashes(
+    bot: Bot,
+    server_name: str,
+    fix_url: str,
+    files: List[str],
+    names: List[str],
+) -> None:
+    """Шлёт один алерт только по слётам, пережившим автофикс несколько раз."""
+
+    previous = _load_crashed_alert_state()
+    now = time.time()
+    reminder_seconds = max(1, ALERT_REMINDER_HOURS) * 3600
+    current = {}
+    due_names = []
+
+    for file_name, human_name in zip(files, names):
+        old = previous.get(file_name, {}) if isinstance(previous.get(file_name), dict) else {}
+        consecutive = int(old.get("consecutive") or 0) + 1
+        last_alert_at = float(old.get("last_alert_at") or 0)
+        due = consecutive >= max(1, ALERT_AFTER_RUNS) and now - last_alert_at >= reminder_seconds
+        current[file_name] = {
+            "name": human_name,
+            "first_seen_at": old.get("first_seen_at") or now,
+            "last_seen_at": now,
+            "last_alert_at": now if due else last_alert_at,
+            "consecutive": consecutive,
+        }
+        if due:
+            due_names.append(human_name)
+
+    _save_crashed_alert_state(current)
+
+    if not due_names:
+        return
+
+    unique_names = sorted(set(due_names))
+    summary = ", ".join(unique_names)
+    try:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"{server_name}⚠️ Эмуляторы не восстановились после автофикса "
+                f"в {max(1, ALERT_AFTER_RUNS)} проверках: {summary}\n"
+                f"🔧 FIX: {fix_url}"
+            ),
+        )
+    except TelegramError as err:
+        print(f"[TG error] {err}")
+
 # ─────────────────────────────────────────────────────────────
 # Основная логика: проверить, отписать в TG, автофикс (кнопка!), перескан
 # ─────────────────────────────────────────────────────────────
@@ -341,7 +415,6 @@ async def check_all_configs_and_notify():
 
     server_name = resolve_server_name()
     msg_prefix = server_name
-    icon_prefix = server_name or "LD"
     fix_url = make_fix_url(server_name) or "FIX"
 
     # 1) Сканируем конфиги
@@ -350,28 +423,10 @@ async def check_all_configs_and_notify():
     # 2) Пишем файл для UI
     write_crashed_file(crashed_files)
 
-    # 3) Telegram: перс-уведомления + сводка со ссылкой
-    for human_name, file_name in zip(crashed_names, crashed_files):
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"{icon_prefix}🚨{msg_prefix}: Слетевший эмулятор — {human_name} ({file_name})"
-            )
-        except TelegramError as err:
-            print(f"[TG error] {err}")
-
+    # Технические слёты сначала пытаемся исправить молча. Telegram нужен только
+    # если один и тот же слёт пережил несколько проверок и автофикс не помог.
     if crashed_names:
-        uniq = sorted(set(crashed_names))
-        summary = ", ".join(uniq)
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"{icon_prefix}❗{msg_prefix}: слетевшие — {summary}\n🔧 FIX: {fix_url}"
-            )
-        except TelegramError as err:
-            print(f"[TG error] {err}")
-
-        # 4) АВТОФИКС = эмуляция кнопки «Починить всё»
+        # АВТОФИКС = эмуляция кнопки «Починить всё»
         #    Собираем acc_id по инстансам из профиля и шлём в бекенд.
         acc_ids: List[str] = []
         for fname in crashed_files:
@@ -380,18 +435,6 @@ async def check_all_configs_and_notify():
                 acc_ids.append(inst2acc[inst])
 
         if acc_ids:
-            # Доп. короткое сообщение в TG, чтобы было понятно, что автофикс стартовал
-            try:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"{icon_prefix}🤖{msg_prefix}: AUTO-FIX (config-only) для "
-                        f"{len(acc_ids)} — {', '.join(sorted(set(crashed_names)))}"
-                    )
-                )
-            except TelegramError:
-                pass
-
             try:
                 # ЭТО и есть «нажатие кнопки Починить всё» (фронт бьёт в тот же роут)
                 # /api/fix/config_batch → копирует ТОЛЬКО .config’и (без полного переноса ВМ)
@@ -405,16 +448,24 @@ async def check_all_configs_and_notify():
             except Exception as e:
                 print(f"[AUTO-FIX] error: {e}")
 
-            # 5) Тихий ПОВТОРНЫЙ СКАН (без телеги) → обновить crashed.json и перекрасить кнопки в UI
-            time.sleep(2)  # маленькая пауза, чтобы файлы успели лечь на диск
-            crashed_files2, _ = collect_crashed(inst2name, active_inst_ids)
-            write_crashed_file(crashed_files2)
-            if not crashed_files2:
-                print("[VERIFY] Повторная проверка: слётов не обнаружено (ок).")
-            else:
-                print(f"[VERIFY] После автофикса всё ещё слетевшие: {crashed_files2}")
+        # Тихий повторный скан обновляет UI и только затем решает, нужен ли алерт.
+        time.sleep(2)
+        unresolved_files, unresolved_names = collect_crashed(inst2name, active_inst_ids)
+        write_crashed_file(unresolved_files)
+        if not unresolved_files:
+            print("[VERIFY] Повторная проверка: слётов не обнаружено (ок).")
+        else:
+            print(f"[VERIFY] После автофикса всё ещё слетевшие: {unresolved_files}")
+        await notify_persistent_crashes(
+            bot,
+            msg_prefix,
+            fix_url,
+            unresolved_files,
+            unresolved_names,
+        )
 
     else:
+        _save_crashed_alert_state({})
         print('[INFO] Слетевших активных эмуляторов не найдено.')
 
 # ─────────────────────────────────────────────────────────────

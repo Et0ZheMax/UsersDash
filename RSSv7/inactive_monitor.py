@@ -6,12 +6,14 @@ THRESH_HOURS часов с момента last_updated. Пишет два JSON �
 
 — Использует ту же БД (resources_web.db), что и RssCounterWeb.
 — Аккаунты с "Active": false (в PROFILE) игнорируются.
-— Дедупликация уведомлений: шлём только изменения состава списка.
+— Старые зависания не скрываются: чем дольше простой, тем важнее алерт.
+— Критичные зависания периодически напоминают о себе до восстановления.
 """
 
 from __future__ import annotations
 
 import ctypes
+import html
 import json
 import os
 import sqlite3
@@ -51,8 +53,9 @@ STATE_FILE  = BASE_DIR / "inactive_state.json"   # кого слали в про
 
 TAG_TEXT = "0gain🍽️"
 
-THRESH_HOURS = int(os.getenv("INACTIVE_HOURS", "15"))
-MAX_LAST_SEEN_HOURS = int(os.getenv("INACTIVE_MAX_LAST_SEEN_HOURS", "72"))
+THRESH_HOURS = int(os.getenv("INACTIVE_HOURS", "6"))
+CRITICAL_HOURS = int(os.getenv("INACTIVE_CRITICAL_HOURS", "10"))
+REMINDER_HOURS = int(os.getenv("INACTIVE_REMINDER_HOURS", "12"))
 TELEGRAM_TOKEN = os.getenv("TG_TOKEN", "")
 TELEGRAM_CHAT  = os.getenv("TG_CHAT", "")
 TELEGRAM_MAX_LINES = 50  # не сыпем простыню в ТГ — при необходимости режем
@@ -104,15 +107,22 @@ def _tz_aware_from_iso(s: str) -> datetime | None:
     except Exception:
         return None
 
-def _telegram(text: str) -> None:
+def _telegram(text: str) -> bool:
     """Отправка сообщения в Telegram. Молчит при ошибке/отсутствии реквизитов."""
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT and text):
-        return
+        return False
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TELEGRAM_CHAT, "text": text, "parse_mode": "HTML"}, timeout=15)
+        response = requests.post(
+            url,
+            json={"chat_id": TELEGRAM_CHAT, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        return True
     except Exception as e:
         print("[telegram] error:", e, flush=True)
+        return False
 
 def _load_active_ids_from_profile() -> set | None:
     """Читаем PROFILE_PATH из config.json и набираем Id активных аккаунтов."""
@@ -158,7 +168,6 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
     Пишем файлы и шлём ТГ (с дедупликацией).
     """
     threshold = timedelta(hours=threshold_hrs)
-    max_last_seen = timedelta(hours=MAX_LAST_SEEN_HOURS)
     active_ids = _load_active_ids_from_profile()
     baseline = _load_today_baseline()
     rows = _query_resources()
@@ -186,10 +195,10 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
 
         hours_inactive = (now - dt).total_seconds() / 3600
         is_stale = now - dt >= threshold
-        not_too_old = now - dt <= max_last_seen
         zero_gain_or_unknown = day_gain in (0, None)
 
-        if is_stale and not_too_old and zero_gain_or_unknown:
+        if is_stale and zero_gain_or_unknown:
+            severity = "critical" if hours_inactive >= CRITICAL_HOURS else "warning"
             offenders.append({
                 "id": acc_id,
                 "nickname": nick,
@@ -197,6 +206,7 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
                 "hours": round(hours_inactive, 1),
                 "day_gain": day_gain,
                 "tag": TAG_TEXT if day_gain == 0 else "stale⏱️",
+                "severity": severity,
             })
 
     # ── сохраняем json ────────────────────────────────────────────────
@@ -222,29 +232,66 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
 
     # ── дедупликация и Telegram ───────────────────────────────────────
     try:
-        prev = set()
+        previous_accounts: dict[str, dict] = {}
+        legacy_ids: set[str] = set()
         if STATE_FILE.is_file():
-            prev = set(json.loads(STATE_FILE.read_text(encoding="utf-8")).get("ids", []))
+            previous_state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            raw_accounts = previous_state.get("accounts", {})
+            if isinstance(raw_accounts, dict):
+                previous_accounts = {
+                    str(acc_id): value
+                    for acc_id, value in raw_accounts.items()
+                    if isinstance(value, dict)
+                }
+            legacy_ids = set(previous_state.get("ids", []))
 
         cur = set(o["id"] for o in offenders)
-        diff_added = [o for o in offenders if o["id"] not in prev]
-        diff_removed = [pid for pid in prev if pid not in cur]
+        prev = set(previous_accounts) or legacy_ids
+        current_ts = time.time()
+        reminder_seconds = max(1, REMINDER_HOURS) * 3600
+        to_notify: List[dict] = []
 
-        # сохраняем текущее состояние для следующего запуска
-        STATE_FILE.write_text(json.dumps({"ids": list(cur)}, ensure_ascii=False, indent=2), encoding="utf-8")
+        for offender in offenders:
+            old = previous_accounts.get(offender["id"], {})
+            last_alert_at = float(old.get("last_alert_at") or 0)
+            severity_changed = old.get("severity") != offender["severity"]
+            critical_reminder_due = (
+                offender["severity"] == "critical"
+                and current_ts - last_alert_at >= reminder_seconds
+            )
+            if offender["id"] not in prev or severity_changed or critical_reminder_due:
+                to_notify.append(offender)
 
-        # шлём только, если что-то изменилось
-        if diff_added or diff_removed:
-            lines = [f"⚠️ <b>Без фарма > {threshold_hrs} ч</b> (dayGain=0 или нет baseline)"]
-            if diff_added:
-                for o in sorted(diff_added, key=lambda x: x["hours"], reverse=True):
+        recovered = [
+            previous_accounts[acc_id]
+            for acc_id in previous_accounts.keys() - cur
+        ]
+
+        notification_sent = False
+        if to_notify or recovered:
+            critical = [o for o in to_notify if o["severity"] == "critical"]
+            warning = [o for o in to_notify if o["severity"] != "critical"]
+            lines = []
+            if critical:
+                lines.append("🚨 <b>КРИТИЧЕСКИ: аккаунты не работают и не собирают ресурсы</b>")
+                for o in sorted(critical, key=lambda x: x["hours"], reverse=True):
                     ts = _tz_aware_from_iso(o["last"]).astimezone() if o["last"] else None
                     when = ts.strftime("%d.%m %H:%M") if ts else "?"
-                    tag = o.get("tag") or TAG_TEXT
-                    lines.append(f"❗ {tag} {o['nickname']} — {when}  ({o['hours']} ч)")
-            if diff_removed:
+                    nickname = html.escape(str(o["nickname"] or o["id"]))
+                    lines.append(f"🔴 <b>{nickname}</b> — нет данных с {when} ({o['hours']} ч)")
+            if warning:
+                if lines:
+                    lines.append("")
+                lines.append(f"⚠️ <b>Без фарма более {threshold_hrs} ч</b>")
+                for o in sorted(warning, key=lambda x: x["hours"], reverse=True):
+                    ts = _tz_aware_from_iso(o["last"]).astimezone() if o["last"] else None
+                    when = ts.strftime("%d.%m %H:%M") if ts else "?"
+                    nickname = html.escape(str(o["nickname"] or o["id"]))
+                    lines.append(f"🟠 <b>{nickname}</b> — нет данных с {when} ({o['hours']} ч)")
+            if recovered:
                 lines.append("")
-                lines.append("✅ Вышли из списка: " + ", ".join(diff_removed))
+                names = [html.escape(str(o.get("nickname") or "аккаунт")) for o in recovered]
+                lines.append("✅ Работа восстановлена: " + ", ".join(sorted(names)))
 
             # усечение
             if len(lines) > TELEGRAM_MAX_LINES:
@@ -252,7 +299,28 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
                 cut = len(lines) - keep
                 lines = lines[:keep] + [f"… и ещё {cut} строк"]
 
-            _telegram("\n".join(lines))
+            notification_sent = _telegram("\n".join(lines))
+
+        notified_ids = {o["id"] for o in to_notify} if notification_sent else set()
+        state_accounts = {}
+        for offender in offenders:
+            old = previous_accounts.get(offender["id"], {})
+            state_accounts[offender["id"]] = {
+                "nickname": offender["nickname"],
+                "last": offender["last"],
+                "severity": offender["severity"],
+                "last_alert_at": current_ts if offender["id"] in notified_ids else old.get("last_alert_at", 0),
+            }
+
+        # Состояние пишем после отправки: при ошибке Telegram повторим попытку через час.
+        STATE_FILE.write_text(
+            json.dumps(
+                {"version": 2, "ids": sorted(cur), "accounts": state_accounts},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     except Exception as e:
         print("[notify] error:", e)
 
