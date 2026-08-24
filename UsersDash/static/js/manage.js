@@ -243,7 +243,7 @@
     const paymentWarning = document.querySelector('[data-role="payment-warning"]');
     const CONFIG_AUTO_SAVE_DELAY_MS = 450;
     const CONFIG_PENDING_STORAGE_KEY = "usersdash.manage.pending_config_saves.v1";
-    const MANAGE_SYNC_SW_URL = "/static/js/manage-save-worker.js";
+    const MANAGE_SYNC_SW_URL = "/static/js/manage-save-worker.js?v=20260824";
     const MANAGE_SYNC_TAG = "usersdash-manage-config-sync";
     const SAVE_STATUS_CLASSES = [
         "manage-modern__save-indicator--idle",
@@ -1466,7 +1466,6 @@
 
 
     let currentConfigForm = null;
-    let configAutoSaveTimer = null;
     let lastConfigToastAt = 0;
     let lastConfigSavedAt = null;
     let applyDefaultsInProgress = false;
@@ -1599,7 +1598,6 @@
                 })
                 .catch(() => {});
         }
-        scheduleBackgroundSync().catch(() => {});
     }
 
     function notifyServiceWorkerSaveDone(accountId, stepIdx) {
@@ -1619,10 +1617,6 @@
         if (!configRoot) return;
         configRoot.innerHTML = "";
 
-        if (configAutoSaveTimer) {
-            clearTimeout(configAutoSaveTimer);
-            configAutoSaveTimer = null;
-        }
         updateSaveIndicatorByQueue();
 
         if (state.selectedStepIndex === null || !state.rawSteps[state.selectedStepIndex]) {
@@ -2180,15 +2174,6 @@
         if (!Object.keys(requestBody).length || !state.selectedAccountId) return;
 
         enqueueConfigSave(state.selectedAccountId, stepIdx, requestBody, { immediate: false });
-
-        if (configAutoSaveTimer) {
-            clearTimeout(configAutoSaveTimer);
-        }
-
-        configAutoSaveTimer = window.setTimeout(() => {
-            configAutoSaveTimer = null;
-            saveConfig(stepIdx, formEl, cfg, { isAuto: true });
-        }, CONFIG_AUTO_SAVE_DELAY_MS);
     }
 
     function enqueueConfigSave(accountId, stepIdx, requestBody, options = {}) {
@@ -2318,15 +2303,15 @@
                 keepalive: true,
             }).catch(() => {});
         });
+        // Background Sync нужен как страховка после закрытия/ухода со страницы.
+        // Во время обычного редактирования запрос выполняет только страница,
+        // иначе Service Worker может отправить старую ревизию параллельно.
+        scheduleBackgroundSync().catch(() => {});
     }
 
     async function saveConfig(stepIdx, formEl, cfg, options = {}) {
         const isAuto = Boolean(options.isAuto);
         if (!state.selectedAccountId) return;
-        if (configAutoSaveTimer) {
-            clearTimeout(configAutoSaveTimer);
-            configAutoSaveTimer = null;
-        }
         const step = state.rawSteps && state.rawSteps[stepIdx];
         const payload = collectConfig(formEl, cfg || {});
         const scheduleRules = collectScheduleRules(formEl, step && step.ScheduleRules);

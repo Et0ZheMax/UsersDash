@@ -51,6 +51,26 @@ async function deleteRecord(id) {
     db.close();
 }
 
+async function deleteRecordIfUnchanged(id, updatedAt) {
+    if (!id) return;
+    const db = await openDb();
+    await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.get(id);
+        req.onsuccess = () => {
+            const current = req.result;
+            if (current && current.updatedAt === updatedAt) {
+                store.delete(id);
+            }
+        };
+        req.onerror = () => reject(req.error);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+}
+
 async function getAllRecords() {
     const db = await openDb();
     const records = await new Promise((resolve, reject) => {
@@ -77,7 +97,9 @@ async function flushQueue() {
                 keepalive: true,
             });
             if (resp.ok) {
-                await deleteRecord(record.id);
+                // Не удаляем более новую ревизию, которая могла попасть в
+                // IndexedDB, пока отправлялся текущий запрос.
+                await deleteRecordIfUnchanged(record.id, record.updatedAt);
             }
         } catch (err) {
             // Оставляем запись в очереди для следующей попытки.
