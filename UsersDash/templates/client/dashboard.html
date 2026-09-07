@@ -137,7 +137,7 @@
             <thead>
             <tr>
                 <th>Имя фермы</th>
-                <th>Сервер</th>
+                <th>Бот-Сервер</th>
                 <th>Активна</th>
                 <th>Ресурсы (Food 🍗 / Wood 🌲 / Stone 🧱 / Gold 📀)</th>
                 <th>Прирост за сегодня</th>
@@ -186,6 +186,17 @@
                             <span class="btn-text">Обновить</span>
                             <span class="btn-spinner" hidden></span>
                         </button>
+
+                        <button class="action-pill action-pill--ghost"
+                                data-action="open-client-account-logs"
+                                data-account-id="{{ acc.id }}"
+                                data-account-name="{{ acc.name }}"
+                                data-server-name="{{ acc.server.name if acc.server else 'N/A' }}"
+                                data-logs-endpoint="{{ url_for('client.account_logs', account_id=acc.id) }}"
+                                aria-haspopup="dialog">
+                            <span class="btn-text">Логи</span>
+                            <span class="btn-spinner" hidden></span>
+                        </button>
                     </td>
 
                 </tr>
@@ -196,6 +207,42 @@
 {% else %}
     <p>У вас пока нет привязанных ферм. Обратитесь к администратору.</p>
 {% endif %}
+
+<div class="client-logs-modal" data-role="client-logs-modal" hidden>
+    <section class="client-logs-modal__dialog"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="client-logs-title">
+        <header class="client-logs-modal__header">
+            <div>
+                <h2 class="client-logs-modal__title" id="client-logs-title">Логи фермы</h2>
+                <div class="client-logs-modal__subtitle" data-role="client-logs-subtitle">—</div>
+            </div>
+            <button class="client-logs-modal__close"
+                    type="button"
+                    data-role="client-logs-close"
+                    aria-label="Закрыть">×</button>
+        </header>
+
+        <div class="client-logs-overview">
+            <span class="client-logs-status" data-role="client-logs-status">Загружаем события…</span>
+            <span class="client-logs-updated" data-role="client-logs-updated"></span>
+            <button class="client-logs-refresh"
+                    type="button"
+                    data-role="client-logs-refresh">Обновить</button>
+        </div>
+
+        <div class="client-logs-state" data-role="client-logs-loading">Загружаем последние события…</div>
+        <div class="client-logs-state client-logs-state--error" data-role="client-logs-error" hidden>
+            Не удалось загрузить события. Попробуйте ещё раз.
+        </div>
+        <div class="client-logs-state" data-role="client-logs-empty" hidden>
+            Значимых событий пока нет. Технические сообщения здесь не показываются.
+        </div>
+
+        <div class="client-logs-list" data-role="client-logs-list" hidden></div>
+    </section>
+</div>
 
 <script>
     (function () {

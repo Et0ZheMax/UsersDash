@@ -68,7 +68,10 @@ class Config:
     DATA_DIR = BASE_DIR / "data"
 
     # Путь к SQLite БД
-    SQLALCHEMY_DATABASE_URI = f"sqlite:///{DATA_DIR / 'app.db'}"
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        "MULTIDASH_DATABASE_URI",
+        f"sqlite:///{DATA_DIR / 'app.db'}",
+    )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
     # Секретный ключ для сессий (обязательно поменяй на свой)

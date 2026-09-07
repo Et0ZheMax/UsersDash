@@ -1347,8 +1347,10 @@ document.addEventListener("DOMContentLoaded", function () {
                 }
             }
             showToast(
-                kind === "paid" ? "Ферма включена после оплаты." : "Ферма отключена за неоплату.",
-                "success"
+                data.reactivation_prepared
+                    ? "Возобновление подготовлено. Запустите Viking Recovery на сервере."
+                    : (kind === "paid" ? "Ферма включена после оплаты." : "Ферма отключена за неоплату."),
+                data.reactivation_prepared ? "info" : "success"
             );
             if (data.warning) {
                 showToast(data.warning, "info");

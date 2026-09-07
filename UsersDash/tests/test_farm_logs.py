@@ -32,6 +32,7 @@ from UsersDash.services.farm_logs import (
     save_log_items,
 )
 from UsersDash.services.farm_logs_migration import ensure_farm_logs_schema
+from UsersDash.services.client_farm_logs import build_client_account_logs_payload
 from UsersDash.services import remote_api
 
 
@@ -252,6 +253,62 @@ class FarmLogsTestCase(unittest.TestCase):
         payload = build_account_logs_payload(self.account, limit=10)
         self.assertEqual(payload["summary"]["total"], 3)
         self.assertTrue(payload["items"][-1]["event_at"].endswith("+03:00"))
+
+    def test_client_feed_filters_noise_translates_and_compacts_scenarios(self):
+        events = [
+            self._event("client-1", "2026-07-19T12:00:01+03:00", 1),
+            self._event("client-2", "2026-07-19T12:00:02+03:00", 2),
+            self._event("client-3", "2026-07-19T12:00:03+03:00", 3),
+            self._event("client-4", "2026-07-19T12:00:04+03:00", 4),
+        ]
+        events[0].update(
+            event_code="system_message",
+            event_text="Skipping buffs [only run on: wrong time]",
+            raw_text="Skipping buffs [only run on: wrong time]",
+        )
+        events[1].update(
+            event_code="system_message",
+            event_text="Running gathervip",
+            raw_text="Running gathervip",
+        )
+        events[2].update(
+            event_code="send_troops",
+            event_text="Отряд отправлен",
+            raw_text="March: Send Troops",
+        )
+        events[3].update(
+            event_code="finished",
+            event_text="Сценарий завершён",
+            raw_text="gathervip Finished [00:00:16]",
+        )
+        self.assertEqual(save_log_items([(self.account, event) for event in events]), 4)
+
+        payload = build_client_account_logs_payload(self.account)
+
+        self.assertEqual(
+            [item["title"] for item in payload["items"]],
+            ["Сбор ресурсов завершён", "Отряд отправлен на сбор"],
+        )
+        self.assertEqual(payload["items"][0]["detail"], "Выполнено за 16 сек.")
+        self.assertTrue(all("raw_text" not in item for item in payload["items"]))
+
+    def test_client_feed_groups_repeated_capacity_events(self):
+        first = self._event("march-full-1", "2026-07-19T12:00:01+03:00", 1)
+        second = self._event("march-full-2", "2026-07-19T12:04:01+03:00", 2)
+        for event in (first, second):
+            event.update(
+                event_code="reached_max_marches",
+                event_text="Достигнут лимит маршей",
+                raw_text="Marches: Reached Maximum of Marches",
+            )
+        self.assertEqual(save_log_items([(self.account, first), (self.account, second)]), 2)
+
+        payload = build_client_account_logs_payload(self.account)
+
+        self.assertEqual(len(payload["items"]), 1)
+        self.assertEqual(payload["items"][0]["title"], "Все марши заняты")
+        self.assertEqual(payload["items"][0]["count"], 2)
+        self.assertEqual(payload["items"][0]["tone"], "info")
 
     @patch("UsersDash.services.farm_log_collector.fetch_server_logs_v2")
     def test_collector_advances_checkpoint_and_is_idempotent(self, fetch_mock):

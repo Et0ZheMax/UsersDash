@@ -206,6 +206,14 @@ def relaunch_as_admin_if_needed():
     if os.name != "nt":
         return
 
+    if os.environ.get("MULTIDASH_SKIP_ELEVATION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return
+
     if is_admin():
         # Уже админ — ничего не делаем
         return
@@ -899,10 +907,17 @@ if __name__ == "__main__":
     # Создаём и запускаем Flask-приложение
     # В debug-режиме Werkzeug создаёт родительский и дочерний процессы.
     # Фоновые потоки запускаем только в дочернем, чтобы не плодить дубли.
-    run_background_workers = os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    debug_enabled = os.environ.get("MULTIDASH_DEBUG", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    run_background_workers = (
+        not debug_enabled or os.environ.get("WERKZEUG_RUN_MAIN") == "true"
+    )
     app = create_app(enable_background_workers=run_background_workers)
-    # Для разработки — debug=True. В проде лучше выключить.
-    app.run(host="0.0.0.0", port=5555, debug=True)
+    app.run(host="0.0.0.0", port=5555, debug=debug_enabled)
 else:
     # Экземпляр для WSGI/CLI-запуска (gunicorn, flask run --app UsersDash.app и т.п.)
     app = create_app(enable_background_workers=False)

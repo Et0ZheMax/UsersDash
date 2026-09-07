@@ -61,6 +61,7 @@ class Farm:
     active: bool
     record_id: str = ""
     instance_id: int | None = None
+    reactivation_pending: bool = False
 
     @property
     def ready(self) -> bool:
@@ -146,6 +147,11 @@ def load_farms(path: Path | None = None) -> list[Farm]:
                     int(record["InstanceId"])
                     if str(record.get("InstanceId", "")).strip().isdigit()
                     else None
+                ),
+                reactivation_pending=(
+                    isinstance(record.get("UsersDashReactivation"), dict)
+                    and record["UsersDashReactivation"].get("status")
+                    in {"prepared", "emulator_ready"}
                 ),
             )
         )
@@ -488,6 +494,8 @@ class RecoveryEngine:
             )
         if reusable:
             self.new_index = reusable[0].index
+            self._complete_missing_disks(self.new_index)
+            self._complete_missing_config(self.new_index)
             self._repair_missing_vbox(self.new_index)
             self._validate_instance_storage(self.new_index)
             self._step(f"Повторное использование проверенного клона ID {self.new_index}")
@@ -512,10 +520,119 @@ class RecoveryEngine:
                 f"свободно {free / 1024**3:.2f} ГБ{suffix}"
             )
         self.new_index = created[0].index
+        if not created[0].name.startswith(recovery_prefix):
+            self.runner.run(
+                [
+                    self.ldconsole,
+                    "rename",
+                    "--index",
+                    str(self.new_index),
+                    "--title",
+                    temporary_name,
+                ],
+                timeout=60,
+            )
+            renamed = {item.index: item.name for item in self.list_instances()}
+            if renamed.get(self.new_index) != temporary_name:
+                raise RecoveryError(
+                    f"LDPlayer создал ID {self.new_index}, но не подтвердил служебное имя клона"
+                )
+        self._complete_missing_disks(self.new_index)
+        self._complete_missing_config(self.new_index)
         self._repair_missing_vbox(self.new_index)
         self._validate_instance_storage(self.new_index)
         self.logger.info("Создан ID %s с временным именем %s", self.new_index, temporary_name)
         return self.new_index
+
+    def _complete_missing_disks(self, index: int) -> None:
+        """Докопировать диски шаблона, если ldconsole завершил copy частично."""
+
+        vm_path = self.ldplayer_dir / "vms" / f"leidian{index}"
+        template_path = self.ldplayer_dir / "vms" / f"leidian{TEMPLATE_INDEX}"
+        required_disks = ("data.vmdk", "sdcard.vmdk", "system.vmdk")
+        missing = [name for name in required_disks if not (vm_path / name).is_file()]
+        if not missing:
+            return
+        instances = {item.index: item.name for item in self.list_instances()}
+        if not instances.get(index, "").startswith("RECOVERY_"):
+            raise RecoveryError(f"Отказано в достройке дисков для неслужебного ID {index}")
+
+        for name in missing:
+            source = template_path / name
+            target = vm_path / name
+            temporary = vm_path / f".{name}.recovery.tmp"
+            if not source.is_file():
+                raise RecoveryError(f"В чистом образе отсутствует диск {source}")
+            try:
+                shutil.copy2(source, temporary)
+                os.replace(temporary, target)
+            except Exception as exc:
+                try:
+                    temporary.unlink()
+                except OSError:
+                    pass
+                raise RecoveryError(f"Не удалось достроить диск {name} для ID {index}: {exc}") from exc
+        self.logger.warning(
+            "Достроены отсутствующие диски клона ID %s: %s",
+            index,
+            ", ".join(missing),
+        )
+
+    def _complete_missing_config(self, index: int) -> None:
+        """Дополнить урезанный конфиг клона настройками чистого шаблона.
+
+        Некоторые версии ``ldconsole copy`` создают только идентификаторы
+        телефона и имя экземпляра. Без ``adbDebug`` и остальных базовых
+        параметров такой экземпляр не запускается. Значения самого клона
+        имеют приоритет, поэтому его новая идентичность и имя сохраняются.
+        """
+
+        instances = {item.index: item.name for item in self.list_instances()}
+        if not instances.get(index, "").startswith("RECOVERY_"):
+            raise RecoveryError(f"Отказано в достройке конфига для неслужебного ID {index}")
+        config_dir = self.ldplayer_dir / "vms" / "config"
+        template_path = config_dir / f"leidian{TEMPLATE_INDEX}.config"
+        clone_path = config_dir / f"leidian{index}.config"
+        try:
+            template = json.loads(template_path.read_text(encoding="utf-8-sig"))
+            clone = json.loads(clone_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RecoveryError(f"Не удалось прочитать конфиг LDPlayer для ID {index}: {exc}") from exc
+        if not isinstance(template, dict) or not isinstance(clone, dict):
+            raise RecoveryError(f"Конфиг LDPlayer для ID {index} имеет неожиданный формат")
+
+        missing = sorted(set(template) - set(clone))
+        if not missing:
+            return
+        completed = dict(template)
+        completed.update(clone)
+        temporary_name = ""
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                prefix=f".{clone_path.name}.",
+                suffix=".tmp",
+                dir=str(config_dir),
+                delete=False,
+            ) as stream:
+                temporary_name = stream.name
+                json.dump(completed, stream, ensure_ascii=False, indent=4)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_name, clone_path)
+        except OSError as exc:
+            if temporary_name:
+                try:
+                    Path(temporary_name).unlink()
+                except OSError:
+                    pass
+            raise RecoveryError(f"Не удалось достроить конфиг LDPlayer для ID {index}: {exc}") from exc
+        self.logger.warning(
+            "Достроен урезанный конфиг клона ID %s: добавлено параметров %s",
+            index,
+            len(missing),
+        )
 
     def _repair_missing_vbox(self, index: int) -> None:
         """Достроить метаданные клона, которые LDPlayer теряет у junction-образа.
@@ -527,11 +644,32 @@ class RecoveryEngine:
         """
 
         vm_path = self.ldplayer_dir / "vms" / f"leidian{index}"
-        if list(vm_path.glob("*.vbox")):
-            return
         instances = {item.index: item.name for item in self.list_instances()}
         if not instances.get(index, "").startswith("RECOVERY_"):
             raise RecoveryError(f"Отказано в ремонте .vbox для неслужебного ID {index}")
+        existing_vbox = list(vm_path.glob("*.vbox"))
+        if len(existing_vbox) > 1:
+            raise RecoveryError(f"У служебного ID {index} найдено несколько файлов .vbox")
+        if existing_vbox:
+            try:
+                current_text = existing_vbox[0].read_text(encoding="utf-8", errors="strict")
+            except OSError as exc:
+                raise RecoveryError(f"Не удалось прочитать .vbox служебного ID {index}: {exc}") from exc
+            locations = [
+                Path(location).name.casefold()
+                for location in re.findall(
+                    r'<HardDisk\s+uuid="\{[^}]+\}"\s+location="([^"]+\.vmdk)"',
+                    current_text,
+                    flags=re.IGNORECASE,
+                )
+            ]
+            if locations == ["data.vmdk"]:
+                return
+            self.logger.warning(
+                "Пересборка устаревшего .vbox служебного ID %s: диски %s",
+                index,
+                ", ".join(locations) or "не определены",
+            )
         required_disks = {"data.vmdk", "sdcard.vmdk", "system.vmdk"}
         present_disks = {item.name.casefold() for item in vm_path.glob("*.vmdk")}
         if not required_disks.issubset(present_disks):
@@ -970,6 +1108,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Готово: {farm.name}, новый ID {index} записан в профиль GnBots, "
                 f"старый экземпляр: {backup or 'не найден'}"
             )
+            if farm.reactivation_pending:
+                print("UsersDash завершит привязку и включит ферму автоматически.")
             return 0
         parser.print_help()
         return 0

@@ -77,15 +77,17 @@ class RecoveryApp(tk.Tk):
         self.search_var.trace_add("write", lambda *_: self._fill_tree())
         ttk.Button(controls, text="Обновить профиль", command=self.reload_farms).pack(side=tk.LEFT)
 
-        columns = ("name", "custom", "active", "ready")
+        columns = ("name", "custom", "active", "reactivation", "ready")
         self.tree = ttk.Treeview(self, columns=columns, show="headings", height=13, selectmode="browse")
         self.tree.heading("name", text="Ферма")
         self.tree.heading("custom", text="IGG ID / Custom")
         self.tree.heading("active", text="Активна")
+        self.tree.heading("reactivation", text="Возобновление")
         self.tree.heading("ready", text="Данные готовы")
         self.tree.column("name", width=220)
         self.tree.column("custom", width=220)
         self.tree.column("active", width=90, anchor=tk.CENTER)
+        self.tree.column("reactivation", width=120, anchor=tk.CENTER)
         self.tree.column("ready", width=120, anchor=tk.CENTER)
         self.tree.pack(fill=tk.BOTH, expand=True, padx=12)
 
@@ -137,6 +139,7 @@ class RecoveryApp(tk.Tk):
                     farm.name,
                     farm.custom or "—",
                     "Да" if farm.active else "Нет",
+                    "Ожидает LD" if farm.reactivation_pending else "—",
                     "Да" if farm.ready else "Нет",
                 ),
             )
@@ -201,6 +204,8 @@ class RecoveryApp(tk.Tk):
             )
             if backup:
                 result += f" Старый эмулятор сохранён как {backup}."
+            if farm.reactivation_pending:
+                result += " UsersDash завершит привязку и включит ферму автоматически."
             self.events.put(("success", result))
         except CancelledError as exc:
             self.events.put(("cancelled", str(exc)))

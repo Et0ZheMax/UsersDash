@@ -98,6 +98,8 @@ class CloneTests(unittest.TestCase):
         engine.ldplayer_dir = Path("C:/LDPlayer/LDPlayer9")
         engine.runner = Mock()
         engine.new_index = None
+        engine._complete_missing_disks = Mock()
+        engine._complete_missing_config = Mock()
         engine._repair_missing_vbox = Mock()
         engine._validate_instance_storage = Mock()
         return engine
@@ -105,11 +107,16 @@ class CloneTests(unittest.TestCase):
     def test_accepts_new_index_as_ldconsole_exit_code(self) -> None:
         engine = self.make_engine()
         engine.list_instances = Mock(
-            side_effect=[[Instance(0, "4copy")], [Instance(0, "4copy"), Instance(6, "RECOVERY_Test")]]
+            side_effect=[
+                [Instance(0, "4copy")],
+                [Instance(0, "4copy"), Instance(6, "RECOVERY_Test_20260827_120000")],
+            ]
         )
         engine.runner.run.return_value = CompletedProcess([], 6, "", "")
         farm = Farm("Test", "mail", "password", "123456", "igg", True)
         self.assertEqual(engine.clone_template(farm), 6)
+        engine._complete_missing_disks.assert_called_once_with(6)
+        engine._complete_missing_config.assert_called_once_with(6)
         engine._repair_missing_vbox.assert_called_once_with(6)
         engine._validate_instance_storage.assert_called_once_with(6)
 
@@ -119,9 +126,94 @@ class CloneTests(unittest.TestCase):
         farm = Farm("Test", "mail", "password", "123456", "igg", True)
         self.assertEqual(engine.clone_template(farm), 6)
         engine.runner.run.assert_not_called()
+        engine._complete_missing_disks.assert_called_once_with(6)
+        engine._complete_missing_config.assert_called_once_with(6)
         engine._repair_missing_vbox.assert_called_once_with(6)
 
-    def test_repairs_missing_vbox_and_data_uuid(self) -> None:
+    def test_renames_default_ldplayer_title_before_repair(self) -> None:
+        engine = self.make_engine()
+        engine.list_instances = Mock(
+            side_effect=[
+                [Instance(0, "4copy")],
+                [Instance(0, "4copy"), Instance(11, "LDPlayer-11")],
+                [Instance(0, "4copy"), Instance(11, "RECOVERY_Test_20260827_120000")],
+            ]
+        )
+        engine.runner.run.side_effect = [
+            CompletedProcess([], 11, "", ""),
+            CompletedProcess([], 0, "", ""),
+        ]
+        farm = Farm("Test", "mail", "password", "123456", "igg", True)
+
+        with unittest.mock.patch("viking_recovery.datetime") as mocked_datetime:
+            mocked_datetime.now.return_value = datetime(2026, 8, 27, 12, 0, 0)
+            self.assertEqual(engine.clone_template(farm), 11)
+
+        rename_call = engine.runner.run.call_args_list[1].args[0]
+        self.assertEqual(rename_call[1:4], ["rename", "--index", "11"])
+        engine._complete_missing_disks.assert_called_once_with(11)
+        engine._complete_missing_config.assert_called_once_with(11)
+
+    def test_completes_missing_secondary_disks_from_template(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            template = root / "vms" / "leidian0"
+            clone = root / "vms" / "leidian11"
+            template.mkdir(parents=True)
+            clone.mkdir(parents=True)
+            for name in ("data.vmdk", "sdcard.vmdk", "system.vmdk"):
+                (template / name).write_bytes(("template-" + name).encode())
+            (clone / "data.vmdk").write_bytes(b"existing-data")
+            engine = object.__new__(RecoveryEngine)
+            engine.ldplayer_dir = root
+            engine.logger = Mock()
+            engine.list_instances = Mock(return_value=[Instance(11, "RECOVERY_ANGEL_test")])
+
+            RecoveryEngine._complete_missing_disks(engine, 11)
+
+            self.assertEqual((clone / "data.vmdk").read_bytes(), b"existing-data")
+            self.assertEqual((clone / "sdcard.vmdk").read_bytes(), b"template-sdcard.vmdk")
+            self.assertEqual((clone / "system.vmdk").read_bytes(), b"template-system.vmdk")
+
+    def test_completes_partial_config_without_replacing_clone_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_dir = root / "vms" / "config"
+            config_dir.mkdir(parents=True)
+            (config_dir / "leidian0.config").write_text(
+                json.dumps(
+                    {
+                        "propertySettings.phoneIMEI": "template-imei",
+                        "basicSettings.rootMode": True,
+                        "basicSettings.adbDebug": 1,
+                        "advancedSettings.resolution": {"width": 640, "height": 480},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (config_dir / "leidian11.config").write_text(
+                json.dumps(
+                    {
+                        "propertySettings.phoneIMEI": "clone-imei",
+                        "statusSettings.playerName": "RECOVERY_ANGEL_test",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            engine = object.__new__(RecoveryEngine)
+            engine.ldplayer_dir = root
+            engine.logger = Mock()
+            engine.list_instances = Mock(return_value=[Instance(11, "RECOVERY_ANGEL_test")])
+
+            RecoveryEngine._complete_missing_config(engine, 11)
+
+            completed = json.loads((config_dir / "leidian11.config").read_text(encoding="utf-8"))
+            self.assertEqual(completed["propertySettings.phoneIMEI"], "clone-imei")
+            self.assertEqual(completed["statusSettings.playerName"], "RECOVERY_ANGEL_test")
+            self.assertEqual(completed["basicSettings.adbDebug"], 1)
+            self.assertEqual(completed["advancedSettings.resolution"], {"width": 640, "height": 480})
+
+    def test_repairs_stale_vbox_and_data_uuid(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             template = root / "vms" / "leidian0"
@@ -142,6 +234,15 @@ class CloneTests(unittest.TestCase):
             )
             clone.joinpath("sdcard.vmdk").touch()
             clone.joinpath("system.vmdk").touch()
+            clone.joinpath("leidian.vbox").write_text(
+                '<Machine uuid="{20160302-aaaa-aaaa-0eee-000000000033}" name="leidian51">\n'
+                '<HardDisk uuid="{20160302-bbbb-bbbb-0eee-bbbb00000000}" '
+                'location="C:\\LDPlayer\\LDPlayer9\\system.vmdk"/>\n'
+                '<HardDisk uuid="{20160302-cccc-cccc-0eee-000000000033}" '
+                'location="data.vmdk"/>\n'
+                "</Machine>\n",
+                encoding="utf-8",
+            )
             engine = object.__new__(RecoveryEngine)
             engine.ldplayer_dir = root
             engine.logger = Mock()

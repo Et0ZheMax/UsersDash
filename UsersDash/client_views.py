@@ -37,6 +37,7 @@ from UsersDash.services.remote_api import (
 )
 from UsersDash.services.audit import log_settings_action, settings_audit_context
 from UsersDash.services.info_message import get_global_info_message_text
+from UsersDash.services.client_farm_logs import build_client_account_logs_payload
 from UsersDash.services.default_settings import (
     apply_defaults_for_account,
     has_defaults_for_tariff,
@@ -1171,6 +1172,23 @@ def account_refresh(account_id: int):
         "today_gain": res_info.get("today_gain"),
         "last_updated": res_info.get("last_updated_fmt") or res_info.get("last_updated"),
     })
+
+
+@client_bp.route("/account/<int:account_id>/logs", methods=["GET"])
+@login_required
+def account_logs(account_id: int):
+    """Возвращает безопасную пользовательскую ленту событий только для своей фермы."""
+
+    account = (
+        Account.query
+        .options(joinedload(Account.server))
+        .filter(Account.id == account_id, Account.owner_id == current_user.id)
+        .first()
+    )
+    if not account:
+        return jsonify({"ok": False, "error": "account not found"}), 404
+
+    return jsonify(build_client_account_logs_payload(account, limit=30))
 
 
 @client_bp.route("/farm-data")

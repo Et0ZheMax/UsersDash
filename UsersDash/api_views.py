@@ -377,3 +377,48 @@ def save_farms_v1():
             "apply_instance_id_updates": apply_instance_id_updates,
         }
     )
+
+
+@api_bp.route("/farms/v1/reactivation/complete", methods=["POST"])
+def complete_farm_reactivation():
+    """Подтверждает проверенный новый LDPlayer и снимает платёжную блокировку."""
+
+    try:
+        srv = _get_server_from_request()
+    except BadRequest as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+
+    payload = request.get_json(silent=True) or {}
+    internal_id = str(payload.get("internal_id") or "").strip()
+    farm_name = str(payload.get("name") or "").strip()
+    try:
+        instance_id = int(payload.get("instance_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid instance_id"}), 400
+    if not internal_id or not farm_name or instance_id < 0:
+        return jsonify({"ok": False, "error": "internal_id, name and instance_id are required"}), 400
+
+    account = Account.query.filter_by(server_id=srv.id, internal_id=internal_id).first()
+    if not account:
+        return jsonify({"ok": False, "error": "account not found by internal_id"}), 404
+    if account.name.casefold() != farm_name.casefold():
+        return jsonify(
+            {
+                "ok": False,
+                "error": f"account name mismatch: expected {account.name}",
+            }
+        ), 409
+
+    account.is_active = True
+    account.blocked_for_payment = False
+    db.session.commit()
+    return jsonify(
+        {
+            "ok": True,
+            "account_id": account.id,
+            "internal_id": internal_id,
+            "instance_id": instance_id,
+            "is_active": True,
+            "blocked_for_payment": False,
+        }
+    )

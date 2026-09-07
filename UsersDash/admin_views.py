@@ -77,6 +77,7 @@ from UsersDash.services.remote_api import (
     fetch_watch_summary,
     rename_template_payload,
     save_template_payload,
+    prepare_account_reactivation,
     update_account_active,
     update_account_menu_data,
     copy_manage_settings_for_accounts,
@@ -525,9 +526,12 @@ def _notify_template_gaps(server: Server, new_gaps: list[dict[str, Any]], report
 
 
 def _build_server_link(server: Server) -> str | None:
-    """Возвращает ссылку на сервер (api_base_url или host) с протоколом."""
+    """Возвращает публичную ссылку для перехода к серверу из интерфейса."""
 
-    raw_link = (server.api_base_url or server.host or "").strip()
+    # api_base_url может быть loopback-адресом или SSH-туннелем для быстрого
+    # внутреннего обмена настройками. В браузерной ссылке он не должен
+    # подменять публичный адрес сервера.
+    raw_link = (server.host or server.api_base_url or "").strip()
     if not raw_link:
         return None
 
@@ -1838,6 +1842,36 @@ def mark_account_paid(account_id: int):
     ) as audit_ctx:
         ok, msg = update_account_active(account, True)
         if not ok:
+            if _is_remote_account_missing(msg):
+                farm_data = FarmData.query.filter_by(account_id=account.id).first()
+                prepared, prepare_msg, prepare_data = prepare_account_reactivation(
+                    account,
+                    farm_data,
+                )
+                if prepared:
+                    account.is_active = False
+                    account.blocked_for_payment = True
+                    db.session.commit()
+                    audit_ctx["result"] = "reactivation_prepared"
+                    return (
+                        jsonify(
+                            {
+                                "ok": True,
+                                "reactivation_prepared": True,
+                                "next_payment_at": account.next_payment_at.strftime("%Y-%m-%d"),
+                                "blocked_for_payment": True,
+                                "is_active": False,
+                                "source": prepare_data.get("source"),
+                                "warning": (
+                                    "Запись фермы восстановлена в GnBots и ожидает новый эмулятор. "
+                                    "Запустите Viking Recovery на сервере и выберите эту ферму; "
+                                    "после успешного входа UsersDash включит её автоматически."
+                                ),
+                            }
+                        ),
+                        202,
+                    )
+                msg = f"{msg}; подготовка возобновления: {prepare_msg}"
             audit_ctx["result"] = "failed"
             db.session.rollback()
             return (

@@ -28,6 +28,7 @@ class RemoteActiveSyncTestCase(unittest.TestCase):
 
     def tearDown(self):
         db.session.remove()
+        db.engine.dispose()
         self.ctx.pop()
         self.tmp.cleanup()
 
@@ -83,6 +84,62 @@ class RemoteActiveSyncTestCase(unittest.TestCase):
 
         self.assertIn(account.id, result)
         self.assertFalse(account.is_active)
+
+    def test_sync_does_not_fall_back_to_same_name_when_internal_id_differs(self):
+        account = Account(
+            name="ANGEL",
+            internal_id="expected-id",
+            owner_id=self.owner.id,
+            server_id=self.server.id,
+            is_active=False,
+            blocked_for_payment=True,
+        )
+        db.session.add(account)
+        db.session.commit()
+
+        with patch.object(
+            remote_api,
+            "fetch_rssv7_manage_accounts",
+            return_value=([{"Id": "other-id", "Name": "ANGEL", "Active": True}], ""),
+        ):
+            err = remote_api.sync_accounts_active_from_remote(self.server, [account])
+
+        self.assertEqual(err, "")
+        self.assertFalse(account.is_active)
+        self.assertTrue(account.blocked_for_payment)
+
+    def test_ready_reactivation_unblocks_exact_account(self):
+        account = Account(
+            name="ANGEL",
+            internal_id="expected-id",
+            owner_id=self.owner.id,
+            server_id=self.server.id,
+            is_active=False,
+            blocked_for_payment=True,
+        )
+        db.session.add(account)
+        db.session.commit()
+
+        with patch.object(
+            remote_api,
+            "fetch_rssv7_manage_accounts",
+            return_value=(
+                [
+                    {
+                        "Id": "expected-id",
+                        "Name": "ANGEL",
+                        "Active": True,
+                        "UsersDashReactivation": {"status": "emulator_ready"},
+                    }
+                ],
+                "",
+            ),
+        ):
+            err = remote_api.sync_accounts_active_from_remote(self.server, [account])
+
+        self.assertEqual(err, "")
+        self.assertTrue(account.is_active)
+        self.assertFalse(account.blocked_for_payment)
 
     def test_farm_data_chunk_keeps_inactive_accounts_for_hide_checkbox(self):
         active_account = Account(

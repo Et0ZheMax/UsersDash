@@ -349,7 +349,10 @@ def _resolve_remote_account(
       1) если задан internal_id — ищем по:
             - id == internal_id  (GUID, который возвращает /api/resources),
             - instanceId == internal_id (если удобнее хранить номер инстанса);
-      2) если не нашли — ищем по name == nickname.
+      2) если internal_id не задан — ищем по name == nickname.
+
+    При заданном internal_id фолбэк по имени запрещён: одно и то же имя может
+    остаться у пересозданной или чужой записи, и мутация попадёт не в ту ферму.
 
     Возвращает:
       (remote_id, resource_obj)  или  (None, None),
@@ -387,6 +390,8 @@ def _resolve_remote_account(
         if key in by_instance:
             res = by_instance[key]
             return str(res.get("id")), res
+
+        return None, None
 
     # 2) По имени аккаунта → nickname
     name = getattr(account, "name", None)
@@ -927,6 +932,60 @@ def update_account_profile_menu_data(
 
     return False, _format_http_error(resp)
 
+
+def prepare_account_reactivation(account, farm_data) -> Tuple[bool, str, Dict[str, Any]]:
+    """Восстанавливает удалённую запись GnBots из серверного архива, не включая её."""
+
+    server = getattr(account, "server", None)
+    if not server:
+        return False, "server is not set for account", {}
+
+    base = _get_effective_api_base(server)
+    if not base:
+        return False, "api_base_url is empty", {}
+
+    token = str(getattr(server, "api_token", None) or "").strip()
+    if not token:
+        return False, "server api_token is empty", {}
+
+    email = str(
+        getattr(farm_data, "email", None)
+        or getattr(farm_data, "login", None)
+        or ""
+    ).strip()
+    password = str(getattr(farm_data, "password", None) or "")
+    igg_id = str(getattr(farm_data, "igg_id", None) or "").strip()
+    payload = {
+        "account_id": str(getattr(account, "internal_id", None) or "").strip(),
+        "farm_name": str(getattr(account, "name", None) or "").strip(),
+        "email": email,
+        "password": password,
+        "igg_id": igg_id,
+    }
+    missing = [key for key, value in payload.items() if not value]
+    if missing:
+        return False, f"missing reactivation fields: {', '.join(missing)}", {}
+
+    url = f"{base}/reactivation/prepare"
+    try:
+        resp = requests.post(
+            url,
+            json=payload,
+            headers={"X-UsersDash-Token": token},
+            timeout=DEFAULT_TIMEOUT,
+        )
+    except Exception as exc:
+        print(f"[remote_api] ERROR: POST {url} failed: {exc}")
+        return False, str(exc), {}
+
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if 200 <= resp.status_code < 300 and isinstance(data, dict) and data.get("ok") is True:
+        return True, "OK", data
+    return False, _format_http_error(resp), data if isinstance(data, dict) else {}
+
 def update_account_menu_data(
     account,
     *,
@@ -1261,7 +1320,7 @@ def sync_accounts_active_from_remote(server: Server, accounts: List[Any]) -> str
         remote = None
         if internal_id:
             remote = by_id.get(internal_id) or by_instance.get(internal_id)
-        if remote is None and name:
+        elif name:
             remote = by_name.get(name)
         if remote is None:
             continue
@@ -1269,6 +1328,16 @@ def sync_accounts_active_from_remote(server: Server, accounts: List[Any]) -> str
         remote_active = _remote_account_active_value(remote)
         if bool(getattr(acc, "is_active", True)) != remote_active:
             acc.is_active = remote_active
+            changed = True
+
+        marker = remote.get("UsersDashReactivation")
+        marker_status = marker.get("status") if isinstance(marker, dict) else None
+        if (
+            remote_active
+            and marker_status in {"emulator_ready", "completed"}
+            and bool(getattr(acc, "blocked_for_payment", False))
+        ):
+            acc.blocked_for_payment = False
             changed = True
 
     if changed:

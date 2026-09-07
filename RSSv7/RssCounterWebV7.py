@@ -18,6 +18,7 @@ from cryptography.fernet import Fernet
 from io import BytesIO
 from PIL import ImageGrab
 import base64
+import hmac
 import pythoncom
 import wmi
 import sys
@@ -32,6 +33,16 @@ from flask import jsonify, request
 from datetime import datetime, timezone, date, timedelta
 from flask import Flask, jsonify, render_template, request
 from flask_cors import CORS
+
+from farm_reactivation import (
+    MARKER_KEY as REACTIVATION_MARKER_KEY,
+    ReactivationError,
+    iter_pending_ready,
+    mark_emulator_ready,
+    mark_usersdash_completed,
+    prepare_reactivation,
+    write_profile_atomic as write_reactivation_profile,
+)
 
 # Установка всего: python -m pip install -U psutil paramiko requests Pillow pywin32 WMI icmplib Flask Flask-Cors
 
@@ -2231,6 +2242,7 @@ BACKUP_CONFIG_DST_ROOT = r"C:\LD_backup\configs"
 BACKUP_ACCS_DST_ROOT   = r"C:\LD_backup\accs_data"
 BACKUP_PROFILES_DST_ROOT = r"C:\LD_backup\bot_acc_configs"
 FIX_BACKUP_ROOT = r"C:\LD_backup\fix_backup"   # ← NEW
+REACTIVATION_ROLLBACK_ROOT = os.path.join(BACKUP_PROFILES_DST_ROOT, "reactivation")
 
 
 # ────────────────────────── вспомогалки ───────────────────────
@@ -5048,6 +5060,106 @@ def ldcheck():
     return jsonify({"logs": logs}), code
 
 
+LD_CONSOLE_PATH = os.getenv(
+    "LD_CONSOLE_PATH",
+    r"C:\LDPlayer\LDPlayer9\ldconsole.exe",
+)
+
+
+def _is_loopback_request() -> bool:
+    """Разрешает служебное управление LDPlayer только с самого RSS-сервера."""
+
+    remote_address = (request.remote_addr or "").strip().lower()
+    return remote_address in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+
+def _get_ld_instance_row(instance_id: int) -> str | None:
+    """Возвращает строку list2 для указанного экземпляра LDPlayer."""
+
+    if not os.path.isfile(LD_CONSOLE_PATH):
+        return None
+    try:
+        result = subprocess.run(
+            [LD_CONSOLE_PATH, "list2"],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    output = result.stdout.decode("utf-8", errors="replace")
+    prefix = f"{instance_id},"
+    return next((line.strip() for line in output.splitlines() if line.startswith(prefix)), None)
+
+
+@app.route("/api/ld/launch", methods=["POST"])
+def api_ld_launch():
+    """Запускает проверенный ID LDPlayer в интерактивной сессии RSSv7."""
+
+    if not _is_loopback_request():
+        return jsonify({"ok": False, "error": "loopback access required"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        instance_id = int(payload.get("instance_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid instance_id"}), 400
+    if instance_id < 0 or instance_id > 9999:
+        return jsonify({"ok": False, "error": "invalid instance_id"}), 400
+
+    instance_row = _get_ld_instance_row(instance_id)
+    if not instance_row:
+        return jsonify({"ok": False, "error": "LDPlayer instance not found"}), 404
+
+    try:
+        status = subprocess.run(
+            [LD_CONSOLE_PATH, "isrunning", "--index", str(instance_id)],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        status_text = status.stdout.decode("utf-8", errors="replace").strip().lower()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return jsonify({"ok": False, "error": f"status failed: {exc}"}), 500
+
+    if status_text.startswith("running"):
+        return jsonify(
+            {
+                "ok": True,
+                "already_running": True,
+                "instance_id": instance_id,
+                "instance": instance_row,
+            }
+        )
+
+    try:
+        process = subprocess.Popen(
+            [LD_CONSOLE_PATH, "launch", "--index", str(instance_id)],
+            cwd=os.path.dirname(LD_CONSOLE_PATH),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+    except OSError as exc:
+        return jsonify({"ok": False, "error": f"launch failed: {exc}"}), 500
+
+    return (
+        jsonify(
+            {
+                "ok": True,
+                "already_running": False,
+                "instance_id": instance_id,
+                "instance": instance_row,
+                "launcher_pid": process.pid,
+            }
+        ),
+        202,
+    )
+
+
 @app.route("/api/crashedEmus")
 def api_crashed_emu():
     path = r"C:\LDPlayer\ldChecker\crashed.json"
@@ -5187,6 +5299,146 @@ def api_force_refresh_today():
 
     return {"status":"ok","message":"All logs for today re-read.", "timestamp": datetime.now().isoformat()}
 
+
+def _reactivation_token_is_valid() -> bool:
+    """Проверяет отдельный серверный токен для опасной операции восстановления."""
+
+    supplied = (request.headers.get("X-UsersDash-Token") or "").strip()
+    expected = (USERSDASH_API_TOKEN or "").strip()
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
+@app.route("/api/reactivation/prepare", methods=["POST"])
+def api_reactivation_prepare():
+    """Возвращает удалённую ферму из архива в профиль в безопасном неактивном состоянии."""
+
+    if not _reactivation_token_is_valid():
+        return jsonify({"ok": False, "error": "invalid UsersDash token"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        with PROFILE_FILE_LOCK:
+            result = prepare_reactivation(
+                Path(PROFILE_PATH),
+                Path(BACKUP_PROFILES_DST_ROOT),
+                Path(REACTIVATION_ROLLBACK_ROOT),
+                account_id=payload.get("account_id"),
+                farm_name=payload.get("farm_name"),
+                email=payload.get("email"),
+                password=payload.get("password"),
+                igg_id=payload.get("igg_id"),
+            )
+    except ReactivationError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 409
+    except Exception as exc:
+        app.logger.exception("farm reactivation prepare failed")
+        return jsonify({"ok": False, "error": f"Не удалось подготовить возобновление: {exc}"}), 500
+
+    return jsonify({"ok": True, **result})
+
+
+def _usersdash_reactivation_complete(record: dict[str, t.Any]) -> tuple[bool, str]:
+    """Подтверждает в UsersDash проверенное создание нового LDPlayer."""
+
+    base_url = (USERSDASH_API_URL or "").strip().rstrip("/")
+    token = (USERSDASH_API_TOKEN or "").strip()
+    if not base_url or not token:
+        return False, "USERSDASH_API_URL/USERSDASH_API_TOKEN не настроены"
+
+    url = base_url + "/api/farms/v1/reactivation/complete"
+    payload = {
+        "internal_id": str(record.get("Id") or ""),
+        "name": str(record.get("Name") or ""),
+        "instance_id": record.get("InstanceId"),
+    }
+    try:
+        response = requests.post(
+            url,
+            params={"server": SERVER_NAME, "token": token},
+            json=payload,
+            timeout=15,
+        )
+        data = response.json() if response.content else {}
+    except Exception as exc:
+        return False, str(exc)
+    if 200 <= response.status_code < 300 and isinstance(data, dict) and data.get("ok") is True:
+        return True, "OK"
+    error = data.get("error") if isinstance(data, dict) else response.text
+    return False, f"HTTP {response.status_code}: {error or response.reason}"
+
+
+def process_pending_reactivations_once() -> dict[str, int]:
+    """Проверяет новые InstanceId, включает готовые фермы и синхронизирует UsersDash."""
+
+    ready_ids: list[str] = []
+    with PROFILE_FILE_LOCK:
+        records = _read_profiles_locked()
+        changed = False
+        for record in list(iter_pending_ready(records)):
+            instance_id = int(record.get("InstanceId"))
+            row = _get_ld_instance_row(instance_id)
+            if not row:
+                continue
+            parts = row.split(",")
+            instance_name = parts[1].strip() if len(parts) > 1 else ""
+            farm_name = str(record.get("Name") or "").strip()
+            if instance_name.casefold() != farm_name.casefold():
+                app.logger.warning(
+                    "Возобновление %s ожидает LDPlayer %s, но найдено имя %s",
+                    farm_name,
+                    instance_id,
+                    instance_name or "—",
+                )
+                continue
+            mark_emulator_ready(record)
+            ready_ids.append(str(record.get("Id") or ""))
+            changed = True
+        if changed:
+            write_reactivation_profile(Path(PROFILE_PATH), records)
+
+        callback_records = [
+            dict(record)
+            for record in records
+            if isinstance(record.get(REACTIVATION_MARKER_KEY), dict)
+            and record[REACTIVATION_MARKER_KEY].get("status") == "emulator_ready"
+        ]
+
+    completed_ids: list[str] = []
+    for record in callback_records:
+        ok, message = _usersdash_reactivation_complete(record)
+        record_id = str(record.get("Id") or "")
+        if not ok:
+            app.logger.warning("UsersDash не подтвердил возобновление %s: %s", record_id, message)
+            continue
+        with PROFILE_FILE_LOCK:
+            current = _read_profiles_locked()
+            current_record = next(
+                (item for item in current if str(item.get("Id") or "") == record_id),
+                None,
+            )
+            marker = current_record.get(REACTIVATION_MARKER_KEY) if current_record else None
+            if not isinstance(marker, dict) or marker.get("status") != "emulator_ready":
+                continue
+            mark_usersdash_completed(current_record)
+            write_reactivation_profile(Path(PROFILE_PATH), current)
+            completed_ids.append(record_id)
+
+    return {"ready": len(ready_ids), "completed": len(completed_ids)}
+
+
+def _schedule_reactivation_checker(interval_seconds: int = 15) -> None:
+    """Запускает фоновое завершение подготовленных возобновлений."""
+
+    def _worker() -> None:
+        while True:
+            try:
+                process_pending_reactivations_once()
+            except Exception:
+                app.logger.exception("reactivation checker failed")
+            time.sleep(max(5, interval_seconds))
+
+    threading.Thread(target=_worker, name="farm-reactivation-checker", daemon=True).start()
+
 @app.route("/api/manage/account/<acc_id>", methods=["PUT"])
 def api_manage_account_update(acc_id):
     """Получаем {Active:true/false}, записываем в JSON."""
@@ -5207,6 +5459,19 @@ def api_manage_account_update(acc_id):
                 break
         if not found:
             return jsonify({"error": "acc not found"}), 404
+
+        marker = found.get(REACTIVATION_MARKER_KEY)
+        if (
+            new_active
+            and isinstance(marker, dict)
+            and marker.get("status") in {"prepared", "emulator_ready"}
+        ):
+            return jsonify(
+                {
+                    "error": "reactivation pending",
+                    "reactivation_status": marker.get("status"),
+                }
+            ), 409
 
         # меняем
         found["Active"] = new_active
@@ -5819,8 +6084,15 @@ if __name__=="__main__":
     _schedule_daily_backups()   # ➟ запустит фоновый планировщик на полуночь
     _schedule_pay_notifications()  # 09:00 & 18:00 Telegram-оповещения
     _schedule_inactive_checker()   # ← запуск «монитора 15 ч»
+    _schedule_reactivation_checker()
 
 
 
     LAST_UPDATE_TIME= datetime.now(timezone.utc)
-    app.run(debug=True, host="0.0.0.0", port=5001)
+    debug_enabled = os.environ.get("RSSV7_DEBUG", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    app.run(debug=debug_enabled, host="0.0.0.0", port=5001)

@@ -940,6 +940,192 @@
         });
     }
 
+    function setupClientAccountLogsModal() {
+        const modal = document.querySelector('[data-role="client-logs-modal"]');
+        if (!modal) return;
+
+        const dialog = modal.querySelector('.client-logs-modal__dialog');
+        const closeBtn = modal.querySelector('[data-role="client-logs-close"]');
+        const refreshBtn = modal.querySelector('[data-role="client-logs-refresh"]');
+        const subtitleEl = modal.querySelector('[data-role="client-logs-subtitle"]');
+        const statusEl = modal.querySelector('[data-role="client-logs-status"]');
+        const updatedEl = modal.querySelector('[data-role="client-logs-updated"]');
+        const loadingEl = modal.querySelector('[data-role="client-logs-loading"]');
+        const errorEl = modal.querySelector('[data-role="client-logs-error"]');
+        const emptyEl = modal.querySelector('[data-role="client-logs-empty"]');
+        const listEl = modal.querySelector('[data-role="client-logs-list"]');
+
+        let currentEndpoint = '';
+        let currentButton = null;
+        let lastFocusedElement = null;
+        let controller = null;
+        let refreshTimer = null;
+
+        const statusLabels = {
+            ok: 'Последние смысловые события',
+            warning: 'Есть события, требующие проверки',
+            error: 'Бот восстанавливается после ошибки',
+            empty: 'Значимых событий пока нет',
+        };
+        const toneIcons = {
+            complete: '★',
+            success: '✓',
+            warning: '!',
+            error: '!',
+            start: '→',
+            info: '•',
+        };
+
+        const setViewState = (state) => {
+            if (loadingEl) loadingEl.hidden = state !== 'loading';
+            if (errorEl) errorEl.hidden = state !== 'error';
+            if (emptyEl) emptyEl.hidden = state !== 'empty';
+            if (listEl) listEl.hidden = state !== 'ready';
+        };
+
+        const formatActivity = (raw) => {
+            const parsed = new Date(raw || '');
+            if (Number.isNaN(parsed.getTime())) return '';
+            const seconds = Math.max(0, Math.round((Date.now() - parsed.getTime()) / 1000));
+            if (seconds < 60) return 'только что';
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes} мин назад`;
+            const hours = Math.floor(minutes / 60);
+            if (hours < 24) return `${hours} ч назад`;
+            return formatLogTime(raw);
+        };
+
+        const renderItems = (items) => {
+            if (!listEl) return;
+            listEl.innerHTML = items.map((item) => {
+                const toneRaw = String(item.tone || 'info').toLowerCase();
+                const tone = Object.prototype.hasOwnProperty.call(toneIcons, toneRaw) ? toneRaw : 'info';
+                const title = escapeHtml(item.title || 'Событие');
+                const detail = escapeHtml(item.detail || '');
+                const time = escapeHtml(formatLogTime(item.event_at));
+                const count = Math.max(1, Number(item.count) || 1);
+                return `
+                    <article class="client-log-event client-log-event--${tone}">
+                        <div class="client-log-event__marker" aria-hidden="true">${toneIcons[tone]}</div>
+                        <div class="client-log-event__body">
+                            <div class="client-log-event__topline">
+                                <strong class="client-log-event__title">${title}</strong>
+                                ${count > 1 ? `<span class="client-log-event__count">×${count}</span>` : ''}
+                            </div>
+                            ${detail ? `<div class="client-log-event__detail">${detail}</div>` : ''}
+                        </div>
+                        <time class="client-log-event__time">${time}</time>
+                    </article>
+                `;
+            }).join('');
+        };
+
+        const loadLogs = async ({ showLoader = true } = {}) => {
+            if (!currentEndpoint) return;
+            if (controller) controller.abort();
+            const requestController = new AbortController();
+            controller = requestController;
+            if (showLoader) setViewState('loading');
+            if (refreshBtn) refreshBtn.disabled = true;
+
+            try {
+                const response = await fetch(currentEndpoint, {
+                    headers: { 'x-skip-loader': '1' },
+                    signal: requestController.signal,
+                });
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok || !data.ok) {
+                    throw new Error(data.error || 'Не удалось загрузить события');
+                }
+
+                const status = Object.prototype.hasOwnProperty.call(statusLabels, data.status)
+                    ? data.status
+                    : 'empty';
+                if (statusEl) {
+                    statusEl.textContent = statusLabels[status];
+                    statusEl.dataset.status = status;
+                }
+                if (updatedEl) {
+                    const activity = formatActivity(data.last_activity_at);
+                    updatedEl.textContent = activity ? `Последняя активность: ${activity}` : '';
+                }
+
+                const items = Array.isArray(data.items) ? data.items : [];
+                if (!items.length) {
+                    if (listEl) listEl.innerHTML = '';
+                    setViewState('empty');
+                    return;
+                }
+                renderItems(items);
+                setViewState('ready');
+            } catch (error) {
+                if (error && error.name === 'AbortError') return;
+                console.error(error);
+                setViewState('error');
+            } finally {
+                if (controller === requestController) {
+                    controller = null;
+                    if (refreshBtn) refreshBtn.disabled = false;
+                    if (currentButton) setButtonLoading(currentButton, false);
+                }
+            }
+        };
+
+        const closeModal = () => {
+            modal.hidden = true;
+            modal.classList.remove('is-open');
+            document.body.classList.remove('client-logs-open');
+            if (controller) controller.abort();
+            controller = null;
+            if (refreshTimer) window.clearInterval(refreshTimer);
+            refreshTimer = null;
+            if (lastFocusedElement) lastFocusedElement.focus();
+        };
+
+        const openModal = (button) => {
+            currentEndpoint = button.dataset.logsEndpoint || '';
+            currentButton = button;
+            lastFocusedElement = button;
+            const accountName = button.dataset.accountName || 'Ферма';
+            const serverName = button.dataset.serverName || 'N/A';
+            if (subtitleEl) subtitleEl.textContent = `${accountName} · бот-сервер ${serverName}`;
+            if (statusEl) {
+                statusEl.textContent = 'Загружаем события…';
+                statusEl.dataset.status = 'loading';
+            }
+            if (updatedEl) updatedEl.textContent = '';
+            if (listEl) listEl.innerHTML = '';
+
+            modal.hidden = false;
+            modal.classList.add('is-open');
+            document.body.classList.add('client-logs-open');
+            setButtonLoading(button, true, 'Загрузка…');
+            loadLogs();
+            refreshTimer = window.setInterval(() => {
+                if (!document.hidden && !modal.hidden) loadLogs({ showLoader: false });
+            }, 30000);
+            if (closeBtn) closeBtn.focus();
+        };
+
+        document.addEventListener('click', (event) => {
+            const button = event.target.closest('button[data-action="open-client-account-logs"]');
+            if (!button) return;
+            event.preventDefault();
+            openModal(button);
+        });
+        if (closeBtn) closeBtn.addEventListener('click', closeModal);
+        if (refreshBtn) refreshBtn.addEventListener('click', () => loadLogs());
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) closeModal();
+        });
+        if (dialog) {
+            dialog.addEventListener('click', (event) => event.stopPropagation());
+        }
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && !modal.hidden) closeModal();
+        });
+    }
+
     function setupFarmLogSyncStatus() {
         const table = document.querySelector('[data-role="farm-log-sync-status"]');
         const endpoint = table ? table.dataset.statusEndpoint : '';
@@ -1341,6 +1527,7 @@
         setupClientFarmdataTariffSort();
         loadAdminAccountResources();
         setupAccountLogsModal();
+        setupClientAccountLogsModal();
         setupFarmLogFilters();
         setupFarmLogSyncStatus();
         setupServerStatesSection();

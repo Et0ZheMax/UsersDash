@@ -227,6 +227,36 @@ IGG и выбирает нужный игровой ID. Старый однои�
 - Собственный каталог с конфигами: `python UsersDash/scripts/sync_menu_data.py --configs-dir путь`
 - Альтернатива через модуль: `python -m UsersDash.scripts.sync_menu_data --mode local`
 
+### Возобновление удалённой фермы
+
+Если ферма была отключена в UsersDash, удалена из профиля GnBots и её LDPlayer удалён, нажмите «Оплачено»
+в таблице «Аккаунты / Данные». При ответе 404 UsersDash автоматически:
+
+1. восстанавливает полную запись из `C:\LD_backup\bot_acc_configs` строго по `Account.internal_id`;
+2. подставляет актуальные Email, Password и IGG ID из `FarmData`;
+3. оставляет запись неактивной до создания нового эмулятора.
+
+После этого на сервере запустите `RSSv7\VikingRecovery\run_viking_recovery.bat` и выберите подготовленную
+ферму. Утилита клонирует чистый LDPlayer ID 0, выполняет вход, переименовывает экземпляр и сохраняет новый
+`InstanceId`. RSSv7 проверяет совпадение ID и имени LDPlayer, включает ферму и подтверждает завершение в
+UsersDash. Повторно нажимать «Оплачено» не требуется.
+
+Защищённая обратная связь RSSv7 настраивается без вывода токена:
+
+```bat
+py -3 RSSv7\configure_usersdash_link.py --config RSSv7\config.json ^
+  --database UsersDash\data\app.db --server 208 --url http://127.0.0.1:5555
+```
+
+Команда также записывает `SERVER_NAME`; пустое имя сервера недопустимо, иначе UsersDash отклонит callback.
+
+На сервере 208 UsersDash запускается задачей `BotOps-UsersDash` через `run_usersdash_208.cmd`. Лаунчер
+отключает development-reloader, включает фоновые workers ровно в одном процессе и пишет stdout/stderr в
+`UsersDash\data\usersdash-live*.log`.
+
+RSSv7 на 208 запускается интерактивной задачей `BotOps-RSSv7` через `run_rssv7_208.cmd`: интерактивный токен
+нужен для работы с LDPlayer, а development-reloader отключён, чтобы фоновые мониторы не дублировались.
+
 Для серверного режима нужны настроенные API-адреса серверов и доступ к ним. В Windows можно
 запускать скрипт из каталога репозитория либо через `-m`, чтобы корректно резолвить пакет.
 
