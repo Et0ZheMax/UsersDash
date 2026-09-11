@@ -53,7 +53,7 @@ from UsersDash.models import (
     db,
 )
 from UsersDash.config import Config
-from UsersDash.services.db_backup import backup_database
+from UsersDash.services.db_backup import backup_database, daily_backup_exists
 from UsersDash.services.farmdata_backup_restore import (
     apply_farmdata_backup_restore,
     list_farmdata_backups,
@@ -406,6 +406,7 @@ def _get_or_create_account_for_import(
         is_active=True,
     )
     db.session.add(acc)
+    db.session.flush()
     return acc
 
 
@@ -4062,12 +4063,14 @@ def admin_farm_data_pull_apply():
     warnings: list[str] = []
 
     try:
-        try:
-            backup_path = backup_database("before_pull_apply")
-            print(f"[farm-data pull-apply] Backup created: {backup_path}")
-        except Exception:
-            warnings.append("Не удалось создать бэкап перед применением.")
-            traceback.print_exc()
+        # База содержит многогигабайтный журнал ферм. Полный SQLite-бэкап здесь
+        # блокировал ответ на несколько минут и пользователь повторно запускал
+        # импорт. Для отката достаточно штатного ежедневного снимка, а текущая
+        # операция дополнительно защищена одной транзакцией SQLAlchemy.
+        if not daily_backup_exists():
+            warnings.append(
+                "Ежедневный бэкап не найден; изменения защищены транзакцией БД."
+            )
 
         for row in rows:
             acc_id = row.get("account_id")
