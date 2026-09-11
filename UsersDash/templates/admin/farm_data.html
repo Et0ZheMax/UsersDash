@@ -1185,6 +1185,7 @@ document.addEventListener("DOMContentLoaded", function () {
                         <input class="farmdata-input farmdata-input--price" type="number" min="0" step="50" name="tariff" placeholder="₽" value="${escapeHtml(String(tariffInputValue))}">
                         <div class="tariff-actions">
                             <a class="icon-btn icon-btn--compact" href="${escapeHtml(item.manage_url || '#')}" title="Настройки фермы" target="_blank" rel="noopener">⚙</a>
+                            <button type="button" class="icon-btn icon-btn--compact" data-role="copy-client-cabinet-message" title="Скопировать доступ в личный кабинет" aria-label="Скопировать доступ в личный кабинет">📝</button>
                             <button type="button" class="icon-btn icon-btn--compact icon-btn--danger" data-role="farmdata-mark-unpaid" data-account-id="${item.account_id}" title="Отключить за неоплату">✖</button>
                             <button type="button" class="icon-btn icon-btn--compact" data-role="farmdata-mark-paid" data-account-id="${item.account_id}" title="Включить после оплаты">✔</button>
                         </div>
@@ -2143,6 +2144,59 @@ document.addEventListener("DOMContentLoaded", function () {
         const tag = raw.replace(/^@+/, "");
         const url = "https://t.me/" + encodeURIComponent(tag);
         window.open(url, "_blank");
+    });
+
+    function buildClientCabinetMessage(login) {
+        return `Привет! 👋
+
+Твой личный кабинет управления фермой готов.
+
+🌐 Сайт: https://etozhebot.cloudpub.ru/
+👤 Логин: ${login}
+🔑 Пароль: 123456789m
+
+Там ты сможешь просматривать данные фермы и управлять её настройками.
+
+Пожалуйста, заполни отсутствующие данные в своем личном кабинете!)`;
+    }
+
+    async function copyTextToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            await navigator.clipboard.writeText(text);
+            return;
+        }
+
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const copied = document.execCommand("copy");
+        textarea.remove();
+        if (!copied) {
+            throw new Error("Браузер не разрешил копирование.");
+        }
+    }
+
+    document.addEventListener("click", async function (e) {
+        const btn = e.target.closest('[data-role="copy-client-cabinet-message"]');
+        if (!btn) return;
+
+        const row = btn.closest("tr");
+        const login = row ? String(row.dataset.ownerName || "").trim() : "";
+        if (!login || login === "—") {
+            showToast("Не удалось определить логин клиента.", "error");
+            return;
+        }
+
+        try {
+            await copyTextToClipboard(buildClientCabinetMessage(login));
+            showToast(`Сообщение для ${login} скопировано.`, "success");
+        } catch (error) {
+            showToast(error.message || "Не удалось скопировать сообщение.", "error");
+        }
     });
 
     document.addEventListener("click", function (e) {
