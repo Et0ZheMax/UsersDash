@@ -2721,6 +2721,7 @@ h1 {
 
   .header-right {
     width: 100%;
+    min-width: 0;
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 8px;
@@ -2753,6 +2754,14 @@ h1 {
   .header-right .nav {
     grid-column: 1 / -1;
     grid-row: 2;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+  }
+
+  .header-right .nav-link {
+    box-sizing: border-box;
+    min-width: 0;
   }
 
   .toolbar {
