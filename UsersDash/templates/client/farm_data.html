@@ -316,6 +316,144 @@
         font-size: 0.85rem;
         color: #facc15;
     }
+
+    @media (max-width: 700px) {
+        .farmdata-page-title {
+            font-size: clamp(1.65rem, 8vw, 2rem);
+        }
+
+        .farmdata-subtitle {
+            line-height: 1.45;
+        }
+
+        .farmdata-card {
+            padding: 1rem;
+            border-radius: 14px;
+        }
+
+        .farmdata-card-header {
+            display: block;
+        }
+
+        .farmdata-card-title {
+            font-size: 1.25rem;
+        }
+
+        .farmdata-header-tools {
+            align-items: stretch;
+            justify-content: flex-start;
+            margin-top: 1rem;
+        }
+
+        .farmdata-sort-control {
+            width: 100%;
+            box-sizing: border-box;
+            justify-content: space-between;
+            padding-left: 0.75rem;
+        }
+
+        .farmdata-sort-control select {
+            flex: 1;
+            min-width: 0;
+            max-width: 60%;
+        }
+
+        .farmdata-badge-required {
+            align-self: flex-start;
+        }
+
+        .farmdata-table-wrapper {
+            overflow: visible;
+            margin: 1rem 0 0;
+        }
+
+        table.farmdata-table,
+        table.farmdata-table tbody,
+        table.farmdata-table tr,
+        table.farmdata-table td {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        table.farmdata-table thead {
+            display: none;
+        }
+
+        table.farmdata-table tbody tr {
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            border: 1px solid rgba(75, 85, 99, 0.65);
+            border-radius: 12px;
+            background: rgba(2, 6, 23, 0.35);
+        }
+
+        table.farmdata-table tbody tr:last-child {
+            margin-bottom: 0;
+        }
+
+        table.farmdata-table tbody td {
+            display: grid;
+            grid-template-columns: minmax(95px, 0.42fr) minmax(0, 1fr);
+            gap: 0.65rem;
+            align-items: center;
+            padding: 0.55rem 0;
+            border-bottom: 1px solid rgba(75, 85, 99, 0.28);
+        }
+
+        table.farmdata-table tbody td:last-child {
+            border-bottom: none;
+        }
+
+        table.farmdata-table tbody td::before {
+            content: attr(data-label);
+            color: #9ca3af;
+            font-size: 0.78rem;
+            line-height: 1.25;
+        }
+
+        table.farmdata-table tbody td.farmdata-name-cell {
+            display: block;
+            padding-top: 0.15rem;
+            padding-bottom: 0.8rem;
+        }
+
+        table.farmdata-table tbody td.farmdata-name-cell::before {
+            display: none;
+        }
+
+        .farmdata-name-main {
+            font-size: 1.05rem;
+        }
+
+        .farmdata-input,
+        .farmdata-input--short,
+        .farmdata-input--price {
+            max-width: none;
+            min-width: 0;
+        }
+
+        .farmdata-telegram-cell {
+            min-width: 0;
+        }
+
+        .farmdata-telegram-cell .farmdata-input {
+            min-width: 0;
+        }
+
+        .btn-telegram {
+            flex: 0 0 auto;
+            padding: 0 0.7rem;
+        }
+
+        .farmdata-actions {
+            margin-top: 1rem;
+        }
+
+        .farmdata-actions .btn {
+            width: 100%;
+        }
+    }
 </style>
 
 <h1 class="farmdata-page-title">Данные ферм</h1>
@@ -388,7 +526,7 @@
                                 data-dirty="0"
                                 data-original-index="{{ loop.index0 }}"
                                 data-tariff-value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
-                                <td class="farmdata-name-cell">
+                                <td class="farmdata-name-cell" data-label="Ферма">
                                     <div class="farmdata-name-main">
                                         {{ acc.name }}
                                     </div>
@@ -396,35 +534,35 @@
                                         Сервер: {{ acc.server.name if acc.server else "—" }}
                                     </div>
                                 </td>
-                                <td>
+                                <td data-label="E-mail">
                                     <input class="farmdata-input"
                                            type="email"
                                            name="email"
                                            placeholder="email@example.com"
                                            value="{{ fd.email if fd and fd.email else '' }}">
                                 </td>
-                                <td>
+                                <td data-label="Пароль">
                                     <input class="farmdata-input"
                                            type="text"
                                            name="password"
                                            placeholder="Пароль"
                                            value="{{ fd.password if fd and fd.password else '' }}">
                                 </td>
-                                <td>
+                                <td data-label="IGG ID">
                                     <input class="farmdata-input farmdata-input--short"
                                            type="text"
                                            name="igg_id"
                                            placeholder="Напр. 123456789"
                                            value="{{ fd.igg_id if fd and fd.igg_id else '' }}">
                                 </td>
-                                <td>
+                                <td data-label="Сервер аккаунта">
                                     <input class="farmdata-input"
                                            type="text"
                                            name="server"
                                            placeholder="Например: 208 / R9 / EU-123"
                                            value="{{ fd.server if fd and fd.server else '' }}">
                                 </td>
-                                <td>
+                                <td data-label="Telegram">
                                     <div class="farmdata-telegram-cell">
                                         <input class="farmdata-input"
                                             type="text"
@@ -439,13 +577,13 @@
                                         </button>
                                     </div>
                                 </td>
-                                <td>
+                                <td data-label="Оплата">
                                     <input class="farmdata-input farmdata-input--short"
                                            type="date"
                                            name="next_payment_date"
                                            value="{{ acc.next_payment_at.strftime('%Y-%m-%d') if acc.next_payment_at else '' }}">
                                 </td>
-                                <td>
+                                <td data-label="Тариф ₽">
                                     <input class="farmdata-input farmdata-input--price"
                                            type="number"
                                            min="0"
@@ -454,7 +592,7 @@
                                            placeholder="0"
                                            value="{{ acc.next_payment_amount if acc.next_payment_amount is not none else '' }}">
                                 </td>
-                                <td>
+                                <td data-label="Статус">
                                     <div class="farmdata-status-stack">
                                         {% if has_required %}
                                             <span class="farmdata-status-badge farmdata-status-ok">Заполнено</span>
