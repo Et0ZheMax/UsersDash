@@ -472,13 +472,18 @@ def _format_resource_value(view: Any, emoji: str) -> Markup:
     """Возвращает HTML-строку с ресурсом, приростом и эмодзи."""
 
     if view is None:
-        return Markup(f"?<span class=\"resource-emoji\">{emoji}</span>")
+        return Markup(
+            f'<span class="resource-item"><span class="resource-value">?</span>'
+            f'<span class="resource-emoji">{emoji}</span></span>'
+        )
 
     text = str(view)
 
     if "<" in text:
         safe_html = Markup(text.replace("gainValue", "resource-gain"))
-        return safe_html + Markup(f"<span class=\"resource-emoji\">{emoji}</span>")
+        return Markup('<span class="resource-item"><span class="resource-value">') + safe_html + Markup(
+            f'</span><span class="resource-emoji">{emoji}</span></span>'
+        )
 
     base_part = text
     gain_part = ""
@@ -492,7 +497,9 @@ def _format_resource_value(view: Any, emoji: str) -> Markup:
         Markup(f'<span class="resource-gain">{escape(gain_part)}</span>') if gain_part else Markup("")
     )
 
-    return Markup(base_html) + gain_html + Markup(f"<span class=\"resource-emoji\">{emoji}</span>")
+    return Markup(
+        f'<span class="resource-item"><span class="resource-value">{base_html}</span>'
+    ) + gain_html + Markup(f'<span class="resource-emoji">{emoji}</span></span>')
 
 
 def _to_moscow_time(dt: datetime) -> datetime:
@@ -585,7 +592,7 @@ def fetch_resources_for_accounts(
                 _format_resource_value(res.get("gold_view"), "📀"),
             ]
 
-            brief = Markup(" / ").join(brief_parts)
+            brief = Markup(' <span class="resource-separator">/</span> ').join(brief_parts)
 
             last_raw = res.get("last_updated")
             last_dt = _parse_remote_datetime(last_raw)
@@ -815,6 +822,30 @@ def copy_manage_settings_for_accounts(
             return False, f"unable to resolve remote_id for account {getattr(acc, 'id', '?')}"
         target_remote_ids.append(str(remote_id))
 
+    def fetch_snapshot(remote_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            snapshot_resp = requests.get(
+                f"{base}/manage/account/{quote(str(remote_id), safe='')}/settings",
+                timeout=DEFAULT_TIMEOUT,
+            )
+            if 200 <= snapshot_resp.status_code < 300:
+                snapshot = snapshot_resp.json()
+                return snapshot if isinstance(snapshot, dict) else None
+        except Exception as exc:
+            log.warning("[settings copy] snapshot failed for remote_id=%s: %s", remote_id, exc)
+        return None
+
+    source_before = fetch_snapshot(str(source_remote_id))
+    if not source_before or not isinstance(source_before.get("Data"), list):
+        return False, "unable to load source settings before copy"
+
+    target_menu_before: dict[str, Any] = {}
+    for remote_id in target_remote_ids:
+        snapshot = fetch_snapshot(remote_id)
+        if snapshot is None:
+            return False, f"unable to load target settings before copy: {remote_id}"
+        target_menu_before[remote_id] = snapshot.get("MenuData")
+
     url = f"{base}/manage/copy_settings"
     payload = {"source_id": str(source_remote_id), "dest_ids": target_remote_ids}
 
@@ -832,6 +863,12 @@ def copy_manage_settings_for_accounts(
 
         status = body.get("status") or body.get("ok")
         if status == "ok" or status is True:
+            for remote_id in target_remote_ids:
+                target_after = fetch_snapshot(remote_id)
+                if not target_after or target_after.get("Data") != source_before.get("Data"):
+                    return False, f"copy verification failed for account {remote_id}"
+                if target_after.get("MenuData") != target_menu_before.get(remote_id):
+                    return False, f"copy changed account identity for account {remote_id}"
             return True, "OK"
         return False, body.get("message") or body.get("error") or "copy failed"
 
@@ -1093,13 +1130,18 @@ def copy_manage_settings_cross_server(
     else:
         return False, "source settings has no Data"
 
-    if isinstance(source_settings.get("MenuData"), dict):
-        payload["MenuData"] = source_settings.get("MenuData")
-
     for target_account in target_accounts:
+        target_before = fetch_account_settings(target_account)
+        if not isinstance(target_before, dict):
+            return False, "unable to load target settings before copy"
         ok, msg = update_account_settings_full(target_account, payload)
         if not ok:
             return False, msg
+        target_after = fetch_account_settings(target_account)
+        if not isinstance(target_after, dict) or target_after.get("Data") != payload["Data"]:
+            return False, "copy verification failed"
+        if target_after.get("MenuData") != target_before.get("MenuData"):
+            return False, "copy changed account identity"
 
     return True, "OK"
 

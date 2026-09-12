@@ -263,6 +263,16 @@ h1 {
     margin-left: 4px;
 }
 
+.resource-item {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 2px;
+}
+
+.resource-separator {
+    margin: 0 4px;
+}
+
 .resource-gain {
     font-size: 0.85em;
     color: #9ca3af;
@@ -2833,6 +2843,44 @@ h1 {
   .client-farms-table .resource-emoji,
   .client-farms-table .resource-gain {
     white-space: nowrap;
+  }
+
+  .client-farms-table td[data-role="resources"] {
+    align-items: start;
+  }
+
+  .client-farms-table td[data-role="resources"] > .resource-item,
+  .client-farms-table td[data-role="resources"] > .resource-separator {
+    grid-column: 2;
+  }
+
+  .client-farms-table td[data-role="resources"] > .resource-item {
+    display: grid;
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 4px;
+    align-items: baseline;
+    margin: 1px 0;
+  }
+
+  .client-farms-table td[data-role="resources"] > .resource-item .resource-emoji {
+    grid-column: 1;
+    grid-row: 1;
+    margin: 0;
+  }
+
+  .client-farms-table td[data-role="resources"] > .resource-item .resource-value {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .client-farms-table td[data-role="resources"] > .resource-item .resource-gain {
+    grid-column: 2;
+    grid-row: 2;
+    margin-left: 0;
+  }
+
+  .client-farms-table td[data-role="resources"] > .resource-separator {
+    display: none;
   }
 }
 
