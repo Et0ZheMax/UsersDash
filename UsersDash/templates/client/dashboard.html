@@ -133,7 +133,7 @@
 
 {% if accounts_data %}
     <div class="table-responsive">
-        <table class="table">
+        <table class="table client-farms-table">
             <thead>
             <tr>
                 <th>Имя фермы</th>
@@ -149,24 +149,24 @@
             {% for item in accounts_data %}
                 {% set acc = item.account %}
                 <tr data-account-id="{{ acc.id }}">
-                    <td>{{ acc.name }}</td>
-                    <td>{{ acc.server.name if acc.server else "N/A" }}</td>
-                    <td>{{ "Да" if acc.is_active else "Нет" }}</td>
-                    <td data-role="resources">
+                    <td data-label="Ферма">{{ acc.name }}</td>
+                    <td data-label="Бот-сервер">{{ acc.server.name if acc.server else "N/A" }}</td>
+                    <td data-label="Активна">{{ "Да" if acc.is_active else "Нет" }}</td>
+                    <td data-label="Ресурсы" data-role="resources">
                         {% if item.has_data %}
                             {{ item.resources_brief|safe }}
                         {% else %}
                             —
                         {% endif %}
                     </td>
-                    <td data-role="today-gain">
+                    <td data-label="Прирост сегодня" data-role="today-gain">
                         {% if item.today_gain %}
                             {{ item.today_gain }}
                         {% else %}
                             —
                         {% endif %}
                     </td>
-                    <td data-role="last-updated">
+                    <td data-label="Обновлено" data-role="last-updated">
                         {% if item.last_updated %}
                             {{ item.last_updated }}
                         {% else %}
@@ -174,7 +174,7 @@
                         {% endif %}
                     </td>
 
-                    <td class="actions-cell">
+                    <td class="actions-cell" data-label="Действия">
                         <a href="{{ url_for('client.manage_page', account_id=acc.id) }}" class="action-pill" data-role="account-settings-link">
                             <span class="btn-icon-symbol">⚙</span>
                             <span class="btn-text">Настройки</span>
