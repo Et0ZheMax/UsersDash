@@ -38,12 +38,14 @@ from UsersDash.api_views import api_bp
 from UsersDash.services.db_backup import (
     ensure_backup_dir,
     ensure_daily_backup,
+    rotate_backups,
     sqlite_uri_to_path,
 )
 from UsersDash.services.farmdata_status import collect_farmdata_status
 from UsersDash.services.farm_log_collector import start_farm_log_collector
 from UsersDash.services.farm_logs_migration import ensure_farm_logs_schema
 from UsersDash.services.health_check import run_health_check
+from UsersDash.services.notifications import send_notification
 
 
 _RENTAL_BOT_THREAD: threading.Thread | None = None
@@ -720,18 +722,50 @@ def _run_midnight_backup(app: Flask):
     """Фоновая задача: гарантирует ежедневный бэкап БД и догоняет пропущенные запуски."""
 
     def run_once(reason: str) -> None:
-        try:
-            with app.app_context():
-                db_path = sqlite_uri_to_path(app.config["SQLALCHEMY_DATABASE_URI"])
-                backup_dir = db_path.parent / "backups"
-                path = ensure_daily_backup(db_file=db_path, backup_dir=backup_dir)
-                if path is None:
-                    print(f"[backup] Daily-бэкап уже есть, причина проверки: {reason}")
-                else:
-                    print(f"[backup] Ежедневный бэкап сохранён: {path}, причина: {reason}")
-        except Exception as exc:
-            print(f"[backup] Не удалось сделать ежедневный бэкап ({reason}): {exc}")
-            traceback.print_exc()
+        attempts = 3
+        last_error: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                with app.app_context():
+                    db_path = sqlite_uri_to_path(app.config["SQLALCHEMY_DATABASE_URI"])
+                    backup_dir = db_path.parent / "backups"
+                    path = ensure_daily_backup(db_file=db_path, backup_dir=backup_dir)
+                    if path is None:
+                        print(f"[backup] Daily-бэкап уже есть, причина проверки: {reason}")
+                    else:
+                        print(f"[backup] Ежедневный бэкап сохранён: {path}, причина: {reason}")
+
+                    plan = rotate_backups(backup_dir=backup_dir, dry_run=False)
+                    if plan.delete:
+                        print(
+                            "[backup] Ротация завершена: "
+                            f"удалено {len(plan.delete)} файлов / "
+                            f"{plan.delete_bytes / 1024**3:.2f} ГБ; "
+                            f"осталось {plan.bytes_after / 1024**3:.2f} ГБ"
+                        )
+                    if plan.bytes_after > plan.soft_limit_bytes:
+                        send_notification(
+                            "⚠️ UsersDash: папка SQLite-бэкапов после ротации превышает "
+                            f"лимит: {plan.bytes_after / 1024**3:.2f} ГБ."
+                        )
+                return
+            except Exception as exc:
+                last_error = exc
+                print(
+                    f"[backup] Попытка {attempt}/{attempts} не удалась "
+                    f"({reason}): {exc}"
+                )
+                traceback.print_exc()
+                if attempt < attempts:
+                    time.sleep(60)
+
+        host = (os.environ.get("COMPUTERNAME") or "unknown-host").strip()
+        with app.app_context():
+            send_notification(
+                "🚨 КРИТИЧЕСКАЯ ОШИБКА UsersDash: не удалось создать/проверить "
+                f"ежедневный SQLite-бэкап после {attempts} попыток. "
+                f"Сервер: {host}; причина запуска: {reason}; ошибка: {last_error}"
+            )
 
     def worker():
         # Важно: проверяем сразу при старте. Если приложение/сервер не работали в 00:00,
