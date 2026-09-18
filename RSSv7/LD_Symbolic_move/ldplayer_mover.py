@@ -26,6 +26,7 @@ from typing import Callable, Iterable
 
 DEFAULT_SOURCE = Path(r"C:\LDPlayer\LDPlayer9\vms")
 DEFAULT_DESTINATION = Path(r"V:\vms")
+MIN_REAL_VM_BYTES = 2 * 1024**3
 VM_NAME_RE = re.compile(r"^leidian(\d+)$", re.IGNORECASE)
 REPARSE_POINT_ATTRIBUTE = 0x400
 LDPLAYER_PROCESSES = {
@@ -51,15 +52,25 @@ class VM:
     bytes_used: int = 0
     logical_bytes: int = 0
     files: int = 0
+    latest_mtime_ns: int = 0
+    destination_bytes_used: int = 0
+    destination_logical_bytes: int = 0
+    destination_files: int = 0
+    destination_latest_mtime_ns: int = 0
+    conflict_winner: str | None = None
     scan_error: str | None = None
 
     @property
     def movable(self) -> bool:
-        return not self.is_link and not self.destination_exists and not self.scan_error
+        return (
+            not self.is_link
+            and not self.scan_error
+            and (not self.destination_exists or self.conflict_winner is not None)
+        )
 
     @property
     def recommended(self) -> bool:
-        return self.movable and self.index % 2 == 0
+        return self.movable and (self.conflict_winner is not None or self.index % 2 == 0)
 
 
 class MoveError(RuntimeError):
@@ -114,10 +125,13 @@ def allocated_file_size(path: Path, logical_size: int) -> int:
     return getattr(stat, "st_blocks", 0) * 512 or logical_size
 
 
-def tree_stats(root: Path) -> tuple[int, int, int]:
+def tree_stats(root: Path) -> tuple[int, int, int, int]:
     allocated = 0
     logical = 0
     count = 0
+    # Directory mtimes change merely from copying/renaming a folder. Use file
+    # mtimes to decide which VM contains the latest actual emulator writes.
+    latest_mtime_ns = 0
     for current, dirs, files in os.walk(root, followlinks=False):
         current_path = Path(current)
         dirs[:] = [name for name in dirs if not is_reparse_point(current_path / name)]
@@ -126,14 +140,31 @@ def tree_stats(root: Path) -> tuple[int, int, int]:
             if path.is_symlink():
                 continue
             try:
-                logical_size = path.stat().st_size
+                stat = path.stat()
+                logical_size = stat.st_size
                 logical += logical_size
                 allocated += allocated_file_size(path, logical_size)
                 count += 1
+                latest_mtime_ns = max(latest_mtime_ns, stat.st_mtime_ns)
             except FileNotFoundError:
                 # A transient file will be caught by the verification before move.
                 continue
-    return allocated, logical, count
+    if count == 0:
+        latest_mtime_ns = root.stat().st_mtime_ns
+    return allocated, logical, count, latest_mtime_ns
+
+
+def choose_conflict_winner(vm: VM) -> str | None:
+    """Choose the only plausible/current VM copy, or refuse an ambiguous conflict."""
+    source_real = vm.bytes_used >= MIN_REAL_VM_BYTES
+    destination_real = vm.destination_bytes_used >= MIN_REAL_VM_BYTES
+    if source_real != destination_real:
+        return "source" if source_real else "destination"
+    if not source_real:
+        return None
+    if vm.latest_mtime_ns == vm.destination_latest_mtime_ns:
+        return None
+    return "source" if vm.latest_mtime_ns > vm.destination_latest_mtime_ns else "destination"
 
 
 def tree_manifest(root: Path) -> dict[str, int]:
@@ -178,13 +209,30 @@ def scan_vms(source_root: Path, destination_root: Path) -> list[VM]:
 
     local = [vm for vm in found if not vm.is_link]
     with ThreadPoolExecutor(max_workers=min(4, max(1, len(local)))) as pool:
-        futures = {pool.submit(tree_stats, vm.source): vm for vm in local}
+        futures = {}
+        for vm in local:
+            futures[pool.submit(tree_stats, vm.source)] = (vm, "source")
+            if vm.destination_exists and vm.destination.is_dir() and not is_reparse_point(vm.destination):
+                futures[pool.submit(tree_stats, vm.destination)] = (vm, "destination")
         for future in as_completed(futures):
-            vm = futures[future]
+            vm, side = futures[future]
             try:
-                vm.bytes_used, vm.logical_bytes, vm.files = future.result()
+                stats = future.result()
+                if side == "source":
+                    vm.bytes_used, vm.logical_bytes, vm.files, vm.latest_mtime_ns = stats
+                else:
+                    (
+                        vm.destination_bytes_used,
+                        vm.destination_logical_bytes,
+                        vm.destination_files,
+                        vm.destination_latest_mtime_ns,
+                    ) = stats
             except (OSError, PermissionError) as exc:
                 vm.scan_error = str(exc)
+    for vm in local:
+        if vm.destination_exists and not vm.scan_error:
+            if vm.destination.is_dir() and not is_reparse_point(vm.destination):
+                vm.conflict_winner = choose_conflict_winner(vm)
     return sorted(found, key=lambda vm: vm.index)
 
 
@@ -194,7 +242,11 @@ def status_text(vm: VM) -> str:
     if vm.scan_error:
         return "ошибка чтения"
     if vm.destination_exists:
-        return "конфликт: папка уже есть на резервном диске"
+        if vm.conflict_winner == "source":
+            return "конфликт решится: актуальнее папка на C:, старая резервная будет удалена"
+        if vm.conflict_winner == "destination":
+            return "конфликт решится: актуальнее резервная папка, старая на C: будет удалена"
+        return "конфликт неоднозначен: обе папки меньше 2 ГиБ или одинаково актуальны"
     return "РЕКОМЕНДУЕТСЯ" if vm.recommended else "можно перенести"
 
 
@@ -328,6 +380,94 @@ def create_directory_link(link: Path, target: Path, link_type: str) -> None:
         raise MoveError(f"не удалось создать junction: {message}")
 
 
+def recheck_conflict(vm: VM) -> str:
+    """Re-scan both copies before a destructive conflict resolution."""
+    if (
+        is_reparse_point(vm.source)
+        or is_reparse_point(vm.destination)
+        or not vm.source.is_dir()
+        or not vm.destination.is_dir()
+    ):
+        raise MoveError("папки конфликта изменились; выполните повторное сканирование")
+    source_stats = tree_stats(vm.source)
+    destination_stats = tree_stats(vm.destination)
+    current = VM(
+        name=vm.name,
+        index=vm.index,
+        source=vm.source,
+        destination=vm.destination,
+        is_link=False,
+        destination_exists=True,
+        bytes_used=source_stats[0],
+        logical_bytes=source_stats[1],
+        files=source_stats[2],
+        latest_mtime_ns=source_stats[3],
+        destination_bytes_used=destination_stats[0],
+        destination_logical_bytes=destination_stats[1],
+        destination_files=destination_stats[2],
+        destination_latest_mtime_ns=destination_stats[3],
+    )
+    winner = choose_conflict_winner(current)
+    if winner is None or winner != vm.conflict_winner:
+        raise MoveError("актуальность папок изменилась или неоднозначна; выполните повторное сканирование")
+    return winner
+
+
+def use_existing_destination(
+    vm: VM,
+    link_type: str,
+    status_callback: Callable[[str], None] | None = None,
+) -> str | None:
+    """Keep a verified destination VM and replace the stale source with a link."""
+    token = uuid.uuid4().hex[:10]
+    backup = vm.source.parent / f".{vm.name}.conflict-old-{token}"
+    journal = vm.source.parent / f".ldplayer-mover-{vm.name}.json"
+    payload = {
+        "vm": vm.name,
+        "source": str(vm.source),
+        "destination": str(vm.destination),
+        "staging": str(vm.destination.parent / f".{vm.name}.copying-{token}"),
+        "backup": str(backup),
+        "stage": "conflict_destination_starting",
+        "mode": "destination_winner",
+    }
+    switched = False
+    try:
+        destination_manifest = tree_manifest(vm.destination)
+        if status_callback:
+            status_callback("Переключение на актуальную резервную папку")
+        write_journal(journal, payload)
+        vm.source.rename(backup)
+        payload["stage"] = "conflict_destination_source_renamed"
+        write_journal(journal, payload)
+        create_directory_link(vm.source, vm.destination, link_type)
+        switched = True
+        if tree_manifest(vm.destination) != destination_manifest:
+            raise MoveError("резервная папка изменилась во время переключения")
+        payload["stage"] = "conflict_destination_link_created"
+        write_journal(journal, payload)
+        remove_tree(backup)
+        journal.unlink(missing_ok=True)
+        return None
+    except Exception as exc:
+        if switched:
+            return (
+                "актуальная резервная папка подключена, но старую копию на C: "
+                "не удалось полностью удалить; очистка повторится при следующем запуске"
+            )
+        try:
+            if is_reparse_point(vm.source):
+                os.rmdir(vm.source)
+            if backup.exists() and not vm.source.exists():
+                backup.rename(vm.source)
+            journal.unlink(missing_ok=True)
+        except Exception as rollback_exc:
+            raise MoveError(f"{exc}; не завершён откат: {rollback_exc}") from exc
+        if isinstance(exc, MoveError):
+            raise
+        raise MoveError(str(exc)) from exc
+
+
 def copy_with_progress(
     source: Path,
     staging: Path,
@@ -375,6 +515,7 @@ def move_one(
     token = uuid.uuid4().hex[:10]
     staging = destination_root / f".{vm.name}.copying-{token}"
     backup = vm.source.parent / f".{vm.name}.original-{token}"
+    conflict_backup = destination_root / f".{vm.name}.conflict-old-{token}"
     journal = vm.source.parent / f".ldplayer-mover-{vm.name}.json"
     payload = {
         "vm": vm.name,
@@ -382,16 +523,29 @@ def move_one(
         "destination": str(vm.destination),
         "staging": str(staging),
         "backup": str(backup),
+        "conflict_backup": str(conflict_backup),
         "stage": "starting",
     }
 
     switched = False
     destination_created = False
+    conflict_destination_renamed = False
     try:
         if is_reparse_point(vm.source) or not vm.source.is_dir():
             raise MoveError("исходная папка изменилась после сканирования")
-        if vm.destination.exists() or is_reparse_point(vm.destination):
-            raise MoveError("целевая папка уже существует")
+        destination_exists_now = vm.destination.exists() or is_reparse_point(vm.destination)
+        if destination_exists_now:
+            if vm.conflict_winner is None:
+                raise MoveError("целевая папка уже существует")
+            winner = recheck_conflict(vm)
+            if winner == "destination":
+                return use_existing_destination(vm, link_type, status_callback)
+            payload["stage"] = "conflict_source_renaming_destination"
+            write_journal(journal, payload)
+            vm.destination.rename(conflict_backup)
+            conflict_destination_renamed = True
+            payload["stage"] = "conflict_source_destination_renamed"
+            write_journal(journal, payload)
 
         if status_callback:
             status_callback("Подготовка списка файлов")
@@ -457,6 +611,8 @@ def move_one(
                 and not is_reparse_point(vm.source)
             ):
                 remove_tree(vm.destination)
+            if conflict_destination_renamed and conflict_backup.exists() and not vm.destination.exists():
+                conflict_backup.rename(vm.destination)
             journal.unlink(missing_ok=True)
         except Exception as rollback_exc:
             raise MoveError(
@@ -471,6 +627,8 @@ def move_one(
         if status_callback:
             status_callback("Очистка исходного диска")
         remove_tree(backup)
+        if conflict_backup.exists():
+            remove_tree(conflict_backup)
         journal.unlink(missing_ok=True)
     except Exception:
         return (
@@ -497,8 +655,11 @@ def recover_journals(
             destination = Path(data["destination"])
             staging = Path(data["staging"])
             backup = Path(data["backup"])
+            conflict_backup_value = data.get("conflict_backup")
+            conflict_backup = Path(conflict_backup_value) if conflict_backup_value else None
             vm_name = str(data["vm"])
             stage = str(data.get("stage", ""))
+            mode = str(data.get("mode", "move"))
             expected_source = source_root / vm_name
             expected_destination = destination_root / vm_name
             if (
@@ -508,7 +669,20 @@ def recover_journals(
                 or staging.parent != destination_root
                 or backup.parent != source_root
                 or not staging.name.startswith(f".{vm_name}.copying-")
-                or not backup.name.startswith(f".{vm_name}.original-")
+                or not (
+                    backup.name.startswith(f".{vm_name}.original-")
+                    or (
+                        mode == "destination_winner"
+                        and backup.name.startswith(f".{vm_name}.conflict-old-")
+                    )
+                )
+                or (
+                    conflict_backup is not None
+                    and (
+                        conflict_backup.parent != destination_root
+                        or not conflict_backup.name.startswith(f".{vm_name}.conflict-old-")
+                    )
+                )
             ):
                 raise MoveError("журнал содержит пути вне разрешённых папок")
             destination_owned = stage in {
@@ -521,11 +695,15 @@ def recover_journals(
                 # The link is valid only if its target survived.
                 if destination.exists():
                     remove_tree(backup)
+                    if conflict_backup is not None and conflict_backup.exists():
+                        remove_tree(conflict_backup)
                     journal.unlink(missing_ok=True)
                     report(f"{data['vm']}: перенос был завершён, удалён остаток оригинала.")
                     continue
                 os.rmdir(source)
             if is_reparse_point(source) and destination.exists() and not backup.exists():
+                if conflict_backup is not None and conflict_backup.exists():
+                    remove_tree(conflict_backup)
                 journal.unlink(missing_ok=True)
                 report(f"{data['vm']}: перенос уже был успешно завершён.")
                 continue
@@ -540,6 +718,14 @@ def recover_journals(
                 and not is_reparse_point(source)
             ):
                 remove_tree(destination)
+            if (
+                conflict_backup is not None
+                and conflict_backup.exists()
+                and not destination.exists()
+                and source.exists()
+                and not is_reparse_point(source)
+            ):
+                conflict_backup.rename(destination)
             journal.unlink(missing_ok=True)
             report(f"{data['vm']}: исходное состояние восстановлено.")
         except Exception as exc:

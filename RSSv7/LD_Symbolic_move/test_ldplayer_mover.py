@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -115,6 +116,75 @@ class TransferTests(unittest.TestCase):
             )
             mover.recover_journals(source_root, destination_root)
             self.assertEqual(marker.read_text("utf-8"), "keep")
+
+    def test_conflict_prefers_only_real_sized_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_root = root / "source"
+            destination_root = root / "destination"
+            source = source_root / "leidian8"
+            destination = destination_root / "leidian8"
+            source.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            (source / "tiny.tmp").write_bytes(b"x")
+            (destination / "data.vmdk").write_bytes(b"real-vm")
+
+            with patch.object(mover, "MIN_REAL_VM_BYTES", 2):
+                vm = mover.scan_vms(source_root, destination_root)[0]
+                warning = mover.move_one(vm, destination_root, "junction")
+
+            self.assertEqual(vm.conflict_winner, "destination")
+            self.assertTrue(vm.movable)
+            self.assertIsNone(warning)
+            self.assertTrue(mover.is_reparse_point(source))
+            self.assertEqual((source / "data.vmdk").read_bytes(), b"real-vm")
+            self.assertFalse(any(source_root.glob(".leidian8.conflict-old-*")))
+
+    def test_conflict_with_two_tiny_copies_stays_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_root = root / "source"
+            destination_root = root / "destination"
+            source = source_root / "leidian8"
+            destination = destination_root / "leidian8"
+            source.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            (source / "one.tmp").write_bytes(b"1")
+            (destination / "two.tmp").write_bytes(b"2")
+
+            with patch.object(mover, "MIN_REAL_VM_BYTES", 1024):
+                vm = mover.scan_vms(source_root, destination_root)[0]
+
+            self.assertIsNone(vm.conflict_winner)
+            self.assertFalse(vm.movable)
+
+    def test_conflict_prefers_newer_real_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_root = root / "source"
+            destination_root = root / "destination"
+            source = source_root / "leidian8"
+            destination = destination_root / "leidian8"
+            source.mkdir(parents=True)
+            destination.mkdir(parents=True)
+            source_file = source / "data.vmdk"
+            destination_file = destination / "data.vmdk"
+            source_file.write_bytes(b"new-source")
+            destination_file.write_bytes(b"old-destination")
+            os.utime(destination_file, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(destination, ns=(1_000_000_000, 1_000_000_000))
+            os.utime(source_file, ns=(2_000_000_000, 2_000_000_000))
+            os.utime(source, ns=(2_000_000_000, 2_000_000_000))
+
+            with patch.object(mover, "MIN_REAL_VM_BYTES", 2):
+                vm = mover.scan_vms(source_root, destination_root)[0]
+                self.assertEqual(vm.conflict_winner, "source")
+                warning = mover.move_one(vm, destination_root, "junction")
+
+            self.assertIsNone(warning)
+            self.assertTrue(mover.is_reparse_point(source))
+            self.assertEqual((destination / "data.vmdk").read_bytes(), b"new-source")
+            self.assertFalse(any(destination_root.glob(".leidian8.conflict-old-*")))
 
 
 if __name__ == "__main__":

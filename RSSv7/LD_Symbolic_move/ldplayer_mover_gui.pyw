@@ -250,10 +250,23 @@ class MoverGUI:
             )
             return
         names = ", ".join(vm.name for vm in chosen)
+        conflict_lines = []
+        for vm in chosen:
+            if vm.conflict_winner == "source":
+                conflict_lines.append(f"{vm.name}: будет удалена старая папка на резервном диске")
+            elif vm.conflict_winner == "destination":
+                conflict_lines.append(f"{vm.name}: будет удалена старая папка на C:")
+        conflict_warning = ""
+        if conflict_lines:
+            conflict_warning = (
+                "\n\nРазрешение конфликтов (после повторной проверки):\n"
+                + "\n".join(conflict_lines)
+            )
         if not messagebox.askyesno(
             "Подтверждение переноса",
             f"Будут перенесены:\n{names}\n\n"
-            f"На диске C освободится примерно {mover.human_size(total)}.\n\nПродолжить?",
+            f"На диске C освободится примерно {mover.human_size(total)}."
+            f"{conflict_warning}\n\nПродолжить?",
         ):
             return
 
