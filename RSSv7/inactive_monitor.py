@@ -56,8 +56,8 @@ TAG_TEXT = "0gain🍽️"
 THRESH_HOURS = int(os.getenv("INACTIVE_HOURS", "6"))
 CRITICAL_HOURS = int(os.getenv("INACTIVE_CRITICAL_HOURS", "10"))
 REMINDER_HOURS = int(os.getenv("INACTIVE_REMINDER_HOURS", "12"))
-TELEGRAM_TOKEN = os.getenv("TG_TOKEN", "")
-TELEGRAM_CHAT  = os.getenv("TG_CHAT", "")
+TELEGRAM_TOKEN = os.getenv("TG_TOKEN") or os.getenv("RSSV7_LD_PROBLEMS_BOT_TOKEN", "")
+TELEGRAM_CHAT = os.getenv("TG_CHAT") or os.getenv("RSSV7_LD_PROBLEMS_CHAT_ID", "")
 TELEGRAM_MAX_LINES = 50  # не сыпем простыню в ТГ — при необходимости режем
 
 # ─────────────────────────── Утилиты ───────────────────────────

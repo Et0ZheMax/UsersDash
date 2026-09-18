@@ -96,13 +96,13 @@ PROBLEM_LABELS = {
     "other": "Other⚠️",
 }
 
-# Технические рестарты/слёты остаются в JSON и веб-сводке, но не засоряют Telegram.
-# В Telegram попадают только проблемы, которые напрямую означают отсутствие работы.
+# Рестарты, слёты и ошибки запуска критичны: они могут означать, что аккаунт
+# фактически не работает, даже если процесс эмулятора ещё существует.
 TELEGRAM_CRITICAL_KINDS = {
     value.strip()
     for value in os.getenv(
         "LDP_TELEGRAM_CRITICAL_KINDS",
-        "update,idle,no_tasks,broken_acc,account_switch",
+        "update,restart,launch_restart,crash,idle,no_tasks,broken_acc,account_switch",
     ).split(",")
     if value.strip()
 }
@@ -542,18 +542,18 @@ def split_into_messages(lines: list[str]) -> list[str]:
         msgs.append("\n".join(cur))
     return msgs
 
-async def safe_send(bot: Bot, text: str) -> None:
+async def safe_send(bot: Bot, text: str) -> bool:
     """Отправка сообщения в TG с защитой от Flood-limit и таймаутов."""
     retries = 0
     while True:
         try:
             await bot.send_message(chat_id=chat_id, text=text)
-            return
+            return True
         except TimedOut:
             retries += 1
             if retries > 3:
                 print("Telegram-error: Timed out (превышено число попыток)")
-                return
+                return False
             await asyncio.sleep(min(5 * retries, 20))
         except TelegramError as e:
             m = str(e)
@@ -561,12 +561,13 @@ async def safe_send(bot: Bot, text: str) -> None:
                 delay = int(re.search(r"Retry in (\d+)", m).group(1))
                 await asyncio.sleep(delay)
             elif "Message is too long" in m:
+                all_sent = True
                 for part in split_into_messages(text.split("\n")):
-                    await safe_send(bot, part)
-                return
+                    all_sent = await safe_send(bot, part) and all_sent
+                return all_sent
             else:
                 print("Telegram-error:", e)
-                return
+                return False
 
 def prettify(raw: str, account: str) -> str:
     """Готовит читабельную строку для TG."""
@@ -763,10 +764,18 @@ def _select_telegram_alerts(records: list[dict]) -> list[dict]:
         state_key = f"{account}\x1f{kind}"
         if now - state.get(state_key, 0) >= cooldown:
             selected.append(rec)
-            state[state_key] = now
-
-    _save_telegram_state(state)
     return selected
+
+
+def _mark_telegram_alerts_sent(records: list[dict]) -> None:
+    """Записывает cooldown только после подтверждённой отправки Telegram."""
+
+    state = _load_telegram_state()
+    sent_at = time.time()
+    for rec in records:
+        kind, _ = _classify_problem(rec["line"])
+        state[f"{rec['account']}\x1f{kind}"] = sent_at
+    _save_telegram_state(state)
 
 def deduplicate(recs: list[dict]) -> list[dict]:
     seen, out = set(), []
@@ -953,12 +962,7 @@ async def check_logs_and_notify() -> None:
         kind, _ = _classify_problem(rec["line"])
         per_account_all[rec["account"]][kind] += 1
 
-    if not new and not config_records:
-        _save_summary(per_account_all, len(current_found))
-        print("Новых проблем нет.")
-        return
-
-    telegram_records = _select_telegram_alerts(deduplicate(new + config_records))
+    telegram_records = _select_telegram_alerts(deduplicate(current_found + config_records))
     per_account: dict[str, Counter] = defaultdict(Counter)
     for rec in telegram_records:
         kind, _ = _classify_problem(rec["line"])
@@ -970,12 +974,14 @@ async def check_logs_and_notify() -> None:
             for acc, counter in sorted(per_account.items())
         ]
         header = f"{len(per_account)} аккаунт(а) требуют внимания"
-        await safe_send(
+        notification_sent = await safe_send(
             bot,
             f"{SERVER_LABEL}🚨 КРИТИЧЕСКИЕ проблемы: {header}\n" + "\n".join(summary_lines),
         )
+        if notification_sent:
+            _mark_telegram_alerts_sent(telegram_records)
     else:
-        print("Новые события только технические; Telegram-уведомление подавлено.")
+        print("Нет критичных проблем, для которых истёк Telegram cooldown.")
 
     _save_summary(per_account_all, len(current_found))
 

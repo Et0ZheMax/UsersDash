@@ -20,6 +20,30 @@ import LD_problems
 
 
 class CurrentProblemRecordsTests(unittest.TestCase):
+    def test_launch_restart_is_a_telegram_critical_problem(self) -> None:
+        self.assertIn("launch_restart", LD_problems.TELEGRAM_CRITICAL_KINDS)
+
+    def test_telegram_cooldown_is_saved_only_after_confirmed_send(self) -> None:
+        record = {
+            "account": "kalombinaF1",
+            "file": "bot.txt",
+            "line": "2026-09-15 18:49:37.600 +03:00 |id|Launch: Many restarts detected",
+        }
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            state_path = Path(tmp_dir) / "telegram_state.json"
+            original_state_file = LD_problems.TELEGRAM_STATE_FILE
+            LD_problems.TELEGRAM_STATE_FILE = str(state_path)
+            try:
+                selected = LD_problems._select_telegram_alerts([record])
+                self.assertEqual(selected, [record])
+                self.assertFalse(state_path.exists())
+
+                LD_problems._mark_telegram_alerts_sent(selected)
+                self.assertEqual(LD_problems._select_telegram_alerts([record]), [])
+            finally:
+                LD_problems.TELEGRAM_STATE_FILE = original_state_file
+
     def test_successful_cycle_clears_older_login_and_restart_errors(self) -> None:
         records = [
             {

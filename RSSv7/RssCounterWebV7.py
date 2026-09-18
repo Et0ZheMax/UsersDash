@@ -1,4 +1,5 @@
 import os
+import html
 import json
 import re
 import stat
@@ -220,6 +221,9 @@ LAUNCH_FAILURE_PATTERNS = (
     "many restarts detected",
     "we will now restart the instance",
 )
+LAUNCH_FAILURE_ALERT_STATE_PATH = os.path.join(BASE_DIR, "launch_failure_alert_state.json")
+LAUNCH_FAILURE_ALERT_LOCK_PATH = LAUNCH_FAILURE_ALERT_STATE_PATH + ".lock"
+LAUNCH_FAILURE_ALERT_COOLDOWN_HOURS = int(os.getenv("LAUNCH_FAILURE_ALERT_COOLDOWN_HOURS", "12"))
 
 # 3) БД
 RESOURCES_DB   = os.path.join(BASE_DIR, "resources_web.db")
@@ -227,8 +231,16 @@ LOGS_DB        = os.path.join(BASE_DIR, "logs_cache.db")
 USERDASH_DB    = os.path.abspath(os.path.join(BASE_DIR, "..", "UsersDash", "data", "app.db"))
 
 # 4) Телега — из ENV имеет приоритет, затем config.json
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", CONFIG.get("TELEGRAM_TOKEN", ""))
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", CONFIG.get("TELEGRAM_CHAT_ID", ""))
+TELEGRAM_TOKEN = (
+    os.getenv("TELEGRAM_TOKEN")
+    or os.getenv("RSSV7_LD_PROBLEMS_BOT_TOKEN")
+    or CONFIG.get("TELEGRAM_TOKEN", "")
+)
+TELEGRAM_CHAT_ID = (
+    os.getenv("TELEGRAM_CHAT_ID")
+    or os.getenv("RSSV7_LD_PROBLEMS_CHAT_ID")
+    or CONFIG.get("TELEGRAM_CHAT_ID", "")
+)
 
 # 4.1) Имя сервера (для заголовков/уведомлений)
 APP_TITLE = f"RssV7_{SERVER_NAME}" if SERVER_NAME else DEFAULT_TITLE
@@ -2816,33 +2828,44 @@ def _get_pay_alerts():
     status:
       overdue  – дата оплаты прошла или сегодня
       soon     – дата через 1-2 дня
-      missing  – нет даты оплаты или других ключевых полей
-                 (Email / Password / IGG / Tariff)
+      missing  – в UsersDash нет даты оплаты или тарифа
       ok       – скрываем из виджета
     """
     today = date.today()
-    res   = []
+    res = []
+    active_accounts = load_active_names()
+    remote_items, errors = load_usersdash_accounts(SERVER)
+    if errors:
+        print("[PAY] UsersDash: " + "; ".join(errors), flush=True)
+    if not remote_items:
+        print("[PAY] Нет данных UsersDash — платёжная рассылка пропущена.", flush=True)
+        return []
 
-    sync_account_meta()                      # актуализируем account_meta
-    name_map = dict(load_active_names())     # показываем только активные
+    by_internal_id = {
+        str(item.get("internal_id")): item
+        for item in remote_items
+        if item.get("internal_id")
+    }
+    by_name = {
+        str(item.get("name")): item
+        for item in remote_items
+        if item.get("name")
+    }
 
-    conn = open_db(RESOURCES_DB)
-    c    = conn.cursor()
-    rows = c.execute("""
-        SELECT id, email, passwd, igg, pay_until, tariff_rub
-        FROM account_meta
-    """).fetchall()
-    conn.close()
-
-    for acc_id, email, passwd, igg, pu, tariff in rows:
-        if acc_id not in name_map:           # выключенные аккаунты пропускаем
+    for acc_id, account_name in active_accounts:
+        item = by_internal_id.get(str(acc_id)) or by_name.get(str(account_name))
+        if item is None:
+            print(
+                f"[PAY] Аккаунт {account_name or acc_id} не найден в UsersDash — пропускаем.",
+                flush=True,
+            )
             continue
 
         missing = []
-        if not email:   missing.append("Email")
-        if not passwd:  missing.append("Password")
-        if not igg:     missing.append("IGG")
-        if not tariff:  missing.append("Tariff")
+        pu = item.get("next_payment_at")
+        tariff = item.get("tariff")
+        if tariff in (None, "", 0):
+            missing.append("Tariff")
 
         paystr = ""
         status = "ok"
@@ -2869,7 +2892,7 @@ def _get_pay_alerts():
         if status != "ok":                    # только проблемные попадают в виджет
             res.append({
                 "id"     : acc_id,
-                "name"   : name_map[acc_id],
+                "name"   : account_name,
                 "pay"    : paystr,
                 "tariff" : tariff or 0,
                 "status" : status,
@@ -2885,11 +2908,11 @@ def _get_pay_alerts():
 # ▶▶▶ Telegram helpers ◀◀◀
 # Универсальная отправка в Telegram.
 # Параметр add_fix_link сохранён для обратной совместимости, но игнорируется.
-def _send_telegram(text: str, add_fix_link: bool | None = None) -> None:
+def _send_telegram(text: str, add_fix_link: bool | None = None) -> bool:
     # Если токены/чат не заданы — не падаем, а аккуратно сообщаем в консоль
     if not (TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
         print("[TG] skipped: TELEGRAM_TOKEN/CHAT_ID not set", flush=True)
-        return
+        return False
     try:
         url  = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         resp = requests.post(url, json={
@@ -2899,8 +2922,11 @@ def _send_telegram(text: str, add_fix_link: bool | None = None) -> None:
         }, timeout=15)
         if resp.status_code != 200:
             print(f"[TG] HTTP {resp.status_code}: {resp.text}", flush=True)
+            return False
+        return True
     except Exception as e:
         print(f"[TG] exception: {e}", flush=True)
+        return False
 
 
 
@@ -3917,6 +3943,18 @@ def _line_has_launch_failure(line: str) -> bool:
     return any(pattern in low for pattern in LAUNCH_FAILURE_PATTERNS)
 
 
+def _format_alert_datetime(value: t.Any) -> str:
+    """Форматирует время события для панели и Telegram без ISO-миллисекунд."""
+
+    text = str(value or "").strip()
+    if not text:
+        return "?"
+    try:
+        return datetime.fromisoformat(text).strftime("%d.%m.%Y %H:%M:%S")
+    except (TypeError, ValueError):
+        return text
+
+
 def _collect_launch_failure_watch() -> list[dict[str, t.Any]]:
     """Подмешивает критичные циклы рестартов игры из cached_logs.
 
@@ -3959,13 +3997,15 @@ def _collect_launch_failure_watch() -> list[dict[str, t.Any]]:
                 continue
 
             last_dt = last_done_dt or rows[-1][0]
+            last_dt_display = _format_alert_datetime(last_dt)
             alerts.append(
                 {
                     "acc_id": acc_id,
                     "nickname": nick or rows[-1][2] or acc_id,
                     "summary": (
                         "🚨 Критичная ошибка запуска: серия рестартов игры"
-                        f" ({restart_count}/{LAUNCH_FAILURE_MIN_RESTARTS}+), last {last_dt}"
+                        f" ({restart_count}/{LAUNCH_FAILURE_MIN_RESTARTS}+), "
+                        f"последнее событие {last_dt_display}"
                     ),
                     "kind": "launch_restarts",
                     "total": 1,
@@ -3977,6 +4017,75 @@ def _collect_launch_failure_watch() -> list[dict[str, t.Any]]:
         conn.close()
 
     return alerts
+
+
+def _notify_launch_failure_watch(alerts: list[dict[str, t.Any]]) -> None:
+    """Шлёт новые и периодические критичные launch-алерты с межпроцессным lock."""
+
+    if not alerts:
+        return
+
+    lock_fd: int | None = None
+    try:
+        try:
+            lock_fd = os.open(
+                LAUNCH_FAILURE_ALERT_LOCK_PATH,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            )
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(LAUNCH_FAILURE_ALERT_LOCK_PATH) <= 300:
+                    return
+                os.remove(LAUNCH_FAILURE_ALERT_LOCK_PATH)
+                lock_fd = os.open(
+                    LAUNCH_FAILURE_ALERT_LOCK_PATH,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                )
+            except (FileNotFoundError, FileExistsError, OSError):
+                return
+
+        raw_state = _safe_json_load(LAUNCH_FAILURE_ALERT_STATE_PATH)
+        state = raw_state if isinstance(raw_state, dict) else {}
+        now = time.time()
+        cooldown = max(1, LAUNCH_FAILURE_ALERT_COOLDOWN_HOURS) * 3600
+        due = []
+        for alert in alerts:
+            account_key = str(alert.get("acc_id") or alert.get("nickname") or "unknown")
+            previous = state.get(account_key, {})
+            last_alert_at = float(previous.get("last_alert_at") or 0)
+            fingerprint = f"{alert.get('last_seen')}|{alert.get('restarts')}"
+            if previous.get("fingerprint") != fingerprint or now - last_alert_at >= cooldown:
+                due.append((account_key, fingerprint, alert))
+
+        if not due:
+            return
+
+        lines = [f"{html.escape(str(SERVER_NAME))}🚨 <b>КРИТИЧЕСКИЕ ошибки запуска Viking Rise</b>"]
+        for _, _, alert in due:
+            nickname = html.escape(str(alert.get("nickname") or alert.get("acc_id") or "аккаунт"))
+            restarts = int(alert.get("restarts") or 0)
+            last_seen = html.escape(_format_alert_datetime(alert.get("last_seen")))
+            lines.append(
+                f"🔴 <b>{nickname}</b> — серия рестартов {restarts}/3+, "
+                f"последнее событие {last_seen}"
+            )
+
+        if _send_telegram("\n".join(lines)):
+            for account_key, fingerprint, _ in due:
+                state[account_key] = {
+                    "fingerprint": fingerprint,
+                    "last_alert_at": now,
+                }
+            safe_write_json(LAUNCH_FAILURE_ALERT_STATE_PATH, state)
+    except Exception as exc:
+        print(f"[TG-launch] error: {exc}", flush=True)
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
+            try:
+                os.remove(LAUNCH_FAILURE_ALERT_LOCK_PATH)
+            except FileNotFoundError:
+                pass
 
 def _load_inactive_watch(max_age_hours: int = 3) -> list[dict[str, t.Any]]:
     """Подмешиваем список неактивных аккаунтов (dayGain=0 > THRESH)."""
@@ -5672,6 +5781,7 @@ def api_problems_summary():
     data = _safe_json_load(LD_PROBLEMS_SUMMARY_PATH) or {}
     gather_alerts = _collect_gather_watch()
     launch_alerts = _collect_launch_failure_watch()
+    _notify_launch_failure_watch(launch_alerts)
     inactive_alerts = _load_inactive_watch()
 
     accounts = []
