@@ -6179,9 +6179,11 @@ if __name__=="__main__":
         print("Создаём базу ресурсов:", RESOURCES_DB)
     init_resources_db()
 
-    if not os.path.exists(LOGS_DB):
+    logs_db_exists = os.path.exists(LOGS_DB)
+    if not logs_db_exists:
         print("Создаём базу логов:", LOGS_DB)
-    init_logs_db()
+        # На первой установке минимальная схема нужна до открытия API.
+        init_logs_db()
 
     health_check()
     init_resources_db()
@@ -6197,6 +6199,7 @@ if __name__=="__main__":
     LAST_UPDATE_TIME= datetime.now(timezone.utc)
     start_background_tasks(
         [
+            ("init_logs_db", init_logs_db),
             ("parse_logs", parse_logs),
             ("ensure_today_backups", ensure_today_backups),
             ("templates_schema_audit", run_templates_schema_audit),
