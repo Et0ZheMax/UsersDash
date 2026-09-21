@@ -11,14 +11,6 @@ $RssLauncher = if ($RssLauncher) { $RssLauncher } else { Join-Path $PSScriptRoot
 $LogPath = if ($LogPath) { $LogPath } else { Join-Path $PSScriptRoot 'logs\process-watchdog.log' }
 $mutex = $null
 $hasMutex = $false
-$transcriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'rssv7-clo-watchdog-task.log'
-
-try {
-    Start-Transcript -Path $transcriptPath -Append -Force | Out-Null
-}
-catch {
-    # Transcript is diagnostic only; recovery must continue if it is unavailable.
-}
 
 function Write-WatchdogLog {
     param([string]$Message)
@@ -103,12 +95,6 @@ finally {
     }
     if ($mutex) {
         $mutex.Dispose()
-    }
-    try {
-        Stop-Transcript | Out-Null
-    }
-    catch {
-        # No transcript was started.
     }
 }
 
