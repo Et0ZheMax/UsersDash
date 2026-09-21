@@ -1,15 +1,17 @@
 [CmdletBinding()]
 param(
-    [string]$RssLauncher = (Join-Path $PSScriptRoot 'run_rssv7.cmd'),
+    [string]$RssLauncher = '',
     [Parameter(Mandatory = $true)]
     [string]$CloExecutable,
-    [string]$LogPath = (Join-Path $PSScriptRoot 'logs\process-watchdog.log')
+    [string]$LogPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
+$RssLauncher = if ($RssLauncher) { $RssLauncher } else { Join-Path $PSScriptRoot 'run_rssv7.cmd' }
+$LogPath = if ($LogPath) { $LogPath } else { Join-Path $PSScriptRoot 'logs\process-watchdog.log' }
 $mutex = $null
 $hasMutex = $false
-$transcriptPath = Join-Path $env:TEMP 'rssv7-clo-watchdog-task.log'
+$transcriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'rssv7-clo-watchdog-task.log'
 
 try {
     Start-Transcript -Path $transcriptPath -Append -Force | Out-Null
