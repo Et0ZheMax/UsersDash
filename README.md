@@ -59,6 +59,9 @@ UsersDash - это комплексная платформа для управл
 - `UsersDash/bot_farm_configs/` — дефолтные конфигурации для ботов и учебных профилей.
 - `RSSv7/` — Windows-сборка RssCounter с мониторингом LDPlayer, Telegram-оповещениями и
   веб-интерфейсом на Flask (порт 5001).
+- `RSSv7/process_watchdog.ps1` — почасовая проверка и восстановление RSSv7 и `clo.exe run` в
+  интерактивной Windows-сессии. Установка выполняется через `RSSv7/install_process_watchdog.ps1`, журнал
+  сохраняется в `RSSv7/logs/process-watchdog.log`.
 - `RSSv7/LD_Symbolic_move/` — Windows-утилиты для переноса ВМ LDPlayer между дисками и сохранения
   штатных путей через junction.
 - `RSSv7/VikingRecovery/` — GUI-восстановление фермы Viking Rise из чистого LDPlayer и активного профиля
