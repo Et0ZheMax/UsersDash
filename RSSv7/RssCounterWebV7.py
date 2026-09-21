@@ -44,6 +44,7 @@ from farm_reactivation import (
     prepare_reactivation,
     write_profile_atomic as write_reactivation_profile,
 )
+from startup_tasks import start_background_tasks
 
 # Установка всего: python -m pip install -U psutil paramiko requests Pillow pywin32 WMI icmplib Flask Flask-Cors
 
@@ -6187,18 +6188,20 @@ if __name__=="__main__":
     init_accounts_db()
 
     sync_account_meta()
-    parse_logs()
 
-    ensure_today_backups()      # ➟ создаст бэкапы, если их ещё нет за сегодня
-    run_templates_schema_audit()
     _schedule_daily_backups()   # ➟ запустит фоновый планировщик на полуночь
     _schedule_pay_notifications()  # 09:00 & 18:00 Telegram-оповещения
     _schedule_inactive_checker()   # ← запуск «монитора 15 ч»
     _schedule_reactivation_checker()
 
-
-
     LAST_UPDATE_TIME= datetime.now(timezone.utc)
+    start_background_tasks(
+        [
+            ("parse_logs", parse_logs),
+            ("ensure_today_backups", ensure_today_backups),
+            ("templates_schema_audit", run_templates_schema_audit),
+        ]
+    )
     debug_enabled = os.environ.get("RSSV7_DEBUG", "1").strip().lower() not in {
         "0",
         "false",
