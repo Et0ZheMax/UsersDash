@@ -6175,9 +6175,12 @@ def api_refresh_schema():
 
 if __name__=="__main__":
     _load_root_env()
-    if not os.path.exists(RESOURCES_DB):
+    resources_db_exists = os.path.exists(RESOURCES_DB)
+    if not resources_db_exists:
         print("Создаём базу ресурсов:", RESOURCES_DB)
-    init_resources_db()
+        init_resources_db()
+        init_accounts_db()
+        sync_account_meta()
 
     logs_db_exists = os.path.exists(LOGS_DB)
     if not logs_db_exists:
@@ -6186,10 +6189,6 @@ if __name__=="__main__":
         init_logs_db()
 
     health_check()
-    init_resources_db()
-    init_accounts_db()
-
-    sync_account_meta()
 
     _schedule_daily_backups()   # ➟ запустит фоновый планировщик на полуночь
     _schedule_pay_notifications()  # 09:00 & 18:00 Telegram-оповещения
@@ -6199,6 +6198,9 @@ if __name__=="__main__":
     LAST_UPDATE_TIME= datetime.now(timezone.utc)
     start_background_tasks(
         [
+            ("init_resources_db", init_resources_db),
+            ("init_accounts_db", init_accounts_db),
+            ("sync_account_meta", sync_account_meta),
             ("init_logs_db", init_logs_db),
             ("parse_logs", parse_logs),
             ("ensure_today_backups", ensure_today_backups),
