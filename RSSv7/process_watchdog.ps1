@@ -9,6 +9,14 @@ param(
 $ErrorActionPreference = 'Stop'
 $mutex = $null
 $hasMutex = $false
+$transcriptPath = Join-Path $env:TEMP 'rssv7-clo-watchdog-task.log'
+
+try {
+    Start-Transcript -Path $transcriptPath -Append -Force | Out-Null
+}
+catch {
+    # Transcript is diagnostic only; recovery must continue if it is unavailable.
+}
 
 function Write-WatchdogLog {
     param([string]$Message)
@@ -18,7 +26,15 @@ function Write-WatchdogLog {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
-    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+    try {
+        Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+    }
+    catch {
+        $fallbackDirectory = Join-Path $env:LOCALAPPDATA 'BotOps'
+        New-Item -ItemType Directory -Path $fallbackDirectory -Force | Out-Null
+        Add-Content -LiteralPath (Join-Path $fallbackDirectory 'process-watchdog.log') `
+            -Value $line -Encoding UTF8
+    }
     Write-Output $line
 }
 
@@ -85,6 +101,12 @@ finally {
     }
     if ($mutex) {
         $mutex.Dispose()
+    }
+    try {
+        Stop-Transcript | Out-Null
+    }
+    catch {
+        # No transcript was started.
     }
 }
 
