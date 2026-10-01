@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-# GN_LD_CHECK (v4.2.1)
+# GN_LD_CHECK (v4.3.0)
 # -----------------------------------------------------------------------------
-# Новое в 4.2.1:
-# - Совместимость с разными версиями python-telegram-bot (v20–v21): не импортируем
-#   отсутствующий в новых версиях Unauthorized. Кейс "Unauthorized" ловится через
-#   общий TelegramError по имени класса (e.__class__.__name__).
+# Новое в 4.3.0:
+# - Безопасная диагностика внутренних web-портов GnBots без остановки HTTP.sys,
+#   системных служб и посторонних процессов.
+# - Отдельный диагностический инцидент без перезапуска, если ферма исправна, но
+#   весь диапазон web-портов заблокирован.
+# - Cooldown полных перезапусков и дедупликация одинаковых Telegram-алертов.
 # Остальное:
 # - Инкрементальное чтение логов через SQLite (по маске botYYYYMMDD*.txt).
 # - Детектор "живой" активности по паттернам, игнор "шумных" строк.
@@ -24,6 +26,7 @@ import ctypes
 import asyncio
 import sqlite3
 import re
+import platform
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
@@ -34,6 +37,22 @@ from telegram.error import (
     TelegramError, RetryAfter, TimedOut, NetworkError, BadRequest, Forbidden
 )
 from telegram.request import HTTPXRequest  # для настраиваемых таймаутов/пула
+
+
+def _configure_text_streams() -> None:
+    """Не даёт неинтерактивной Windows-сессии выбрать ASCII/cp1252 для русских сообщений."""
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
+
+
+_configure_text_streams()
+
 
 # Общая загрузка /.env из корня репозитория (без перезаписи системных env).
 def _load_root_env() -> None:
@@ -68,7 +87,7 @@ def _relaunch_as_admin():
 # ------------------------------ Console title --------------------------------
 if sys.platform == "win32":
     try:
-        ctypes.windll.kernel32.SetConsoleTitleW("GN_LD_CHECK v4.2.1")
+        ctypes.windll.kernel32.SetConsoleTitleW("GN_LD_CHECK v4.3.0")
     except Exception:
         pass
 
@@ -95,6 +114,12 @@ DEFAULTS = {
     "log_dir": r"C:\Program Files\GnBots\logs",
     "days_back_scan": 1,          # сегодня + вчера
     "inactivity_minutes": 20,     # по ЖИВЫМ событиям
+
+    # Встроенный web-сервер GnBots и защита от циклических перезапусков
+    "web_port_start": 5508,
+    "web_port_end": 5512,
+    "restart_cooldown_minutes": 60,
+    "alert_repeat_minutes": 360,
 
     # БД
     "db_path": "data/gn_ld_check.sqlite3",
@@ -135,6 +160,10 @@ class Settings:
     log_dir: str
     days_back_scan: int
     inactivity_minutes: int
+    web_port_start: int
+    web_port_end: int
+    restart_cooldown_minutes: int
+    alert_repeat_minutes: int
     db_path: str
     retention_days: int
     tail_init_bytes: int
@@ -196,6 +225,10 @@ def _load_config() -> Settings:
     log_dir = os.getenv("GNLDCHECK_LOG_DIR", data.get("log_dir", DEFAULTS["log_dir"]))
     days_back_scan = _int_field("GNLDCHECK_DAYS_BACK_SCAN", "days_back_scan")
     inactivity_minutes = _int_field("GNLDCHECK_INACTIVITY_MINUTES", "inactivity_minutes")
+    web_port_start = _int_field("GNLDCHECK_WEB_PORT_START", "web_port_start")
+    web_port_end = _int_field("GNLDCHECK_WEB_PORT_END", "web_port_end")
+    restart_cooldown_minutes = _int_field("GNLDCHECK_RESTART_COOLDOWN_MINUTES", "restart_cooldown_minutes")
+    alert_repeat_minutes = _int_field("GNLDCHECK_ALERT_REPEAT_MINUTES", "alert_repeat_minutes")
 
     db_path = os.getenv("GNLDCHECK_DB_PATH", data.get("db_path", DEFAULTS["db_path"]))
     if not os.path.isabs(db_path):
@@ -228,6 +261,10 @@ def _load_config() -> Settings:
         log_dir=log_dir,
         days_back_scan=days_back_scan,
         inactivity_minutes=inactivity_minutes,
+        web_port_start=web_port_start,
+        web_port_end=web_port_end,
+        restart_cooldown_minutes=restart_cooldown_minutes,
+        alert_repeat_minutes=alert_repeat_minutes,
         db_path=db_path,
         retention_days=retention_days,
         tail_init_bytes=tail_init_bytes,
@@ -384,6 +421,152 @@ def kill_process(name: str, soft_timeout: int = 5, hard_timeout: int = 5) -> lis
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return killed
+
+
+@dataclass(frozen=True)
+class WebPortOwner:
+    """Описывает владельца TCP-listener без каких-либо действий над процессом."""
+
+    port: int
+    pid: Optional[int]
+    process_name: Optional[str]
+    kind: str
+
+
+@dataclass(frozen=True)
+class WebPortInspection:
+    """Результат безопасной проверки диапазона внутреннего web-сервера GnBots."""
+
+    start_port: int
+    end_port: int
+    free_ports: Tuple[int, ...]
+    owners: Tuple[WebPortOwner, ...]
+    error: Optional[str] = None
+
+    @property
+    def gnbots_ports(self) -> Tuple[int, ...]:
+        return tuple(sorted({owner.port for owner in self.owners if owner.kind == "gnbots"}))
+
+    @property
+    def blocked(self) -> bool:
+        """True только когда проверка успешна и GnBots некуда привязать web-сервер."""
+
+        return self.error is None and not self.free_ports and not self.gnbots_ports
+
+
+def _classify_web_port_owner(port: int, pid: Optional[int]) -> WebPortOwner:
+    """Классифицирует listener, не завершая и не открывая его процесс."""
+
+    if pid is None or pid <= 4:
+        return WebPortOwner(port, pid, "System", "system")
+
+    try:
+        process = psutil.Process(pid)
+        process_name = process.name() or None
+    except psutil.NoSuchProcess:
+        return WebPortOwner(port, pid, None, "orphaned")
+    except (psutil.AccessDenied, OSError) as exc:
+        return WebPortOwner(port, pid, exc.__class__.__name__, "unknown")
+
+    kind = "gnbots" if process_name and process_name.lower() == "gnbots.exe" else "foreign"
+    return WebPortOwner(port, pid, process_name, kind)
+
+
+def inspect_gnbots_web_ports(start_port: int, end_port: int) -> WebPortInspection:
+    """Проверяет listener-порты GnBots, не подключаясь к ним и не меняя систему."""
+
+    if not (1 <= start_port <= end_port <= 65535):
+        return WebPortInspection(start_port, end_port, (), (), "некорректный диапазон портов")
+
+    listeners: dict[tuple[int, Optional[int]], WebPortOwner] = {}
+    try:
+        connections = psutil.net_connections(kind="tcp")
+    except (psutil.AccessDenied, OSError) as exc:
+        return WebPortInspection(start_port, end_port, (), (), str(exc))
+
+    for connection in connections:
+        if connection.status != psutil.CONN_LISTEN or not connection.laddr:
+            continue
+        port = int(connection.laddr.port)
+        if start_port <= port <= end_port:
+            key = (port, connection.pid)
+            listeners[key] = _classify_web_port_owner(port, connection.pid)
+
+    busy_ports = {port for port, _pid in listeners}
+    free_ports = tuple(port for port in range(start_port, end_port + 1) if port not in busy_ports)
+    owners = tuple(sorted(listeners.values(), key=lambda owner: (owner.port, owner.pid or -1)))
+    return WebPortInspection(start_port, end_port, free_ports, owners)
+
+
+def _format_web_port_inspection(inspection: WebPortInspection) -> str:
+    if inspection.error:
+        return f"ошибка проверки: {inspection.error}"
+
+    parts = []
+    if inspection.free_ports:
+        parts.append("свободны: " + ", ".join(map(str, inspection.free_ports)))
+    for owner in inspection.owners:
+        pid = str(owner.pid) if owner.pid is not None else "—"
+        name = owner.process_name or "процесс отсутствует"
+        parts.append(f"{owner.port}: {owner.kind}, PID={pid}, {name}")
+    return "; ".join(parts) if parts else "все порты свободны"
+
+
+def _incident_signature(problems: List[str], port_inspection: WebPortInspection, action: str) -> str:
+    owners = [
+        (owner.port, owner.pid, owner.process_name, owner.kind)
+        for owner in port_inspection.owners
+    ]
+    payload = {
+        "action": action,
+        "problems": sorted(problems),
+        "ports": owners,
+        "free_ports": list(port_inspection.free_ports),
+        "port_error": port_inspection.error,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def should_send_incident_alert(
+    con: sqlite3.Connection,
+    signature: str,
+    repeat_minutes: int,
+    current_ts: Optional[float] = None,
+    key_prefix: str = "watchdog",
+) -> bool:
+    """Дедуплицирует одинаковые алерты, сохраняя состояние в существующей SQLite-БД."""
+
+    current = now_ts() if current_ts is None else current_ts
+    signature_key = f"{key_prefix}_last_alert_signature"
+    timestamp_key = f"{key_prefix}_last_alert_ts"
+    last_signature = db_get_kv(con, signature_key, "") or ""
+    try:
+        last_ts = float(db_get_kv(con, timestamp_key, "0") or 0)
+    except (TypeError, ValueError):
+        last_ts = 0.0
+
+    repeat_seconds = max(1, repeat_minutes) * 60
+    should_send = signature != last_signature or current - last_ts >= repeat_seconds
+    if should_send:
+        db_set_kv(con, signature_key, signature)
+        db_set_kv(con, timestamp_key, str(current))
+    return should_send
+
+
+def restart_cooldown_remaining(
+    con: sqlite3.Connection,
+    cooldown_minutes: int,
+    current_ts: Optional[float] = None,
+) -> float:
+    """Возвращает оставшееся время запрета повторного полного перезапуска в минутах."""
+
+    current = now_ts() if current_ts is None else current_ts
+    try:
+        last_restart_ts = float(db_get_kv(con, "watchdog_last_restart_ts", "0") or 0)
+    except (TypeError, ValueError):
+        last_restart_ts = 0.0
+    remaining = max(0.0, max(0, cooldown_minutes) * 60 - (current - last_restart_ts))
+    return remaining / 60.0
 
 # ------------------------------ Log path utils ------------------------------
 def _date_mask_strings(days_back: int) -> List[str]:
@@ -669,6 +852,12 @@ def health_check(cfg: Settings) -> list[str]:
         warnings.append(f"⚠️ Ярлык для запуска GnBots не найден: {cfg.gnbots_shortcut}")
     if cfg.threshold_windows < 1:
         warnings.append("⚠️ threshold_windows < 1 — проверь конфиг.")
+    if not (1 <= cfg.web_port_start <= cfg.web_port_end <= 65535):
+        warnings.append("⚠️ Некорректный диапазон web-портов GnBots.")
+    if cfg.restart_cooldown_minutes < 0:
+        warnings.append("⚠️ restart_cooldown_minutes < 0 — проверь конфиг.")
+    if cfg.alert_repeat_minutes < 1:
+        warnings.append("⚠️ alert_repeat_minutes < 1 — проверь конфиг.")
     print("[HEALTH] Проверка завершена. Предупреждений:", len(warnings))
     for w in warnings:
         print("        ", w)
@@ -697,13 +886,15 @@ def _summarize_log_details(details: dict) -> dict:
 
 def _build_alert_text(problems: List[str], metrics: dict, cfg: Settings) -> str:
     parts = []
-    parts.append("F99🚨 GN_LD_CHECK: Триггеры перезагрузки")
+    host_name = platform.node() or os.getenv("COMPUTERNAME", "SERVER")
+    parts.append(f"{host_name}🚨 GN_LD_CHECK: обнаружены проблемы")
     for p in problems:
         parts.append(f"• {p}")
     parts.append("")
     parts.append("📊 Диагностика:")
     parts.append(f"— GnBots.exe: {'запущен' if metrics.get('gn_running') else 'не запущен'}")
     parts.append(f"— Окна dnplayer.exe: {metrics.get('dn_count')}/{cfg.threshold_windows}")
+    parts.append(f"— Web-порты GnBots: {_format_web_port_inspection(metrics['web_ports'])}")
     if metrics.get("logs_found") is False:
         parts.append(f"— Логи: не найдены по маске botYYYYMMDD*.txt (папка: {cfg.log_dir})")
     else:
@@ -720,6 +911,7 @@ def _build_alert_text(problems: List[str], metrics: dict, cfg: Settings) -> str:
 async def check_and_reboot(cfg: Settings):
     gn_running = is_process_running("GnBots.exe")
     dn_count = count_processes("dnplayer.exe")
+    web_ports = inspect_gnbots_web_ports(cfg.web_port_start, cfg.web_port_end)
 
     masks = build_log_patterns(cfg)
     files = _expand_masks(masks)
@@ -738,6 +930,11 @@ async def check_and_reboot(cfg: Settings):
 
     if dn_count < cfg.threshold_windows:
         problems.append(f"❗ Мало окон dnplayer.exe: {dn_count} < {cfg.threshold_windows}")
+
+    if web_ports.error:
+        print(f"[WARN] Не удалось проверить web-порты GnBots: {web_ports.error}")
+    elif web_ports.owners:
+        print(f"[PORTS] {_format_web_port_inspection(web_ports)}")
 
     max_live_ts = None
     details = {}
@@ -758,7 +955,52 @@ async def check_and_reboot(cfg: Settings):
                 f"(циклические AnySessionsBootingAsync/HandleErrorsAsync/Current Error Counters не считаем)"
             )
 
+    if not problems and web_ports.blocked:
+        port_problem = (
+            f"⚠️ Все web-порты GnBots {cfg.web_port_start}–{cfg.web_port_end} заняты "
+            "системными, осиротевшими или сторонними listener-портами"
+        )
+        metrics = {
+            "gn_running": gn_running,
+            "dn_count": dn_count,
+            "logs_found": logs_found,
+            "web_ports": web_ports,
+            "logs_diag": _summarize_log_details(details) if details else {
+                "files_count": 0,
+                "latest_file": None,
+                "live_min_ago": None,
+                "idle_min_ago": None,
+                "any_min_ago": None,
+            },
+        }
+        alert_text = _build_alert_text([port_problem], metrics, cfg)
+        signature = _incident_signature([port_problem], web_ports, "report_blocked_web_ports")
+        send_alert = should_send_incident_alert(
+            con,
+            signature,
+            cfg.alert_repeat_minutes,
+            key_prefix="web_ports",
+        )
+        safety_text = (
+            f"{platform.node()}🛡 GnBots и LDPlayer работают, поэтому выполнена только диагностика. "
+            "HTTP.sys, службы, listener-порты и посторонние процессы не изменялись."
+        )
+        con.close()
+        if not send_alert:
+            print("[SAFE] Повторный алерт о web-портах подавлен; процессы не изменялись.")
+            return
+        try:
+            bot = build_bot(cfg)
+            await flush_spool(bot, cfg)
+            await safe_send(bot, cfg, alert_text, cfg.thread_id)
+            await safe_send(bot, cfg, safety_text, cfg.thread_id)
+        except Exception as e:
+            print(f"[WARN] Telegram недоступен для диагностического алерта о портах: {e}")
+        return
+
     if not problems:
+        db_set_kv(con, "watchdog_last_alert_signature", "")
+        db_set_kv(con, "watchdog_last_alert_ts", "0")
         if details:
             ld = _summarize_log_details(details)
             print(f"[OK] GnBots запущен, dnplayer={dn_count}/{cfg.threshold_windows}, "
@@ -779,14 +1021,39 @@ async def check_and_reboot(cfg: Settings):
         "gn_running": gn_running,
         "dn_count": dn_count,
         "logs_found": logs_found,
+        "web_ports": web_ports,
         "logs_diag": _summarize_log_details(details) if details else {
             "files_count": 0, "latest_file": None, "live_min_ago": None, "idle_min_ago": None, "any_min_ago": None
         }
     }
     alert_text = _build_alert_text(problems, metrics, cfg)
 
+    cooldown_remaining = restart_cooldown_remaining(con, cfg.restart_cooldown_minutes)
+    if cooldown_remaining > 0:
+        signature = _incident_signature(problems, web_ports, "health_incident")
+        send_alert = should_send_incident_alert(con, signature, cfg.alert_repeat_minutes)
+        cooldown_text = (
+            f"{platform.node()}🛡 Повторный полный перезапуск пропущен: действует cooldown ещё "
+            f"{cooldown_remaining:.1f} мин. Посторонние процессы и службы не изменялись."
+        )
+        con.close()
+        if not send_alert:
+            print("[SAFE] Повторный алерт во время cooldown подавлен; процессы не перезапускались.")
+            return
+        try:
+            bot = build_bot(cfg)
+            await flush_spool(bot, cfg)
+            await safe_send(bot, cfg, alert_text, cfg.thread_id)
+            await safe_send(bot, cfg, cooldown_text, cfg.thread_id)
+        except Exception as e:
+            print(f"[WARN] Telegram недоступен для cooldown-алерта: {e}")
+        return
+
     # Сначала выполняем прямую задачу watchdog. Telegram вызывается только после
     # попытки перезапуска и поэтому не может задержать восстановление GN/LD.
+    db_set_kv(con, "watchdog_last_restart_ts", str(now_ts()))
+    signature = _incident_signature(problems, web_ports, "health_incident")
+    send_alert = should_send_incident_alert(con, signature, cfg.alert_repeat_minutes)
     kd = kill_process("dnplayer.exe", soft_timeout=5, hard_timeout=3)
     kb = kill_process("GnBots.exe", soft_timeout=5, hard_timeout=3)
     kh = kill_process("Ld9BoxHeadless.exe", soft_timeout=5, hard_timeout=3)
@@ -795,13 +1062,13 @@ async def check_and_reboot(cfg: Settings):
     try:
         os.startfile(cfg.gnbots_shortcut)
         reboot_text = (
-            "F99✅ Ребут завершён.\n"
+            f"{platform.node()}✅ Ребут завершён.\n"
             f"Убиты PID: dnplayer={kd}, GnBots={kb}, Headless={kh}.\n"
             f"Запущен ярлык: {os.path.basename(cfg.gnbots_shortcut)}"
         )
     except Exception as e:
         reboot_text = (
-            "F99❗ Перезапуск процессов выполнен, но не удалось запустить ярлык.\n"
+            f"{platform.node()}❗ Перезапуск процессов выполнен, но не удалось запустить ярлык.\n"
             f"Убиты PID: dnplayer={kd}, GnBots={kb}, Headless={kh}.\n"
             f"Ошибка: {e}"
         )
@@ -811,8 +1078,9 @@ async def check_and_reboot(cfg: Settings):
     try:
         bot = build_bot(cfg)
         await flush_spool(bot, cfg)
-        await safe_send(bot, cfg, alert_text, cfg.thread_id)
-        await safe_send(bot, cfg, reboot_text, cfg.thread_id)
+        if send_alert:
+            await safe_send(bot, cfg, alert_text, cfg.thread_id)
+            await safe_send(bot, cfg, reboot_text, cfg.thread_id)
     except Exception as e:
         # Ошибка инициализации Telegram также не влияет на уже выполненный ребут.
         print(f"[WARN] Telegram недоступен после перезапуска: {e}")
