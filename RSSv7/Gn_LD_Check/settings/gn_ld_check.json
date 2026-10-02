@@ -10,6 +10,7 @@
   "web_port_end": 5512,
   "restart_cooldown_minutes": 60,
   "alert_repeat_minutes": 360,
+  "low_window_confirmations": 3,
   "db_path": "data/gn_ld_check.sqlite3",
   "retention_days": 2,
   "tail_init_bytes": 65536,

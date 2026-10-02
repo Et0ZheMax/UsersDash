@@ -50,6 +50,7 @@ def _settings(db_path: str) -> object:
         web_port_end=5512,
         restart_cooldown_minutes=60,
         alert_repeat_minutes=360,
+        low_window_confirmations=1,
         db_path=db_path,
         retention_days=2,
         tail_init_bytes=65536,
@@ -138,6 +139,14 @@ class WatchdogStateTests(TestCase):
 
         self.assertAlmostEqual(MODULE.restart_cooldown_remaining(con, 60, current_ts=2200), 40.0)
         self.assertEqual(MODULE.restart_cooldown_remaining(con, 60, current_ts=5000), 0.0)
+
+    def test_low_window_streak_requires_consecutive_checks(self):
+        con = _state_db()
+
+        self.assertEqual(MODULE.update_low_window_streak(con, True), 1)
+        self.assertEqual(MODULE.update_low_window_streak(con, True), 2)
+        self.assertEqual(MODULE.update_low_window_streak(con, False), 0)
+        self.assertEqual(MODULE.update_low_window_streak(con, True), 1)
 
 
 class WatchdogActionTests(IsolatedAsyncioTestCase):

@@ -7,6 +7,8 @@
 # - Отдельный диагностический инцидент без перезапуска, если ферма исправна, но
 #   весь диапазон web-портов заблокирован.
 # - Cooldown полных перезапусков и дедупликация одинаковых Telegram-алертов.
+# - Подтверждение малого количества LDPlayer несколькими проверками, если живой
+#   лог GnBots продолжает обновляться.
 # Остальное:
 # - Инкрементальное чтение логов через SQLite (по маске botYYYYMMDD*.txt).
 # - Детектор "живой" активности по паттернам, игнор "шумных" строк.
@@ -120,6 +122,7 @@ DEFAULTS = {
     "web_port_end": 5512,
     "restart_cooldown_minutes": 60,
     "alert_repeat_minutes": 360,
+    "low_window_confirmations": 3,
 
     # БД
     "db_path": "data/gn_ld_check.sqlite3",
@@ -164,6 +167,7 @@ class Settings:
     web_port_end: int
     restart_cooldown_minutes: int
     alert_repeat_minutes: int
+    low_window_confirmations: int
     db_path: str
     retention_days: int
     tail_init_bytes: int
@@ -229,6 +233,7 @@ def _load_config() -> Settings:
     web_port_end = _int_field("GNLDCHECK_WEB_PORT_END", "web_port_end")
     restart_cooldown_minutes = _int_field("GNLDCHECK_RESTART_COOLDOWN_MINUTES", "restart_cooldown_minutes")
     alert_repeat_minutes = _int_field("GNLDCHECK_ALERT_REPEAT_MINUTES", "alert_repeat_minutes")
+    low_window_confirmations = _int_field("GNLDCHECK_LOW_WINDOW_CONFIRMATIONS", "low_window_confirmations")
 
     db_path = os.getenv("GNLDCHECK_DB_PATH", data.get("db_path", DEFAULTS["db_path"]))
     if not os.path.isabs(db_path):
@@ -265,6 +270,7 @@ def _load_config() -> Settings:
         web_port_end=web_port_end,
         restart_cooldown_minutes=restart_cooldown_minutes,
         alert_repeat_minutes=alert_repeat_minutes,
+        low_window_confirmations=low_window_confirmations,
         db_path=db_path,
         retention_days=retention_days,
         tail_init_bytes=tail_init_bytes,
@@ -568,6 +574,21 @@ def restart_cooldown_remaining(
     remaining = max(0.0, max(0, cooldown_minutes) * 60 - (current - last_restart_ts))
     return remaining / 60.0
 
+
+def update_low_window_streak(con: sqlite3.Connection, is_low: bool) -> int:
+    """Хранит число последовательных проверок с недостатком окон LDPlayer."""
+
+    if not is_low:
+        db_set_kv(con, "watchdog_low_window_streak", "0")
+        return 0
+    try:
+        previous = int(db_get_kv(con, "watchdog_low_window_streak", "0") or 0)
+    except (TypeError, ValueError):
+        previous = 0
+    current = previous + 1
+    db_set_kv(con, "watchdog_low_window_streak", str(current))
+    return current
+
 # ------------------------------ Log path utils ------------------------------
 def _date_mask_strings(days_back: int) -> List[str]:
     res = []
@@ -858,6 +879,8 @@ def health_check(cfg: Settings) -> list[str]:
         warnings.append("⚠️ restart_cooldown_minutes < 0 — проверь конфиг.")
     if cfg.alert_repeat_minutes < 1:
         warnings.append("⚠️ alert_repeat_minutes < 1 — проверь конфиг.")
+    if cfg.low_window_confirmations < 1:
+        warnings.append("⚠️ low_window_confirmations < 1 — проверь конфиг.")
     print("[HEALTH] Проверка завершена. Предупреждений:", len(warnings))
     for w in warnings:
         print("        ", w)
@@ -928,9 +951,6 @@ async def check_and_reboot(cfg: Settings):
     if not gn_running:
         problems.append("❗ GnBots.exe не запущен")
 
-    if dn_count < cfg.threshold_windows:
-        problems.append(f"❗ Мало окон dnplayer.exe: {dn_count} < {cfg.threshold_windows}")
-
     if web_ports.error:
         print(f"[WARN] Не удалось проверить web-порты GnBots: {web_ports.error}")
     elif web_ports.owners:
@@ -948,11 +968,35 @@ async def check_and_reboot(cfg: Settings):
             scan_error = str(e)
             problems.append(f"❗ Ошибка сканирования логов: {e}")
 
+    live_is_stale = True
     if scan_error is None and logs_found:
-        if max_live_ts is None or (now_ts() - float(max_live_ts)) / 60.0 >= cfg.inactivity_minutes:
+        live_is_stale = max_live_ts is None or (
+            now_ts() - float(max_live_ts)
+        ) / 60.0 >= cfg.inactivity_minutes
+        if live_is_stale:
             problems.append(
                 f"❗ Нет ЖИВОЙ активности ≥ {cfg.inactivity_minutes} мин "
                 f"(циклические AnySessionsBootingAsync/HandleErrorsAsync/Current Error Counters не считаем)"
+            )
+
+    low_window_streak = update_low_window_streak(con, dn_count < cfg.threshold_windows)
+    if dn_count < cfg.threshold_windows:
+        must_recover_now = (
+            not gn_running
+            or live_is_stale
+            or scan_error is not None
+            or not logs_found
+            or low_window_streak >= cfg.low_window_confirmations
+        )
+        if must_recover_now:
+            problems.append(
+                f"❗ Мало окон dnplayer.exe: {dn_count} < {cfg.threshold_windows}; "
+                f"подтверждений подряд: {low_window_streak}/{cfg.low_window_confirmations}"
+            )
+        else:
+            print(
+                f"[WAIT] dnplayer={dn_count}/{cfg.threshold_windows}, но живая активность продолжается; "
+                f"подтверждение {low_window_streak}/{cfg.low_window_confirmations}, без перезапуска."
             )
 
     if not problems and web_ports.blocked:
