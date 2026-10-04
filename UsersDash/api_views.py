@@ -50,7 +50,11 @@ def _get_server_from_request() -> Server:
     Если что-то не так — бросаем BadRequest (вернётся 400/403).
     """
     server_name = request.args.get("server", "").strip()
-    token = request.args.get("token", "").strip()
+    authorization = request.headers.get("Authorization", "")
+    token = (
+        authorization[7:].strip() if authorization.startswith("Bearer ")
+        else request.args.get("token", "").strip()
+    )
 
     if not server_name:
         raise BadRequest("Missing 'server' parameter.")
@@ -422,3 +426,8 @@ def complete_farm_reactivation():
             "blocked_for_payment": False,
         }
     )
+
+
+from UsersDash.services.viking_provision import register_provision_routes
+
+register_provision_routes(api_bp, _get_server_from_request)
