@@ -44,7 +44,7 @@ from farm_reactivation import (
     prepare_reactivation,
     write_profile_atomic as write_reactivation_profile,
 )
-from startup_tasks import start_background_tasks
+from startup_tasks import RefreshTask, start_background_tasks
 
 # Установка всего: python -m pip install -U psutil paramiko requests Pillow pywin32 WMI icmplib Flask Flask-Cors
 
@@ -1396,27 +1396,32 @@ def init_logs_db():
             if column_name not in log_columns:
                 c.execute(f"ALTER TABLE cached_logs ADD COLUMN {column_name} {column_ddl}")
 
-        # Старый hard refresh мог многократно сохранить одну и ту же строку. До включения
-        # уникального source_id оставляем одну запись каждого исходного события.
-        c.execute("""
-            DELETE FROM cached_logs
-            WHERE id NOT IN (
-                SELECT MIN(id)
+        unique_indexes = {
+            row[1] for row in c.execute("PRAGMA index_list(cached_logs)") if row[2]
+        }
+        if "ux_cached_logs_event_fallback" not in unique_indexes:
+            # Старый hard refresh мог многократно сохранить одну и ту же строку. До включения
+            # уникального source_id оставляем одну запись каждого исходного события.
+            c.execute("""
+                DELETE FROM cached_logs
+                WHERE id NOT IN (
+                    SELECT MIN(id)
+                    FROM cached_logs
+                    GROUP BY acc_id, dt, raw_line
+                )
+            """)
+        if "ux_cached_logs_source_id" not in unique_indexes:
+            legacy_rows = c.execute("""
+                SELECT id, acc_id, dt, raw_line
                 FROM cached_logs
-                GROUP BY acc_id, dt, raw_line
-            )
-        """)
-        legacy_rows = c.execute("""
-            SELECT id, acc_id, dt, raw_line
-            FROM cached_logs
-            WHERE source_id IS NULL OR source_id = ''
-        """).fetchall()
-        for row in legacy_rows:
-            source_material = "\x1f".join(
-                str(value or "") for value in (row["acc_id"], row["dt"], row["raw_line"])
-            )
-            source_id = "legacy:" + hashlib.sha256(source_material.encode("utf-8")).hexdigest()
-            c.execute("UPDATE cached_logs SET source_id=? WHERE id=?", (source_id, row["id"]))
+                WHERE source_id IS NULL OR source_id = ''
+            """).fetchall()
+            for row in legacy_rows:
+                source_material = "\x1f".join(
+                    str(value or "") for value in (row["acc_id"], row["dt"], row["raw_line"])
+                )
+                source_id = "legacy:" + hashlib.sha256(source_material.encode("utf-8")).hexdigest()
+                c.execute("UPDATE cached_logs SET source_id=? WHERE id=?", (source_id, row["id"]))
 
         c.execute("CREATE INDEX IF NOT EXISTS idx_cached_logs_acc ON cached_logs(acc_id)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_cached_logs_id ON cached_logs(id DESC)")
@@ -1443,26 +1448,17 @@ def init_logs_db():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_rs_acc_dt ON resource_snapshots(acc_id, dt)")
 
-        # 4) Дедупликация по (acc_id, dt) перед созданием уникального индекса
-        #    Оставляем запись с максимальным id
-        try:
+        snapshot_indexes = {
+            row[1] for row in c.execute("PRAGMA index_list(resource_snapshots)") if row[2]
+        }
+        if "ux_rs_acc_dt" not in snapshot_indexes:
             c.execute("""
                 DELETE FROM resource_snapshots
                 WHERE id NOT IN (
-                    SELECT MAX(id) FROM resource_snapshots
-                    GROUP BY acc_id, dt
+                    SELECT MAX(id) FROM resource_snapshots GROUP BY acc_id, dt
                 )
             """)
-        except Exception as e:
-            print("[init_logs_db] dedup resource_snapshots warn:", e)
-
-        # 5) Уникальный индекс по (acc_id, dt), чтобы не плодить дублей при перечтении логов
-        try:
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_rs_acc_dt ON resource_snapshots(acc_id, dt)")
-        except Exception as e:
-            # Если здесь ошибка, значит в таблице всё ещё остались дубликаты.
-            # Можно повторно попробовать более агрессивную чистку, но, как правило, блока выше хватает.
-            print("[init_logs_db] create unique index warn:", e)
+            c.execute("CREATE UNIQUE INDEX ux_rs_acc_dt ON resource_snapshots(acc_id, dt)")
 
         conn.commit()
         print("[init_logs_db] OK: schema ensured, indexes present")
@@ -1631,249 +1627,253 @@ def do_resources_update(acc_map):
     import hashlib
     from datetime import datetime
 
-    conn_res = open_db(RESOURCES_DB)
-    c_res = conn_res.cursor()
+    from contextlib import ExitStack, closing
 
-    conn_log = open_db(LOGS_DB)
-    c_log = conn_log.cursor()
+    with ExitStack() as stack:
+        conn_res = stack.enter_context(closing(open_db(RESOURCES_DB)))
+        c_res = conn_res.cursor()
 
-    # ── гарантируем расширенную схему files_offset (backward compatible)
-    cols = {row[1] for row in c_log.execute("PRAGMA table_info(files_offset)").fetchall()}
-    if "last_size" not in cols:
-        c_log.execute("ALTER TABLE files_offset ADD COLUMN last_size INTEGER")
-    if "last_mtime" not in cols:
-        c_log.execute("ALTER TABLE files_offset ADD COLUMN last_mtime REAL")
-    if "head_hash" not in cols:
-        c_log.execute("ALTER TABLE files_offset ADD COLUMN head_hash TEXT")
-    if "generation_id" not in cols:
-        c_log.execute("ALTER TABLE files_offset ADD COLUMN generation_id TEXT")
+        conn_log = stack.enter_context(closing(open_db(LOGS_DB)))
+        c_log = conn_log.cursor()
 
-    log_cols = {row[1] for row in c_log.execute("PRAGMA table_info(cached_logs)").fetchall()}
-    if "source_id" not in log_cols:
-        c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_id TEXT")
-    if "source_file" not in log_cols:
-        c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_file TEXT")
-    if "source_offset" not in log_cols:
-        c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_offset INTEGER")
+        # ── гарантируем расширенную схему files_offset (backward compatible)
+        cols = {row[1] for row in c_log.execute("PRAGMA table_info(files_offset)").fetchall()}
+        if "last_size" not in cols:
+            c_log.execute("ALTER TABLE files_offset ADD COLUMN last_size INTEGER")
+        if "last_mtime" not in cols:
+            c_log.execute("ALTER TABLE files_offset ADD COLUMN last_mtime REAL")
+        if "head_hash" not in cols:
+            c_log.execute("ALTER TABLE files_offset ADD COLUMN head_hash TEXT")
+        if "generation_id" not in cols:
+            c_log.execute("ALTER TABLE files_offset ADD COLUMN generation_id TEXT")
 
-    # ── загружаем offsets + мету
-    offsets: dict[str, dict] = {}
-    for fn, ps, sz, mt, hh, generation_id in c_log.execute("""
-        SELECT filename, last_pos, last_size, last_mtime, head_hash, generation_id
-        FROM files_offset
-    """).fetchall():
-        offsets[fn] = {
-            "pos": int(ps or 0),
-            "size": int(sz) if sz is not None else None,
-            "mtime": float(mt) if mt is not None else None,
-            "head": str(hh) if hh else None,
-            "generation": str(generation_id) if generation_id else None,
-        }
+        log_cols = {row[1] for row in c_log.execute("PRAGMA table_info(cached_logs)").fetchall()}
+        if "source_id" not in log_cols:
+            c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_id TEXT")
+        if "source_file" not in log_cols:
+            c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_file TEXT")
+        if "source_offset" not in log_cols:
+            c_log.execute("ALTER TABLE cached_logs ADD COLUMN source_offset INTEGER")
 
-    dt_now_str = datetime.now().strftime("%Y%m%d")
-    today_str = datetime.now().strftime("%Y-%m-%d")
+        # ── загружаем offsets + мету
+        offsets: dict[str, dict] = {}
+        for fn, ps, sz, mt, hh, generation_id in c_log.execute("""
+            SELECT filename, last_pos, last_size, last_mtime, head_hash, generation_id
+            FROM files_offset
+        """).fetchall():
+            offsets[fn] = {
+                "pos": int(ps or 0),
+                "size": int(sz) if sz is not None else None,
+                "mtime": float(mt) if mt is not None else None,
+                "head": str(hh) if hh else None,
+                "generation": str(generation_id) if generation_id else None,
+            }
 
-    if not os.path.exists(LOGS_DIR):
-        print("LOGS_DIR not found:", LOGS_DIR)
-        conn_res.close()
-        conn_log.close()
-        return
+        dt_now_str = datetime.now().strftime("%Y%m%d")
+        today_str = datetime.now().strftime("%Y-%m-%d")
 
-    # regex для быстрого извлечения acc_id из первого |...|
-    _ACC_FROM_PIPES = re.compile(r"\|([^|]+)\|")
+        if not os.path.exists(LOGS_DIR):
+            print("LOGS_DIR not found:", LOGS_DIR)
+            return
 
-    # helper: достать ресурсы из CityResourcesAmount
-    def _extract(name: str, s: str) -> int | None:
-        m2 = re.search(rf"{name}\s*:\s*(\d+)", s)
-        return int(m2.group(1)) if m2 else None
+        # regex для быстрого извлечения acc_id из первого |...|
+        _ACC_FROM_PIPES = re.compile(r"\|([^|]+)\|")
 
-    for fname in os.listdir(LOGS_DIR):
-        if not (fname.startswith("bot" + dt_now_str) and fname.endswith(".txt")):
-            continue
+        # helper: достать ресурсы из CityResourcesAmount
+        def _extract(name: str, s: str) -> int | None:
+            m2 = re.search(rf"{name}\s*:\s*(\d+)", s)
+            return int(m2.group(1)) if m2 else None
 
-        fullp = os.path.join(LOGS_DIR, fname)
+        for fname in os.listdir(LOGS_DIR):
+            if not (fname.startswith("bot" + dt_now_str) and fname.endswith(".txt")):
+                continue
 
-        try:
-            st = os.stat(fullp)
-            fsize = st.st_size
-            mtime = st.st_mtime
-        except OSError:
-            continue
+            fullp = os.path.join(LOGS_DIR, fname)
 
-        meta = offsets.get(
-            fname,
-            {"pos": 0, "size": None, "mtime": None, "head": None, "generation": None},
-        )
-        prev_pos = int(meta.get("pos") or 0)
-        prev_size = meta.get("size")
-        prev_head = meta.get("head")
-        generation_id = meta.get("generation") or uuid.uuid4().hex
+            try:
+                st = os.stat(fullp)
+                fsize = st.st_size
+                mtime = st.st_mtime
+            except OSError:
+                continue
 
-        try:
-            with open(fullp, "rb") as f:
-                # ── head hash для детекта "файл пересоздали тем же именем"
-                head_bytes = f.read(256)
-                head_hash = hashlib.sha1(head_bytes).hexdigest()
+            meta = offsets.get(
+                fname,
+                {"pos": 0, "size": None, "mtime": None, "head": None, "generation": None},
+            )
+            prev_pos = int(meta.get("pos") or 0)
+            prev_size = meta.get("size")
+            prev_head = meta.get("head")
+            generation_id = meta.get("generation") or uuid.uuid4().hex
 
-                # Сравниваем только ту часть головы, которая существовала при прошлом проходе.
-                # Иначе обычный рост файла меньше 256 байт выглядел бы как его замена.
-                compare_length = min(int(prev_size or 0), 256)
-                comparable_head_hash = (
-                    hashlib.sha1(head_bytes[:compare_length]).hexdigest() if compare_length else None
-                )
-                file_replaced = bool(
-                    prev_size is not None
-                    and (
-                        fsize < int(prev_size)
-                        or (prev_head and comparable_head_hash and prev_head != comparable_head_hash)
+            try:
+                with open(fullp, "rb") as f:
+                    # ── head hash для детекта "файл пересоздали тем же именем"
+                    head_bytes = f.read(256)
+                    head_hash = hashlib.sha1(head_bytes).hexdigest()
+
+                    # Сравниваем только ту часть головы, которая существовала при прошлом проходе.
+                    # Иначе обычный рост файла меньше 256 байт выглядел бы как его замена.
+                    compare_length = min(int(prev_size or 0), 256)
+                    comparable_head_hash = (
+                        hashlib.sha1(head_bytes[:compare_length]).hexdigest() if compare_length else None
                     )
-                )
+                    file_replaced = bool(
+                        prev_size is not None
+                        and (
+                            fsize < int(prev_size)
+                            or (prev_head and comparable_head_hash and prev_head != comparable_head_hash)
+                        )
+                    )
 
-                # ── truncate/обнуление или замена файла с тем же именем
-                if prev_pos > fsize or file_replaced:
-                    prev_pos = 0
-                    generation_id = uuid.uuid4().hex
+                    # ── truncate/обнуление или замена файла с тем же именем
+                    if prev_pos > fsize or file_replaced:
+                        prev_pos = 0
+                        generation_id = uuid.uuid4().hex
 
-                # фиксируем в памяти актуальную мету (и, если надо, сброс позиции)
-                offsets[fname] = {
-                    "pos": prev_pos,
-                    "size": fsize,
-                    "mtime": mtime,
-                    "head": head_hash,
-                    "generation": generation_id,
-                }
+                    # фиксируем в памяти актуальную мету (и, если надо, сброс позиции)
+                    offsets[fname] = {
+                        "pos": prev_pos,
+                        "size": fsize,
+                        "mtime": mtime,
+                        "head": head_hash,
+                        "generation": generation_id,
+                    }
 
-                f.seek(prev_pos, 0)
+                    f.seek(prev_pos, 0)
 
-                while True:
-                    line_start = f.tell()
-                    line_bytes = f.readline()
-                    if not line_bytes:
-                        break
+                    while True:
+                        line_start = f.tell()
+                        line_bytes = f.readline()
+                        if not line_bytes:
+                            break
 
-                    new_pos = f.tell()
-                    # Писатель мог ещё не дописать последнюю строку. Не двигаем offset,
-                    # чтобы следующий проход прочитал её уже целиком.
-                    if new_pos >= fsize and not line_bytes.endswith((b"\n", b"\r")):
-                        break
-                    line_str = line_bytes.decode("utf-8", "replace").rstrip("\r\n")
+                        new_pos = f.tell()
+                        # Писатель мог ещё не дописать последнюю строку. Не двигаем offset,
+                        # чтобы следующий проход прочитал её уже целиком.
+                        if new_pos >= fsize and not line_bytes.endswith((b"\n", b"\r")):
+                            break
+                        line_str = line_bytes.decode("utf-8", "replace").rstrip("\r\n")
 
-                    # ── 1) Обновление resources + daily_baseline (через LOG_PATTERN)
-                    mm = LOG_PATTERN.search(line_str)
-                    if mm:
-                        ts_str, log_id, fd, wd, stn, gd, gm = mm.groups()
-                        if log_id in acc_map:
-                            try:
-                                dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f %z")
-                                iso_ts = dt.isoformat()
+                        # ── 1) Обновление resources + daily_baseline (через LOG_PATTERN)
+                        mm = LOG_PATTERN.search(line_str)
+                        if mm:
+                            ts_str, log_id, fd, wd, stn, gd, gm = mm.groups()
+                            if log_id in acc_map:
+                                try:
+                                    dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S.%f %z")
+                                    iso_ts = dt.isoformat()
 
-                                c_res.execute("""
-                                  INSERT INTO resources(id,nickname,food,wood,stone,gold,gems,last_updated)
-                                  VALUES(?,?,?,?,?,?,?,?)
-                                  ON CONFLICT(id) DO UPDATE SET
-                                    nickname=excluded.nickname,
-                                    food=excluded.food,
-                                    wood=excluded.wood,
-                                    stone=excluded.stone,
-                                    gold=excluded.gold,
-                                    gems=excluded.gems,
-                                    last_updated=excluded.last_updated
-                                  WHERE excluded.last_updated > resources.last_updated
-                                """, (
-                                    log_id, acc_map[log_id],
-                                    int(fd), int(wd), int(stn), int(gd), int(gm), iso_ts
-                                ))
+                                    c_res.execute("""
+                                      INSERT INTO resources(id,nickname,food,wood,stone,gold,gems,last_updated)
+                                      VALUES(?,?,?,?,?,?,?,?)
+                                      ON CONFLICT(id) DO UPDATE SET
+                                        nickname=excluded.nickname,
+                                        food=excluded.food,
+                                        wood=excluded.wood,
+                                        stone=excluded.stone,
+                                        gold=excluded.gold,
+                                        gems=excluded.gems,
+                                        last_updated=excluded.last_updated
+                                      WHERE excluded.last_updated > resources.last_updated
+                                    """, (
+                                        log_id, acc_map[log_id],
+                                        int(fd), int(wd), int(stn), int(gd), int(gm), iso_ts
+                                    ))
 
-                                local_date = dt.astimezone().strftime("%Y-%m-%d")
-                                if local_date == today_str:
-                                    row_ex = c_res.execute("""
-                                      SELECT 1 FROM daily_baseline
-                                      WHERE id=? AND baseline_date=?
-                                    """, (log_id, local_date)).fetchone()
+                                    local_date = dt.astimezone().strftime("%Y-%m-%d")
+                                    if local_date == today_str:
+                                        row_ex = c_res.execute("""
+                                          SELECT 1 FROM daily_baseline
+                                          WHERE id=? AND baseline_date=?
+                                        """, (log_id, local_date)).fetchone()
 
-                                    if not row_ex:
-                                        c_res.execute("""
-                                          INSERT INTO daily_baseline
-                                          (id,nickname,food,wood,stone,gold,gems,baseline_date)
-                                          VALUES(?,?,?,?,?,?,?,?)
-                                        """, (
-                                            log_id, acc_map[log_id],
-                                            int(fd), int(wd), int(stn), int(gd), int(gm),
-                                            local_date
-                                        ))
-                            except Exception as e:
-                                print("[resources update] skip:", e)
+                                        if not row_ex:
+                                            c_res.execute("""
+                                              INSERT INTO daily_baseline
+                                              (id,nickname,food,wood,stone,gold,gems,baseline_date)
+                                              VALUES(?,?,?,?,?,?,?,?)
+                                            """, (
+                                                log_id, acc_map[log_id],
+                                                int(fd), int(wd), int(stn), int(gd), int(gm),
+                                                local_date
+                                            ))
+                                except sqlite3.Error:
+                                    raise
+                                except Exception as e:
+                                    print("[resources update] skip:", e)
 
-                    # ── 2) cached_logs + resource_snapshots (быстро: определяем acc_id один раз)
-                    m_id = _ACC_FROM_PIPES.search(line_str)
-                    if m_id:
-                        acid = m_id.group(1)
-                        nick = acc_map.get(acid)
-                        if nick:
-                            m = _DT_RE.match(line_str)  # ^YYYY-MM-DD ... +ZZ:ZZ
-                            if m:
-                                dt_part = m.group(1)
-                                # Хэш строки защищает от редкой замены содержимого при
-                                # неизменных имени, offset и первых 256 байтах файла.
-                                line_hash = hashlib.sha256(line_bytes.rstrip(b"\r\n")).hexdigest()
-                                source_material = (
-                                    f"{fname}\x1f{generation_id}\x1f{line_start}\x1f{line_hash}"
-                                )
-                                source_id = hashlib.sha256(source_material.encode("utf-8")).hexdigest()
+                        # ── 2) cached_logs + resource_snapshots (быстро: определяем acc_id один раз)
+                        m_id = _ACC_FROM_PIPES.search(line_str)
+                        if m_id:
+                            acid = m_id.group(1)
+                            nick = acc_map.get(acid)
+                            if nick:
+                                m = _DT_RE.match(line_str)  # ^YYYY-MM-DD ... +ZZ:ZZ
+                                if m:
+                                    dt_part = m.group(1)
+                                    # Хэш строки защищает от редкой замены содержимого при
+                                    # неизменных имени, offset и первых 256 байтах файла.
+                                    line_hash = hashlib.sha256(line_bytes.rstrip(b"\r\n")).hexdigest()
+                                    source_material = (
+                                        f"{fname}\x1f{generation_id}\x1f{line_start}\x1f{line_hash}"
+                                    )
+                                    source_id = hashlib.sha256(source_material.encode("utf-8")).hexdigest()
 
-                                # кешируем строку
-                                c_log.execute("""
-                                  INSERT OR IGNORE INTO cached_logs(
-                                      acc_id, nickname, dt, raw_line,
-                                      source_id, source_file, source_offset
-                                  )
-                                  VALUES(?,?,?,?,?,?,?)
-                                """, (
-                                    acid, nick, dt_part, line_str,
-                                    source_id, fname, line_start,
-                                ))
+                                    # кешируем строку
+                                    c_log.execute("""
+                                      INSERT OR IGNORE INTO cached_logs(
+                                          acc_id, nickname, dt, raw_line,
+                                          source_id, source_file, source_offset
+                                      )
+                                      VALUES(?,?,?,?,?,?,?)
+                                    """, (
+                                        acid, nick, dt_part, line_str,
+                                        source_id, fname, line_start,
+                                    ))
 
-                                # если это CityResourcesAmount — пишем снапшот (для inactive/графиков)
-                                if "CityResourcesAmount:" in line_str:
-                                    try:
-                                        food  = _extract("Food",  line_str)
-                                        wood  = _extract("Wood",  line_str)
-                                        stone = _extract("Stone", line_str)
-                                        gold  = _extract("Gold",  line_str)
+                                    # если это CityResourcesAmount — пишем снапшот (для inactive/графиков)
+                                    if "CityResourcesAmount:" in line_str:
+                                        try:
+                                            food  = _extract("Food",  line_str)
+                                            wood  = _extract("Wood",  line_str)
+                                            stone = _extract("Stone", line_str)
+                                            gold  = _extract("Gold",  line_str)
 
-                                        c_log.execute("""
-                                          INSERT OR REPLACE INTO resource_snapshots(acc_id, dt, food, wood, stone, gold)
-                                          VALUES(?,?,?,?,?,?)
-                                        """, (acid, dt_part, food, wood, stone, gold))
-                                    except Exception as e:
-                                        print("[parse CityResourcesAmount] skip:", e)
+                                            c_log.execute("""
+                                              INSERT OR REPLACE INTO resource_snapshots(acc_id, dt, food, wood, stone, gold)
+                                              VALUES(?,?,?,?,?,?)
+                                            """, (acid, dt_part, food, wood, stone, gold))
+                                        except sqlite3.Error:
+                                            raise
+                                        except Exception as e:
+                                            print("[parse CityResourcesAmount] skip:", e)
 
-                    # ✅ offset после обработки строки
-                    offsets[fname]["pos"] = new_pos
+                        # ✅ offset после обработки строки
+                        offsets[fname]["pos"] = new_pos
 
-        except Exception as e:
-            print("Error reading file:", fullp, e)
+            except OSError as e:
+                print("Error reading file:", fullp, e)
+                raise
 
-    # ── сохраняем offsets в БД
-    for fn, m in offsets.items():
-        c_log.execute("""
-          INSERT OR REPLACE INTO files_offset(
-              filename, last_pos, last_size, last_mtime, head_hash, generation_id
-          )
-          VALUES(?,?,?,?,?,?)
-        """, (
-            fn,
-            int(m.get("pos") or 0),
-            m.get("size"),
-            m.get("mtime"),
-            m.get("head"),
-            m.get("generation"),
-        ))
+        # ── сохраняем offsets в БД
+        for fn, m in offsets.items():
+            c_log.execute("""
+              INSERT OR REPLACE INTO files_offset(
+                  filename, last_pos, last_size, last_mtime, head_hash, generation_id
+              )
+              VALUES(?,?,?,?,?,?)
+            """, (
+                fn,
+                int(m.get("pos") or 0),
+                m.get("size"),
+                m.get("mtime"),
+                m.get("head"),
+                m.get("generation"),
+            ))
 
-    conn_res.commit()
-    conn_log.commit()
-    conn_res.close()
-    conn_log.close()
+        conn_res.commit()
+        conn_log.commit()
 
 
 ##############################
@@ -2707,7 +2707,7 @@ def collect_local_status() -> dict[str, t.Any]:
         'dnCount': dn_count,
         'cpu': psutil.cpu_percent(interval=0.5),
         'ram': psutil.virtual_memory().percent,
-        'checked_at': datetime.utcnow().isoformat() + 'Z',
+        'checked_at': datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -2986,12 +2986,29 @@ def templates_editor_page():
     """Отдаём страницу редактора шаблонов."""
     return render_template("templates.html")
 
+LOG_REFRESH = RefreshTask(parse_logs)
+
+
+def _refresh_response(state):
+    return {
+        "status": "error" if state["error"] else ("updating" if state["running"] else "ok"),
+        "last_update": LAST_UPDATE_TIME.isoformat() if LAST_UPDATE_TIME else None,
+        **state,
+    }
+
+
 @app.route("/api/refresh", methods=["POST"])
 def api_refresh():
-    parse_logs()
-    global LAST_UPDATE_TIME
-    LAST_UPDATE_TIME= datetime.now(timezone.utc)
-    return {"status":"ok","last_update": LAST_UPDATE_TIME.isoformat()}
+    # Старые клиенты сохраняют ожидание; панель запрашивает неблокирующий режим.
+    background = request.args.get("background") == "1"
+    state = LOG_REFRESH.request(wait=not background)
+    return _refresh_response(state)
+
+
+@app.route("/api/refresh/status", methods=["GET"])
+def api_refresh_status():
+    return _refresh_response(LOG_REFRESH.status())
+
 
 # ───── NEW: отдаём inactive15.json ─────
 def _refresh_inactive_if_stale(max_age_min: int = 70) -> Path:
@@ -6173,44 +6190,31 @@ def api_refresh_schema():
     return jsonify({"ok": True, "built_at": _schema_cache["built_at"]})
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     _load_root_env()
-    resources_db_exists = os.path.exists(RESOURCES_DB)
-    if not resources_db_exists:
-        print("Создаём базу ресурсов:", RESOURCES_DB)
-        init_resources_db()
-        init_accounts_db()
-        sync_account_meta()
-
-    logs_db_exists = os.path.exists(LOGS_DB)
-    if not logs_db_exists:
-        print("Создаём базу логов:", LOGS_DB)
-        # На первой установке минимальная схема нужна до открытия API.
-        init_logs_db()
-
+    # API открывается только после успешной подготовки обязательной схемы.
+    # На готовой БД уникальные индексы исключают повторную тяжёлую миграцию.
+    init_resources_db()
+    init_accounts_db()
+    init_logs_db()
     health_check()
 
-    _schedule_daily_backups()   # ➟ запустит фоновый планировщик на полуночь
-    _schedule_pay_notifications()  # 09:00 & 18:00 Telegram-оповещения
-    _schedule_inactive_checker()   # ← запуск «монитора 15 ч»
+    _schedule_daily_backups()
+    _schedule_pay_notifications()
+    _schedule_inactive_checker()
     _schedule_reactivation_checker()
 
-    LAST_UPDATE_TIME= datetime.now(timezone.utc)
+    # Синхронизация небольших метаданных завершится до первого прохода парсера.
+    sync_account_meta()
+    LOG_REFRESH.request()
     start_background_tasks(
         [
-            ("init_resources_db", init_resources_db),
-            ("init_accounts_db", init_accounts_db),
-            ("sync_account_meta", sync_account_meta),
-            ("init_logs_db", init_logs_db),
-            ("parse_logs", parse_logs),
             ("ensure_today_backups", ensure_today_backups),
             ("templates_schema_audit", run_templates_schema_audit),
         ]
     )
-    debug_enabled = os.environ.get("RSSV7_DEBUG", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-        "off",
+    debug_enabled = os.environ.get("RSSV7_DEBUG", "0").strip().lower() not in {
+        "0", "false", "no", "off",
     }
-    app.run(debug=debug_enabled, host="0.0.0.0", port=5001)
+    # Даже явный debug не запускает вторую копию и фоновые задачи повторно.
+    app.run(debug=debug_enabled, use_reloader=False, host="0.0.0.0", port=5001)

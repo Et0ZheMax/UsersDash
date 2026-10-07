@@ -794,8 +794,6 @@
       loadWatchAlerts();
       renderServerSkeleton();
       doRefresh();
-      loadResources();
-      loadCycleInfo();
       setInterval(updateLocalTime, 1000);
 
       // Подключение клика для сортировки по столбцу "За сегодня"
@@ -1638,27 +1636,39 @@
     }
 
     // Обновление данных
+    let refreshInProgress = false;
     async function doRefresh() {
+      if (refreshInProgress) return;
+      refreshInProgress = true;
       showSpinner();
       try {
-        const resp = await fetch("/api/refresh", { method: "POST" });
+        // Сразу показываем готовые данные; обработка новых логов идёт в фоне.
+        await loadResources();
+        const resp = await fetch("/api/refresh?background=1", { method: "POST" });
         if (!resp.ok) throw new Error("Ошибка обновления данных");
-        const data = await resp.json();
+        let data = await resp.json();
+        lastUpdate = data.last_update;
+        updateLastUpdateDisplay();
+        hideSpinner();
+        while (data.running) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const statusResp = await fetch("/api/refresh/status", {cache: "no-store"});
+          if (!statusResp.ok) throw new Error("Ошибка проверки обновления");
+          data = await statusResp.json();
+        }
+        if (data.error) throw new Error(data.error);
         lastUpdate = data.last_update;
         await loadResources();
-        await loadCycleInfo();
-        await updateIncomeHeader();
         updateLastUpdateDisplay();
+        await Promise.all([loadCycleInfo(), updateIncomeHeader(), loadPayAlerts(), loadWatchAlerts()]);
         showToast("Данные обновлены");
       } catch (e) {
         console.error("Ошибка doRefresh:", e);
         showToast("Ошибка обновления данных", true);
       } finally {
         hideSpinner();
+        refreshInProgress = false;
       }
-      await loadPayAlerts();
-      await loadWatchAlerts();
-      await loadCycleInfo();
     }
 
     // Обновление отображения времени последнего обновления
