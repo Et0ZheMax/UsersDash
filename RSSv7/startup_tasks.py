@@ -55,6 +55,30 @@ class RefreshTask:
             job["done"].set()
 
 
+def start_periodic_refresh(
+    refresh: RefreshTask,
+    interval_seconds: float = 60,
+    stop_event: threading.Event | None = None,
+) -> threading.Thread:
+    """Обновляет БД независимо от открытых страниц; ошибки повторяются на следующем цикле."""
+    if interval_seconds <= 0:
+        raise ValueError("interval_seconds must be positive")
+    stop = stop_event if stop_event is not None else threading.Event()
+
+    def worker() -> None:
+        while not stop.is_set():
+            try:
+                refresh.request(wait=True)
+            except Exception:
+                # RefreshTask уже записал причину; следующая попытка остаётся запланированной.
+                pass
+            stop.wait(interval_seconds)
+
+    thread = threading.Thread(target=worker, name="rssv7-periodic-refresh", daemon=True)
+    thread.start()
+    return thread
+
+
 def run_background_tasks(
     tasks: Iterable[StartupTask],
     logger: Callable[[str], object] = print,

@@ -162,7 +162,7 @@ def _load_today_baseline() -> Dict[str, Tuple[int, int, int, int]]:
     return {rid: (bf, bw, bs, bg) for (rid, bf, bw, bs, bg) in rows}
 
 # ─────────────────────────── Основная логика ───────────────────────────
-def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
+def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS, *, notify: bool = True) -> List[dict]:
     """
     Ищем аккаунты, у которых dayGain==0 И last_updated старше threshold.
     Пишем файлы и шлём ТГ (с дедупликацией).
@@ -229,6 +229,10 @@ def check_inactive_accounts(threshold_hrs: int = THRESH_HOURS) -> List[dict]:
         ALERT_FULL.write_text(json.dumps(offenders, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         print("[file-write] error:", e)
+
+    # Частое обновление кэша панели не меняет состояние и расписание уведомлений.
+    if not notify:
+        return offenders
 
     # ── дедупликация и Telegram ───────────────────────────────────────
     try:

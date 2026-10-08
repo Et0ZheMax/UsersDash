@@ -3,10 +3,43 @@
 import threading
 import unittest
 
-from startup_tasks import RefreshTask, run_background_tasks, start_background_tasks
+from startup_tasks import RefreshTask, run_background_tasks, start_background_tasks, start_periodic_refresh
 
 
 class StartupTasksTests(unittest.TestCase):
+    def test_periodic_refresh_runs_without_http_requests(self) -> None:
+        stop = threading.Event()
+        calls = []
+
+        def parse() -> None:
+            calls.append(1)
+            if len(calls) == 2:
+                stop.set()
+
+        refresh = RefreshTask(parse)
+        thread = start_periodic_refresh(refresh, interval_seconds=0.01, stop_event=stop)
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(refresh.status()["running"])
+
+    def test_periodic_refresh_retries_after_failure(self) -> None:
+        stop = threading.Event()
+        calls = []
+
+        def parse() -> None:
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("temporary failure")
+            stop.set()
+
+        refresh = RefreshTask(parse)
+        thread = start_periodic_refresh(refresh, interval_seconds=0.01, stop_event=stop)
+        thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(refresh.status()["error"])
+
     def test_refresh_requests_share_one_running_task(self) -> None:
         started = threading.Event()
         release = threading.Event()

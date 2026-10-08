@@ -44,7 +44,7 @@ from farm_reactivation import (
     prepare_reactivation,
     write_profile_atomic as write_reactivation_profile,
 )
-from startup_tasks import RefreshTask, start_background_tasks
+from startup_tasks import RefreshTask, start_background_tasks, start_periodic_refresh
 
 # Установка всего: python -m pip install -U psutil paramiko requests Pillow pywin32 WMI icmplib Flask Flask-Cors
 
@@ -2544,6 +2544,7 @@ def _schedule_inactive_checker(interval_min: int = 60):
     def _worker():
         while True:
             try:
+                LOG_REFRESH.request(wait=True)
                 inactive_monitor.check_inactive_accounts()
             except Exception as e:
                 print("[inactive-checker]", e, flush=True)
@@ -2986,7 +2987,13 @@ def templates_editor_page():
     """Отдаём страницу редактора шаблонов."""
     return render_template("templates.html")
 
-LOG_REFRESH = RefreshTask(parse_logs)
+def _refresh_logs_and_inactive_cache():
+    """Обновляет данные и кэш простоя; уведомления остаются в часовом планировщике."""
+    parse_logs()
+    inactive_monitor.check_inactive_accounts(notify=False)
+
+
+LOG_REFRESH = RefreshTask(_refresh_logs_and_inactive_cache)
 
 
 def _refresh_response(state):
@@ -3023,7 +3030,7 @@ def _refresh_inactive_if_stale(max_age_min: int = 70) -> Path:
 
     if now - mtime > max_age_min * 60:
         try:
-            inactive_monitor.check_inactive_accounts()
+            LOG_REFRESH.request(wait=True)
         except Exception as e:  # если фон погиб — не падаем в API
             print("[inactive15-refresh]", e, flush=True)
 
@@ -6206,7 +6213,7 @@ if __name__ == "__main__":
 
     # Синхронизация небольших метаданных завершится до первого прохода парсера.
     sync_account_meta()
-    LOG_REFRESH.request()
+    start_periodic_refresh(LOG_REFRESH)
     start_background_tasks(
         [
             ("ensure_today_backups", ensure_today_backups),
