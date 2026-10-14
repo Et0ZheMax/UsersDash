@@ -6,6 +6,8 @@ param(
 $ErrorActionPreference='Stop'
 if(-not $SourceDirectory){$SourceDirectory=$PSScriptRoot}
 $env:PYTHONUTF8='1'
+[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$OutputEncoding=[Text.UTF8Encoding]::new($false)
 $data=Join-Path $SourceDirectory 'data'
 New-Item -ItemType Directory -Path $data -Force | Out-Null
 $log=Join-Path $data 'emulator_health.runtime.log'
