@@ -1,4 +1,8 @@
 __pycache__/
+RSSv7/Gn_LD_Check/data/emulator_health.json
+RSSv7/Gn_LD_Check/data/emulator_health.tmp
+RSSv7/Gn_LD_Check/data/emulator_health.runtime.log*
+RSSv7/Gn_LD_Check/data/EmulatorHealth.before-*.xml
 *.py[cod]
 RSSv7/logs_cache.db
 RSSv7/resources_web.db
