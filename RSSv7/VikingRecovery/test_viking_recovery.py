@@ -31,6 +31,13 @@ from viking_recovery import (
 
 
 class ProfileTests(unittest.TestCase):
+    @staticmethod
+    def character(record_id, name, index, slot, email='shared@example', custom='100'):
+        return {'Id': record_id, 'Name': name, 'InstanceId': index, 'Active': slot == 1,
+                'MenuData': json.dumps({'Config': {'Email': email, 'Slot': 'igg', 'Custom': custom}}),
+                'Data': json.dumps([{'ScriptId': 'vikingbot.base.accountswitch', 'IsActive': True,
+                                     'Config': {'mode': {'value': 'Player'}, 'account': {'value': slot}}}])}
+
     def test_loads_nested_appmenu_without_exposing_values(self) -> None:
         menu = {
             "ScriptId": "appmenu",
@@ -79,10 +86,8 @@ class ProfileTests(unittest.TestCase):
 
     def test_moves_all_characters_of_same_vm_without_changing_their_settings(self) -> None:
         payload = [
-            {'Id': 'p1', 'Name': 'Filosof1', 'InstanceId': 12, 'Active': True,
-             'Data': 'character 1', 'MenuData': 'login a'},
-            {'Id': 'p2', 'Name': 'Filosof2', 'InstanceId': 12, 'Active': False,
-             'Data': 'character 2', 'MenuData': 'login a'},
+            self.character('p1', 'Filosof1', 12, 1),
+            self.character('p2', 'Filosof2', 12, 2),
             {'Id': 'p3', 'Name': 'Other', 'InstanceId': 19, 'Data': 'other', 'MenuData': 'login b'},
         ]
         with tempfile.TemporaryDirectory() as directory:
@@ -95,6 +100,62 @@ class ProfileTests(unittest.TestCase):
             expected[0]['InstanceId'] = expected[1]['InstanceId'] = 8
             self.assertEqual(saved, expected)
             self.assertEqual(len(list(path.parent.glob('*.before_viking_recovery.*'))), 1)
+
+    def test_reused_old_number_does_not_move_new_customer(self) -> None:
+        payload = [self.character('returning', 'Old', 12, 1),
+                   self.character('new-customer', 'New', 12, 2, email='new@example')]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps(payload), encoding='utf-8')
+            update_profile_instance(path, Farm('Old', 'm', 'p', '', 'igg', True, 'returning', 12), 13)
+            saved = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(saved[0]['InstanceId'], 13)
+        self.assertEqual(saved[1], payload[1])
+
+    def test_same_login_different_game_id_is_not_shared_vm_proof(self) -> None:
+        payload = [self.character('a', 'A', 12, 1), self.character('b', 'B', 12, 2, custom='200')]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps(payload), encoding='utf-8')
+            update_profile_instance(path, Farm('A', 'm', 'p', '', 'igg', True, 'a', 12), 13)
+            saved = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(saved[1], payload[1])
+
+    def test_occupied_target_even_if_disabled_blocks_without_writes(self) -> None:
+        payload = [self.character('a', 'A', 12, 1), self.character('b', 'B', 13, 2)]
+        self.assertFalse(payload[1]['Active'])
+        self.assert_plan_blocked(payload, Farm('A', 'm', 'p', '', 'igg', True, 'a', 12), 13, 'другой ферме')
+
+    def test_duplicate_record_id_blocks_without_writes(self) -> None:
+        payload = [self.character('a', 'A', 12, 1), self.character('a', 'B', 19, 2)]
+        self.assert_plan_blocked(payload, Farm('A', 'm', 'p', '', 'igg', True, 'a', 12), 13, 'однозначно')
+
+    def test_duplicate_character_slots_block_without_writes(self) -> None:
+        payload = [self.character('a', 'A', 12, 1), self.character('b', 'B', 12, 1)]
+        self.assert_plan_blocked(payload, Farm('A', 'm', 'p', '', 'igg', True, 'a', 12), 13, 'одинаковые слоты')
+
+    def test_unassigned_customers_do_not_form_shared_vm(self) -> None:
+        payload = [self.character('a', 'A', -1, 1), self.character('b', 'B', -1, 2)]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps(payload), encoding='utf-8')
+            farm = Farm('A', 'm', 'p', '', 'igg', True, 'a', None)
+            update_profile_instance(path, farm, 13, dry_run=True)
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')), payload)
+            update_profile_instance(path, farm, 13)
+            saved = json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(saved[0]['InstanceId'], 13)
+        self.assertEqual(saved[1], payload[1])
+
+    def assert_plan_blocked(self, payload, farm, target, message):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps(payload), encoding='utf-8')
+            original = path.read_bytes()
+            with self.assertRaisesRegex(RecoveryError, message):
+                update_profile_instance(path, farm, target)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(list(path.parent.glob('*.before_viking_recovery*')), [])
 
     def test_stale_farm_binding_is_not_overwritten(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -143,11 +204,51 @@ class CloneTests(unittest.TestCase):
         engine.ldplayer_dir = Path("C:/LDPlayer/LDPlayer9")
         engine.runner = Mock()
         engine.new_index = None
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        engine.profile_path = Path(temporary.name) / 'profile.json'
+        engine.profile_path.write_text(json.dumps([{'Name': 'Test', 'InstanceId': -1}]), encoding='utf-8')
         engine._complete_missing_disks = Mock()
         engine._complete_missing_config = Mock()
         engine._repair_missing_vbox = Mock()
         engine._validate_instance_storage = Mock()
         return engine
+
+    def test_reusable_clone_with_foreign_profile_owner_is_not_modified(self) -> None:
+        engine = self.make_engine()
+        engine.profile_path.write_text(json.dumps([
+            {'Name': 'Test', 'InstanceId': -1}, {'Name': 'New customer', 'InstanceId': 6},
+        ]), encoding='utf-8')
+        engine.list_instances = Mock(return_value=[Instance(6, 'RECOVERY_Test_20260821_195429')])
+        with self.assertRaisesRegex(RecoveryError, 'другой ферме'):
+            engine.clone_template(Farm('Test', 'm', 'p', '', 'igg', True))
+        engine.runner.run.assert_not_called()
+        engine._complete_missing_disks.assert_not_called()
+
+    def test_rename_does_not_touch_reused_id_owned_by_new_customer(self) -> None:
+        engine = self.make_engine()
+        engine.new_index = 13
+        engine.profile_path.write_text(json.dumps([
+            {'Id': 'old', 'Name': 'Old', 'InstanceId': 12},
+            {'Id': 'new', 'Name': 'New', 'InstanceId': 12},
+        ]), encoding='utf-8')
+        engine.list_instances = Mock(return_value=[Instance(12, 'Old'), Instance(13, 'RECOVERY_Old_clone')])
+        with self.assertRaisesRegex(RecoveryError, 'владелец не подтверждён'):
+            engine.rename_transaction('Old', farm=Farm('Old', 'm', 'p', '', 'igg', True, 'old', 12))
+        engine.runner.run.assert_not_called()
+
+    def test_recovery_clone_name_includes_stable_customer_id(self) -> None:
+        engine = self.make_engine()
+        engine.profile_path.write_text(json.dumps([{'Id': 'new', 'Name': 'Test', 'InstanceId': -1}]),
+                                       encoding='utf-8')
+        engine.list_instances = Mock(side_effect=[
+            [Instance(6, 'RECOVERY_Test_legacy')],
+            [Instance(6, 'RECOVERY_Test_legacy'), Instance(13, 'RECOVERY_Test_6e6577_20261019_120000')],
+        ])
+        engine.runner.run.return_value = CompletedProcess([], 13, '', '')
+        engine.clone_template(Farm('Test', 'm', 'p', '', 'igg', True, 'new'))
+        self.assertIn('RECOVERY_Test_6e6577_', engine.runner.run.call_args.args[0][3])
+        self.assertEqual(engine.new_index, 13)
 
     def test_accepts_new_index_as_ldconsole_exit_code(self) -> None:
         engine = self.make_engine()

@@ -174,46 +174,97 @@ def choose_backup_name(target: str, existing_names: Iterable[str], now: datetime
     return candidate
 
 
-def update_profile_instance(profile_path: Path, farm: Farm, new_index: int) -> int | None:
-    """Атомарно перенести все аккаунты общей старой VM, сохранив выбор персонажей."""
+def _shared_character_identity(record: dict) -> tuple[tuple[str, str], int] | None:
+    """Внутреннее доказательство общего входа и явно выбранного персонажа."""
 
+    def setting(value):
+        return value.get("value") if isinstance(value, dict) else value
+
+    try:
+        menu = _nested_json(record.get("MenuData"))
+        steps = _nested_json(record.get("Data"))
+    except (ValueError, TypeError):
+        return None
+    config = menu.get("Config") if isinstance(menu, dict) else None
+    if not isinstance(config, dict) or setting(config.get("Slot")) != "igg":
+        return None
+    email = setting(config.get("Email"))
+    if not isinstance(email, str) or not email.strip() or not isinstance(steps, list):
+        return None
+    slots = set()
+    for step in steps:
+        if (not isinstance(step, dict) or step.get("ScriptId") != "vikingbot.base.accountswitch"
+                or step.get("IsActive") is not True):
+            continue
+        options = step.get("Config")
+        if not isinstance(options, dict) or setting(options.get("mode")) != "Player":
+            continue
+        if setting(options.get("skip", 0)) not in (0, False, "0", None):
+            continue
+        slot = setting(options.get("account"))
+        if not isinstance(slot, bool) and str(slot) in {str(n) for n in range(1, 8)}:
+            slots.add(int(slot))
+    if len(slots) != 1:
+        return None
+    return (email.strip().casefold(), str(setting(config.get("Custom")) or "").strip()), slots.pop()
+
+
+def _profile_instance_plan(profile_path: Path, farm: Farm, new_index: int) -> tuple:
+    """Построить перенос по записи клиента, не присваивая ей чужую VM по старому номеру."""
+
+    if isinstance(new_index, bool) or not str(new_index).isdigit() or int(new_index) <= TEMPLATE_INDEX:
+        raise RecoveryError("Некорректный целевой ID LDPlayer")
+    new_index = int(new_index)
     try:
         raw = profile_path.read_text(encoding="utf-8-sig")
         records = json.loads(raw)
     except (OSError, json.JSONDecodeError) as exc:
         raise RecoveryError(f"Не удалось прочитать профиль GnBots для обновления ID: {exc}") from exc
-    if not isinstance(records, list):
-        raise RecoveryError("Профиль GnBots имеет неожиданный формат: ожидался список")
+    if not isinstance(records, list) or any(not isinstance(item, dict) for item in records):
+        raise RecoveryError("Профиль GnBots имеет неожиданный формат: ожидался список записей")
 
-    matches = []
-    for record in records:
-        if not isinstance(record, dict):
-            continue
-        if farm.record_id and str(record.get("Id", "")).strip() == farm.record_id:
-            matches = [record]
-            break
-        if not farm.record_id and str(record.get("Name", "")).strip() == farm.name:
-            matches.append(record)
-    if not matches:
-        raise RecoveryError(f"Ферма {farm.name} больше не найдена в активном профиле GnBots")
+    matches = [pos for pos, item in enumerate(records) if (
+        str(item.get("Id", "")).strip() == farm.record_id if farm.record_id
+        else str(item.get("Name", "")).strip() == farm.name
+    )]
     if len(matches) != 1:
-        raise RecoveryError(f"В профиле найдено несколько записей фермы {farm.name}")
-
-    record = matches[0]
+        raise RecoveryError(f"Ферма {farm.name} не найдена однозначно в профиле GnBots; обновите список")
+    position = matches[0]
+    record = records[position]
     old_raw = record.get("InstanceId")
-    old_index = int(old_raw) if str(old_raw).strip().isdigit() else None
-    if farm.instance_id is not None and old_index != farm.instance_id:
+    old_index = int(old_raw) if not isinstance(old_raw, bool) and str(old_raw).strip().isdigit() else None
+    if old_index != farm.instance_id:
         raise RecoveryError("Привязка фермы изменилась во время восстановления; обновите список")
-    if old_index == int(new_index):
-        return old_index
-    for item in records:
-        if not isinstance(item, dict):
-            continue
-        same_instance = old_index is not None and str(item.get("InstanceId", "")).strip() == str(old_index)
-        if item is record or same_instance:
-            # Data/MenuData, Active и номера игровых персонажей остаются у каждой записи свои.
-            item["InstanceId"] = int(new_index)
 
+    moving = {position}
+    identity = _shared_character_identity(record)
+    if old_index is not None and identity is not None:
+        peers = [(pos, _shared_character_identity(item)) for pos, item in enumerate(records)
+                 if str(item.get("InstanceId", "")).strip() == str(old_index)]
+        group = [(pos, proof) for pos, proof in peers if proof is not None and proof[0] == identity[0]]
+        slots = [proof[1] for _, proof in group]
+        if len(slots) != len(set(slots)):
+            raise RecoveryError("Неоднозначная группа персонажей: одинаковые слоты; требуется проверка привязок")
+        moving.update(pos for pos, _ in group)
+
+    occupied = [item for pos, item in enumerate(records) if pos not in moving
+                and str(item.get("InstanceId", "")).strip() == str(new_index)]
+    if occupied:
+        raise RecoveryError(f"LDPlayer {new_index} уже привязан к другой ферме; выберите новый свободный клон")
+    for pos in moving:
+        # Data/MenuData, Active и номер персонажа остаются у каждой записи свои.
+        records[pos]["InstanceId"] = new_index
+    return raw, records, old_index, moving
+
+
+def update_profile_instance(
+    profile_path: Path, farm: Farm, new_index: int, *, dry_run: bool = False,
+) -> int | None:
+    """Перенести выбранного клиента и доказанных общих персонажей на свободную VM."""
+
+    raw, records, old_index, _ = _profile_instance_plan(profile_path, farm, new_index)
+    if dry_run or old_index == int(new_index):
+        return old_index
     backup_path = profile_path.with_name(profile_path.name + ".before_viking_recovery")
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{profile_path.name}.",
@@ -492,13 +543,15 @@ class RecoveryEngine:
 
     def clone_template(self, farm: Farm) -> int:
         instances_before = self.list_instances()
-        recovery_prefix = f"RECOVERY_{farm.name}_"
+        owner = f"{farm.record_id.encode('utf-8').hex()}_" if farm.record_id else ""
+        recovery_prefix = f"RECOVERY_{farm.name}_{owner}"
         reusable = [item for item in instances_before if item.name.startswith(recovery_prefix)]
         if len(reusable) > 1:
             raise RecoveryError(
                 f"Найдено несколько незавершённых клонов {farm.name}; требуется ручной выбор или очистка"
             )
         if reusable:
+            update_profile_instance(self.profile_path, farm, reusable[0].index, dry_run=True)
             self.new_index = reusable[0].index
             self._complete_missing_disks(self.new_index)
             self._complete_missing_config(self.new_index)
@@ -509,7 +562,7 @@ class RecoveryEngine:
 
         self._step(f"Клонирование чистого образа ID {TEMPLATE_INDEX}")
         before = {item.index for item in instances_before}
-        temporary_name = f"RECOVERY_{farm.name}_{datetime.now():%Y%m%d_%H%M%S}"
+        temporary_name = f"{recovery_prefix}{datetime.now():%Y%m%d_%H%M%S}"
         result = self.runner.run(
             [self.ldconsole, "copy", "--name", temporary_name, "--from", str(TEMPLATE_INDEX)],
             timeout=20 * 60,
@@ -525,6 +578,7 @@ class RecoveryEngine:
                 f"LDPlayer не создал ровно один новый экземпляр; код {result.returncode}; "
                 f"свободно {free / 1024**3:.2f} ГБ{suffix}"
             )
+        update_profile_instance(self.profile_path, farm, created[0].index, dry_run=True)
         self.new_index = created[0].index
         if not created[0].name.startswith(recovery_prefix):
             self.runner.run(
@@ -961,7 +1015,9 @@ class RecoveryEngine:
         detail = " после подтверждения загрузки ресурсов" if resource_confirmed else ""
         raise RecoveryError(f"Игра не вышла на карту за {timeout // 60} минут{detail}")
 
-    def rename_transaction(self, farm_name: str, keep_old: bool = True) -> tuple[str | None, int]:
+    def rename_transaction(
+        self, farm_name: str, keep_old: bool = True, *, farm: Farm | None = None,
+    ) -> tuple[str | None, int]:
         if self.new_index is None:
             raise RecoveryError("Новый экземпляр ещё не создан")
         self._step("Безопасное переименование эмуляторов")
@@ -970,6 +1026,16 @@ class RecoveryEngine:
             (item for item in instances if item.name == farm_name and item.index != self.new_index),
             key=lambda item: item.index,
         )
+        if farm is not None:
+            raw, _, _, moving = _profile_instance_plan(self.profile_path, farm, self.new_index)
+            profile = json.loads(raw)
+            for old in existing:
+                owners = {pos for pos, item in enumerate(profile)
+                          if str(item.get("InstanceId", "")).strip() == str(old.index)}
+                if not owners or not owners.issubset(moving):
+                    raise RecoveryError(f"Нельзя переименовать LDPlayer {old.index}: владелец не подтверждён")
+        elif existing:
+            raise RecoveryError("Нельзя переименовать старую VM без проверки владельца")
         if existing and not keep_old:
             raise RecoveryError("Удаление старого эмулятора запрещено этой версией автоматизации")
         used_names = {item.name for item in instances}
@@ -1010,12 +1076,13 @@ class RecoveryEngine:
             raise RecoveryError("Для фермы нужны непустые Email/Password и Slot=igg")
         self.validate()
         self.clone_template(farm)
+        update_profile_instance(self.profile_path, farm, self.new_index, dry_run=True)
         self.launch_and_wait()
         self.open_login()
         self.submit_credentials(farm)
         self.select_game_id(farm)
         self.wait_for_game()
-        backup_name, new_index = self.rename_transaction(farm.name)
+        backup_name, new_index = self.rename_transaction(farm.name, farm=farm)
         self._step("Обновление LDPlayer ID в профиле GnBots")
         old_index = update_profile_instance(self.profile_path, farm, new_index)
         self.logger.info(

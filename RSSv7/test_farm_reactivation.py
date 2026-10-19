@@ -99,6 +99,21 @@ class FarmReactivationTests(unittest.TestCase):
                 igg_id="777",
             )
 
+    def test_returning_customer_does_not_reclaim_reused_archived_instance_id(self):
+        newcomer = _record('new-customer', 'New farm', 12)
+        self.profile.write_text(json.dumps([newcomer]), encoding='utf-8')
+        self._backup('14__07__2026', [_record('returning', 'Old farm', 12)])
+        prepare_reactivation(
+            self.profile, self.backups, self.rollbacks,
+            account_id='returning', farm_name='Old farm', email='returning@example.test',
+            password='secret', igg_id='777',
+        )
+        records = json.loads(self.profile.read_text(encoding='utf-8'))
+        self.assertEqual(records[0], newcomer)
+        returned = next(record for record in records if record['Id'] == 'returning')
+        self.assertEqual(returned['InstanceId'], -1)
+        self.assertFalse(returned['Active'])
+
     def test_ready_marker_requires_non_negative_instance(self):
         record = _record("wanted-id", "ANGEL", -1)
         record[MARKER_KEY] = {"status": "prepared"}
