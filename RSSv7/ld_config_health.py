@@ -1,0 +1,402 @@
+"""Живая диагностика всех VM LDPlayer и восстановление только проверенных конфигов.
+
+Остановленная VM сама по себе не является неисправной. Исправление конфигурации
+не доказывает загрузку Android или работу игрового аккаунта.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import uuid
+import time
+import threading
+from typing import Callable
+
+from config_recovery import ConfigRecoveryError, restore_config
+
+
+class RepairBlocked(ConfigRecoveryError):
+    """Нет достаточных доказательств для безопасного восстановления."""
+
+
+_SIZE_CACHE: dict[str, tuple[float, dict]] = {}
+_SIZE_LOCK = threading.Lock()
+
+
+def disk_usage(folder: Path) -> dict:
+    """Считает занятое файлами место, учитывая sparse/compressed VMDK в Windows.
+
+    Read-only обход корневого junction разрешён; вложенные ссылки не обходятся.
+    Ошибка чтения не выдаётся за нулевой размер. Кеш ограничен двумя минутами.
+    """
+    key = str(folder.resolve())
+    with _SIZE_LOCK:
+        cached = _SIZE_CACHE.get(key)
+        if cached and time.monotonic() - cached[0] < 120:
+            return dict(cached[1])
+    logical, allocated, errors = 0, 0, []
+    try:
+        if not folder.is_dir():
+            raise OSError("Нет каталога VM")
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            get_size = ctypes.WinDLL('kernel32', use_last_error=True).GetCompressedFileSizeW
+            get_size.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+            get_size.restype = wintypes.DWORD
+        for root, dirs, files in os.walk(folder, onerror=lambda exc: errors.append(str(exc))):
+            dirs[:] = [name for name in dirs if not (Path(root) / name).is_symlink()
+                       and not (Path(root) / name).is_junction()]
+            for name in files:
+                path = Path(root) / name
+                try:
+                    if path.is_symlink():
+                        continue
+                    stat = path.stat()
+                    logical += stat.st_size
+                    if os.name == "nt":
+                        high = wintypes.DWORD()
+                        ctypes.set_last_error(0)
+                        low = get_size(str(path), ctypes.byref(high))
+                        if low == 0xFFFFFFFF and ctypes.get_last_error():
+                            raise ctypes.WinError(ctypes.get_last_error())
+                        allocated += (high.value << 32) | low
+                    else:
+                        allocated += getattr(stat, 'st_blocks', stat.st_size // 512) * 512
+                except OSError as exc:
+                    errors.append(str(exc))
+    except OSError as exc:
+        errors.append(str(exc))
+    result = {'disk_bytes': None if errors else allocated, 'logical_bytes': logical,
+              'disk_checked_at': datetime.now(timezone.utc).isoformat(), 'disk_errors': errors}
+    with _SIZE_LOCK:
+        _SIZE_CACHE[key] = (time.monotonic(), result)
+    return dict(result)
+
+
+def read_json(path: Path):
+    """Читает JSON, включая распространённый в Windows BOM."""
+    return json.loads(path.read_text(encoding="utf-8-sig"))
+
+
+def config_problems(config: object) -> list[str]:
+    """Проверяет содержимое, а не только существование/хеш файла."""
+    if not isinstance(config, dict):
+        return ["config_not_object"]
+    problems = []
+    name = str(config.get("statusSettings.playerName") or "").strip()
+    if not name or re.fullmatch(r"ldplayer(?:\s*[-_]?\s*\d+)?", name, re.I):
+        problems.append("player_name_lost")
+    resolution = config.get("advancedSettings.resolution")
+    # Старые штатные config могут использовать заводское разрешение без этого поля.
+    if "advancedSettings.resolution" in config and (not isinstance(resolution, dict) or any(
+        type(resolution.get(key)) is not int or resolution[key] <= 0 for key in ("width", "height")
+    )):
+        problems.append("resolution_invalid")
+    return problems
+
+
+def instance_number(value: object) -> int:
+    """Нормализует индекс, не позволяя передать путь или булево значение."""
+    if isinstance(value, bool) or not re.fullmatch(r"\d{1,4}", str(value)):
+        raise RepairBlocked("Некорректный индекс LDPlayer")
+    return int(value)
+
+
+def load_profile(path: Path) -> list[dict]:
+    """Читает все записи, включая выключенные, без fallback на старый кеш."""
+    data = read_json(path)
+    if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+        raise RepairBlocked("Некорректный JSON профиля")
+    return data
+
+
+def target_is_disabled(index: int, profile: Path, gn_config: Path) -> bool:
+    """Разрешает открытый GUI только для выключенной VM в реально выбранном профиле."""
+    try:
+        selected = read_json(gn_config).get('SelectedProfile')
+        if not isinstance(selected, str) or Path(selected).name != selected:
+            return False
+        if Path(selected).suffix.lower() != '.json':
+            selected += '.json'
+        if selected.casefold() != profile.name.casefold():
+            return False
+        rows = [row for row in load_profile(profile) if instance_number(row.get('InstanceId')) == index]
+        return bool(rows) and all(row.get('Active') is False for row in rows)
+    except (OSError, ValueError, AttributeError, ConfigRecoveryError):
+        return False
+
+
+def inventory(vms: Path, profile: Path) -> dict:
+    """Объединяет индексы из профиля, config и каталогов VM; ошибки не скрывает."""
+    errors, accounts = [], {}
+    try:
+        for row in load_profile(profile):
+            index = instance_number(row.get("InstanceId"))
+            accounts.setdefault(index, []).append({
+                "id": str(row.get("Id") or ""), "name": str(row.get("Name") or ""),
+                "active": bool(row.get("Active")),
+            })
+    except (OSError, ValueError, ConfigRecoveryError) as exc:
+        errors.append(f"profile: {exc}")
+    indices = set(accounts)
+    try:
+        config_paths = list((vms / "config").iterdir())
+        vm_paths = list(vms.iterdir())
+        for path in config_paths + vm_paths:
+            match = re.fullmatch(r"leidian(\d+)(?:\.config)?", path.name, re.I)
+            if match:
+                indices.add(int(match[1]))
+    except OSError as exc:
+        errors.append(f"inventory: {exc}")
+    rows = []
+    for index in sorted(indices):
+        config = vms / "config" / f"leidian{index}.config"
+        issues, name = [], ""
+        try:
+            data = read_json(config)
+            issues = config_problems(data)
+            if isinstance(data, dict):
+                name = str(data.get("statusSettings.playerName") or "")
+        except FileNotFoundError:
+            issues = ["config_missing"]
+        except (OSError, ValueError) as exc:
+            issues = ["config_unreadable"]
+        linked = accounts.get(index, [])
+        if not (vms / f"leidian{index}").is_dir():
+            issues.append("vm_directory_missing")
+        rows.append({
+            "instance_id": index, "filename": config.name, "player_name": name,
+            "accounts": linked, "active": any(a["active"] for a in linked),
+            "orphan": not linked, "issues": issues,
+            "config_status": "damaged" if issues else "valid",
+            "android_status": "not_checked",
+            "usage_class": "unlinked" if not linked else (
+                "active" if any(a["active"] for a in linked) else "disabled"),
+        })
+    return {"checked_at": datetime.now(timezone.utc).isoformat(), "ok": not errors,
+            "errors": errors, "instances": rows,
+            "crashed": [row["filename"] for row in rows if row["issues"]]}
+
+
+def console_rows(console: Path) -> dict[int, dict]:
+    """Не принимает ошибку list2 за отсутствие работающих VM."""
+    result = subprocess.run([str(console), "list2"], capture_output=True, timeout=15, check=False)
+    if result.returncode:
+        raise RepairBlocked(f"ldconsole list2: код {result.returncode}")
+    rows = {}
+    for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        parts = line.strip().split(",")
+        try:
+            # Имя может содержать запятую; последние 8 полей имеют фиксированный формат.
+            if len(parts) < 10:
+                raise ValueError("короткая строка")
+            tail = [int(value) for value in parts[-8:]]
+            index = instance_number(parts[0])
+            rows[index] = {"running": any(value > 0 for value in tail[:5]),
+                           "title": ",".join(parts[1:-8]),
+                           "pids": [value for value in tail[3:5] if value > 0]}
+        except (ValueError, ConfigRecoveryError) as exc:
+            raise RepairBlocked("Не удалось разобрать ответ list2") from exc
+    if not rows:
+        raise RepairBlocked("ldconsole list2 вернул пустой список")
+    return rows
+
+
+def runtime_inventory(report: dict, console: Path) -> dict:
+    """Добавляет runtime; остановленная VM остаётся stopped, а не crashed."""
+    try:
+        live = console_rows(console)
+        for row in report["instances"]:
+            item = live.get(row["instance_id"])
+            row["runtime_status"] = "unknown" if item is None else (
+                "running" if item["running"] else "stopped")
+            row["pids"] = item['pids'] if item else []
+            if item is None:
+                row["issues"].append("instance_not_registered")
+                row["config_status"] = "damaged"
+        def boot_status(row: dict) -> None:
+            if row.get("runtime_status") != "running":
+                return
+            try:
+                probe = subprocess.run(
+                    [str(console), "adb", "--index", str(row["instance_id"]),
+                     "--command", "shell getprop sys.boot_completed"],
+                    capture_output=True, timeout=8, check=False,
+                )
+                row["android_status"] = "ready" if probe.returncode == 0 and (
+                    probe.stdout.decode(errors="replace").strip() == "1") else "booting_or_unavailable"
+            except (OSError, subprocess.SubprocessError):
+                row["android_status"] = "unknown"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(boot_status, report["instances"]))
+        report["crashed"] = [row["filename"] for row in report["instances"] if row["issues"]]
+    except (OSError, subprocess.SubprocessError, ConfigRecoveryError) as exc:
+        report["errors"].append(f"runtime: {exc}")
+        report["ok"] = False
+    return report
+
+
+def _name_matches(name: str, expected: set[str]) -> bool:
+    """Разрешает общий эмулятор Filosof3/4 без подстрочного совпадения Airat/Airat2."""
+    normalized = name.strip().casefold()
+    expanded = {normalized}
+    parts = normalized.split("/")
+    prefix = re.sub(r"\d+$", "", parts[0])
+    expanded.update(prefix + part if part.isdigit() else part for part in parts)
+    return bool(expanded & {value.strip().casefold() for value in expected})
+
+
+def select_source(index: int, expected: set[str], snapshot_root: Path, daily_root: Path,
+                  override: Path | None = None) -> tuple[Path, bytes]:
+    """Выбирает семантически целый снимок нужного владельца, затем сверяет manifest.
+
+    Непривязанный индекс без имени владельца не восстанавливается по истории:
+    один индекс LDPlayer мог принадлежать разным людям в разные месяцы.
+    """
+    if not expected or not any(name.strip() for name in expected):
+        raise RepairBlocked("Нет привязки к аккаунту: сначала установите владельца VM")
+    filename = f"leidian{index}.config"
+    candidates = []
+    if override is not None:
+        candidates = [(override / filename, None)]
+    else:
+        for folder in sorted(snapshot_root.iterdir(), reverse=True) if snapshot_root.is_dir() else []:
+            if folder.is_dir() and not folder.name.startswith("."):
+                try:
+                    entry = read_json(folder / "manifest.json").get("files", {}).get(filename)
+                    if isinstance(entry, dict):
+                        candidates.append((folder / filename, entry))
+                except (OSError, ValueError, AttributeError):
+                    continue
+        dated = []
+        for folder in daily_root.iterdir() if daily_root.is_dir() else []:
+            try:
+                stamp = datetime.strptime(folder.name, "%d__%m__%Y")
+                if folder.is_dir():
+                    dated.append((stamp, folder))
+            except ValueError:
+                continue
+        candidates.extend((folder / filename, None) for _, folder in sorted(dated, reverse=True))
+    for path, entry in candidates:
+        try:
+            raw = path.read_bytes()
+            if entry and (len(raw) != entry.get("size") or
+                          hashlib.sha256(raw).hexdigest() != entry.get("sha256")):
+                continue
+            config = json.loads(raw.decode("utf-8-sig"))
+            if config_problems(config) or not _name_matches(config["statusSettings.playerName"], expected):
+                continue
+            return path, raw
+        except (OSError, ValueError, KeyError):
+            continue
+    raise RepairBlocked(f"Нет целого бэкапа {filename} для владельцев: {', '.join(sorted(expected))}")
+
+
+@contextmanager
+def repair_lock(root: Path):
+    """Общий OS lock для HTTP и отдельных процессов, освобождается при аварии."""
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / "config-repair.lock").open("a+b") as stream:
+        stream.seek(0)
+        stream.write(b"0")
+        stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RepairBlocked("Уже выполняется другое восстановление") from exc
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+def repair_instances(indices: list, *, vms: Path, profile: Path, snapshot_root: Path,
+                     daily_root: Path, rollback_root: Path, assert_stopped: Callable[[int], None],
+                     override: Path | None = None, dry_run: bool = False) -> dict:
+    """Проверяет план до записи; каждый config имеет откат и результат read-back.
+
+    Никогда не копирует/удаляет диски VM, не меняет Active, не запускает GnBots.
+    Ошибка одного элемента не превращает пакет в успешный результат.
+    """
+    if not isinstance(indices, list) or not indices or len(indices) > 200:
+        raise RepairBlocked("Нужен непустой список индексов (до 200)")
+    indices = list(dict.fromkeys(instance_number(value) for value in indices))
+    results = []
+    with repair_lock(rollback_root):
+        profile_bytes = profile.read_bytes()
+        report = inventory(vms, profile)
+        if not report["ok"]:
+            raise RepairBlocked("; ".join(report["errors"]))
+        rows = {row["instance_id"]: row for row in report["instances"]}
+        for index in indices:
+            item = {"instance_id": index, "ok": False, "android_status": "not_checked"}
+            try:
+                row = rows.get(index)
+                if row is None:
+                    raise RepairBlocked("Индекс не найден в инвентаризации")
+                if not row["issues"]:
+                    item.update(ok=True, status="unchanged", message="Config уже целый; запись не нужна")
+                    results.append(item)
+                    continue
+                if "vm_directory_missing" in row["issues"]:
+                    raise RepairBlocked("Каталог VM отсутствует: восстановление config не вернёт диски")
+                source, raw = select_source(index, {a["name"] for a in row["accounts"]},
+                                            snapshot_root, daily_root, override)
+                destination = vms / "config" / f"leidian{index}.config"
+                before = destination.read_bytes() if destination.exists() else None
+                item.update(source=str(source), sha256=hashlib.sha256(raw).hexdigest())
+                assert_stopped(index)
+                if profile.read_bytes() != profile_bytes:
+                    raise RepairBlocked("Профиль изменился во время подготовки; повторите диагностику")
+                if dry_run:
+                    item.update(ok=True, status="planned", message="Источник и остановка проверены; запись не выполнялась")
+                else:
+                    # Зафиксированные байты источника исключают гонку с заменой резервной копии.
+                    with tempfile.TemporaryDirectory(prefix=".repair-", dir=rollback_root) as stage:
+                        staged = Path(stage) / destination.name
+                        staged.write_bytes(raw)
+                        assert_stopped(index)
+                        if profile.read_bytes() != profile_bytes:
+                            raise RepairBlocked("Профиль изменился перед записью; восстановление отменено")
+                        current = destination.read_bytes() if destination.exists() else None
+                        if current != before:
+                            raise RepairBlocked("Рабочий config изменился; восстановление отменено")
+                        rollback = restore_config(staged, destination, rollback_root)
+                        item["rollback"] = str(rollback) if rollback else None
+                        if destination.read_bytes() != raw or config_problems(read_json(destination)):
+                            raise RepairBlocked("Проверка записанного config не прошла; сохранён откат")
+                    item.update(ok=True, status="config_restored",
+                                message="Config восстановлен и прочитан повторно. Android и игра ещё не проверены")
+            except (OSError, ValueError, ConfigRecoveryError, subprocess.SubprocessError) as exc:
+                item.update(status="blocked", message=str(exc))
+            results.append(item)
+        journal = rollback_root / f"repair-{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex}.json"
+        journal.write_text(json.dumps({"dry_run": dry_run, "results": results},
+                                      ensure_ascii=False, indent=2), encoding="utf-8")
+    logs = [f"{'OK' if row['ok'] else 'BLOCKED'} LDPlayer {row['instance_id']}: {row['message']}"
+            + (f"; source={row['source']}" if row.get("source") else "")
+            + (f"; rollback={row['rollback']}" if row.get("rollback") else "") for row in results]
+    return {"ok": all(row["ok"] for row in results), "results": results, "logs": logs,
+            "verification": "config_only; android_and_game_not_checked"}

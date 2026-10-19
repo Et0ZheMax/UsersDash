@@ -1,720 +1,181 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <title>FIX {{ server_name }}</title>
-  <link rel="icon" href="{{ url_for('static', filename='99.png') }}" type="image/png">
-  <style>
-    /* Базовые стили */
-    body { margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; background:#F5F5F7; color:#1D1D1F; height:100vh; display:flex; flex-direction:column; }
-    .header { padding:16px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,0.1); text-align:center; }
-    .header h1 { margin:0; font-size:20px; font-weight:600; }
-    .main { flex:1; display:flex; overflow:hidden; }
-    .panel { background:#fff; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.1); display:flex; flex-direction:column; overflow:hidden; }
-    .left-panel, .right-panel { flex:1 1 0; padding:16px; display:flex; flex-direction:column; overflow:hidden; }
-    .splitter { width:4px; cursor:col-resize; background:rgba(0,0,0,0.1); }
-    .btn { background:#0070c9; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-size:14px; cursor:pointer; transition:background .2s; margin-bottom:8px; }
-    .btn:hover { background:#005999; }
-    /*.btn--fix        { background:#2ecc71; }      /* основа */
-    .btn--fix:hover  { background:#27b55b; }
-    /* СТАЛО */
-    .btn--fix{background:#2ecc71;}
-
-    /* NEW — кнопка «Пути» тёмно-розовый градиент */
-    .btn-path{
-      background:linear-gradient(45deg,#ff3d83 0%,#b4005a 100%);
-      color:#fff;font-size:12px;font-weight:600;padding:4px 10px;
-      border:none;border-radius:8px;cursor:pointer;margin-right:12px;
-    }
-
-    .btn-emergency{
-      background:linear-gradient(45deg,#ff6161 0%,#b60000 100%);
-      color:#fff; font-size:12px; font-weight:700; padding:4px 10px;
-      border:none; border-radius:8px; cursor:pointer; margin-right:8px;
-    }
-
-    /* панель со списком резервных папок */
-    .paths-panel{
-      position:absolute;top:54px;left:12px;z-index:200;
-      background:#2b2b2b;color:#fff;border:1px solid #555;
-      border-radius:10px;padding:12px;min-width:180px;box-shadow:0 4px 12px rgba(0,0,0,.4);
-    }
-    .paths-panel label{display:block;margin:4px 0;}
-    .hidden{display:none;}
-    .btn:disabled { opacity:.6; cursor:default; }
-    .sort-controls { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
-    #accList { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; padding:0; margin:0; list-style:none; flex:1; overflow-y:auto; }
-    #accList li { display:flex; align-items:center; }
-    #accList li input[type="checkbox"] { margin-right:6px; }
-    .accBtn { flex:1; background:#3498db; color:#fff; border:none; border-radius:8px; padding:10px; font-size:14px; cursor:pointer; transition:background .2s; text-align:center; }
-    .accBtn:hover { background:#2980b9; }
-    .accBtn--failed { background:#c0392b; }
-    .accBtn:disabled { opacity:.6; cursor:default; }
-    .section { display:flex; flex-direction:column; flex:1; margin-bottom:16px; overflow:hidden; }
-    .section:last-child { margin-bottom:0; }
-    .panel-title { margin:0 0 8px; font-size:16px; font-weight:600; }
-    .logArea { background:#f9f9f9; border:1px solid #e0e0e0; border-radius:8px; padding:12px; font-size:13px; font-family:Menlo,Monaco,Consolas,"Courier New",monospace; flex:1; overflow-y:auto; line-height:1.4; white-space:pre-wrap; }
-    .spinner { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); width:40px; height:40px; border:4px solid rgba(0,0,0,0.1); border-top-color:#0070c9; border-radius:50%; animation:spin 1s linear infinite; z-index:1000; }
-    @keyframes spin { to { transform:translate(-50%,-50%) rotate(360deg); } }
-  </style>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Эмуляторы · {{ server_name }}</title>
+<link rel="icon" href="{{ url_for('static',filename='99.png') }}" type="image/png">
+<style>
+:root{color-scheme:light;--ink:#172433;--muted:#68788c;--line:#e5eaf0;--blue:#2463eb}
+*{box-sizing:border-box}body{margin:0;background:#f5f7fa;color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+button,input,select{font:inherit}button{cursor:pointer}button:disabled{opacity:.45;cursor:default}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #94bbff;outline-offset:3px}
+.page{max-width:1600px;padding:30px 32px 48px;margin:auto}.header,.tools,.toolbar,.panel-title,.result-title{display:flex;align-items:center;gap:12px}
+.header{justify-content:space-between;margin-bottom:24px;flex-wrap:wrap}.eyebrow{font-size:12px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+h1{font-size:28px;letter-spacing:-.7px;line-height:1.2;margin:4px 0 0;font-weight:650}.tools{flex-wrap:wrap}
+.timestamp{color:var(--muted);font-size:12px;text-align:right}.btn{border:1px solid #d8e0ea;background:#fff;color:#34465b;padding:9px 14px;border-radius:8px;font-weight:550}
+.btn:hover:not(:disabled){background:#f0f4fb}.primary{background:var(--blue);border-color:var(--blue);color:#fff}.primary:hover:not(:disabled){background:#1c51c9}
+.bot-status{color:var(--muted);display:flex;align-items:center;gap:6px;font-size:12px}.dot{width:7px;height:7px;border-radius:50%;background:#a1adba;display:inline-block}.dot.on{background:#21a577}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}.stat{text-align:left;background:#fff;border:1px solid var(--line);border-radius:12px;padding:17px 20px;color:var(--ink)}
+.stat[aria-pressed=true]{border-color:#a5bffc;box-shadow:0 0 0 2px #e5edff}.stat-label{display:block;color:var(--muted);font-size:13px}
+.stat-value{display:block;font-size:28px;font-weight:650;letter-spacing:-.8px;margin:2px 0}.stat-meta{color:var(--muted);font-size:12px}.stat.warn .stat-value{color:#c33e32}
+.workspace{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}.panel{border:1px solid var(--line);border-radius:12px;background:#fff;overflow:hidden}
+.toolbar{flex-wrap:wrap;padding:16px 18px;border-bottom:1px solid var(--line);justify-content:space-between}.tabs{display:flex;flex-wrap:wrap;gap:3px}
+.tab{border:0;border-radius:7px;background:none;color:var(--muted);padding:7px 10px;font-size:13px;white-space:nowrap}.tab[aria-pressed=true]{background:#edf3ff;color:#2455bf;font-weight:600}.tab span{margin-left:5px;opacity:.7;font-size:12px}
+.filters{display:flex;flex-wrap:wrap;gap:8px;padding:12px 18px;border-bottom:1px solid var(--line)}.search{flex:1;min-width:150px}
+input[type=search],select{border:1px solid #dfe5ed;background:#fff;padding:8px 10px;border-radius:7px;color:var(--ink)}select{font-size:12px}
+.table-scroll{overflow:auto;max-height:calc(100vh - 365px);min-height:230px}table{width:100%;border-collapse:collapse;text-align:left}
+th{position:sticky;top:0;background:#fafbfd;z-index:1;color:var(--muted);font-size:11px;font-weight:600}
+th,td{padding:13px 15px;border-bottom:1px solid #edf0f4;vertical-align:middle}th:first-child,td:first-child{width:38px;padding-right:0}tr:last-child td{border-bottom:0}tr.issue{background:#fffafa}tr.selected{background:#f3f7ff}
+td.name{min-width:160px}.account-name{display:block;font-weight:600;line-height:1.35}.instance{color:var(--muted);font-size:12px;margin-top:3px}
+.badge{display:inline-flex;white-space:nowrap;padding:3px 7px;border-radius:5px;font-size:11px;font-weight:550}.good{background:#edf8f3;color:#2d7f60}.bad{background:#ffeded;color:#b83a30}.neutral{background:#f0f2f5;color:#687789}.amber{background:#fff4df;color:#936612}
+.runtime{font-size:12px;color:var(--muted);margin-top:5px;white-space:nowrap}.disk{font-variant-numeric:tabular-nums;white-space:nowrap;font-size:13px}.more{border:0;background:none;color:#738198;font-size:18px;padding:4px 8px}
+.row-details td{background:#fafbfd;font-size:12px;color:var(--muted);padding:14px 18px 16px 48px}.row-details p{margin:0 0 5px}.footer{color:var(--muted);padding:11px 18px;font-size:12px;border-top:1px solid var(--line)}
+.sidebar{display:grid;gap:14px}.action-panel{padding:20px}.panel-title{justify-content:space-between;margin-bottom:14px}h2{margin:0;font-size:15px;font-weight:650}.selection-count{font-size:12px;color:var(--muted)}
+.action-panel .btn{width:100%;margin-bottom:9px}.hint{margin:4px 0 14px;color:var(--muted);font-size:12px}.divider{border:0;border-top:1px solid var(--line);margin:13px 0}
+details{color:var(--muted);font-size:12px}summary{cursor:pointer;padding:5px 0}details p{margin:8px 0}details select{width:100%;margin:8px 0}.control-actions{display:flex;gap:8px;margin-top:10px}.control-actions .btn{font-size:12px}
+.results{padding:18px 20px}.results h2{margin-bottom:12px}.empty-result{color:var(--muted);font-size:12px}.result{border-bottom:1px solid var(--line);padding:10px 0}.result:last-child{border:0}
+.result-title{justify-content:space-between;align-items:start;gap:6px;font-size:12px;font-weight:600}.result p{font-size:12px;color:var(--muted);margin:5px 0 0}.technical{margin-top:15px;border-top:1px solid var(--line);padding-top:8px}
+pre{font:11px/1.6 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f8fb;padding:12px;border-radius:7px;max-height:220px;overflow:auto}
+.notice{padding:11px 15px;background:#fff3f1;border:1px solid #f7d7d1;color:#ab3c32;border-radius:8px;margin-bottom:16px}.empty-table{text-align:center;color:var(--muted);padding:45px 20px}.loading{color:var(--blue);font-size:12px}[hidden]{display:none!important}
+@media(max-width:1100px){.page{padding:22px 20px}.workspace{grid-template-columns:minmax(0,1fr) 265px;gap:14px}th,td{padding:12px 10px}.action-panel,.results{padding:17px}}
+@media(max-width:850px){.workspace{grid-template-columns:1fr}.sidebar{grid-template-columns:1fr 1fr}.table-scroll{max-height:60vh}.stats{gap:8px}.stat{padding:12px}.stat-label{font-size:11px}.stat-meta{font-size:10px}.timestamp{display:none}}
+@media(max-width:540px){.page{padding:18px 12px}.stats{grid-template-columns:repeat(2,1fr)}.sidebar{grid-template-columns:1fr}h1{font-size:24px}}
+</style>
 </head>
 <body>
-  <div class="spinner" id="spinner"></div>
-  <!-- СТАЛО -->
-  <div class="header">
-    <button class="btn-path"      id="btnPaths">Пути</button>
-    <!-- NEW emergency -->
-    <button class="btn-emergency" id="btnReplaceAll" title="Полная замена конфигов (экстренно)">
-      Замена&nbsp;конфигов
-    </button>
-    <h1 style="display:inline-block;margin:0">FIX аккаунтов {{ server_name }}</h1>
-  </div>
-
-  <!-- СРАЗУ ПОСЛЕ header добавляем панель -->
-  <div id="pathsPanel" class="paths-panel hidden">
-    <label>
-      <input type="radio" name="backupPath" value="" checked>
-      Стандартный путь
-    </label>
-    <div id="backupList"></div> <!-- заполняется через JS -->
-  </div>
-  <div class="main">
-    <div class="panel left-panel" id="leftPanel">
-      <div class="sort-controls">
-        <button class="btn" id="btnRefresh">Обновить</button>
-        <button class="btn" id="btnStop">Stop GnBots</button>
-        <button class="btn" id="btnStart">Start GnBots</button>
-        <button class="btn" id="sortFix">Требуют фикса</button>
-        <button class="btn" id="sortAlpha">По алфавиту</button>
-        <button class="btn" id="btnCheck">Check Emus</button>
-        <button class="btn btn--fix" id="btnFixCfgSelected">Fix_Config selected</button>
-        <button class="btn btn--fix" id="btnFixSelected">Fix Selected</button>
-        <!-- NEW: чинит все слетевшие аккаунты без выбора -->
-        <button class="btn btn--fix" id="btnFixAll">Починить всё</button>
-      </div>
-      <ul id="accList"></ul>
-    </div>
-    <div class="splitter" id="splitter"></div>
-    <div class="panel right-panel" id="rightPanel">
-      <div class="section">
-        <h2 class="panel-title">Лог обновления</h2>
-        <div id="refreshLog" class="logArea"></div>
-      </div>
-      <div class="section">
-        <h2 class="panel-title">Лог FIX и управления</h2>
-        <div id="fixLog" class="logArea"></div>
-      </div>
-      <div class="section">
-        <h2 class="panel-title">Лог Check Emus</h2>
-        <div id="checkLog" class="logArea"></div>
-      </div>
-    </div>
-  </div>
-  <script>
-    const spinner = document.getElementById('spinner');
-    const btnRefresh = document.getElementById('btnRefresh');
-    const btnPaths      = document.getElementById('btnPaths');   // ← NEW
-    const btnReplaceAll = document.getElementById('btnReplaceAll');   // ← NEW
-    const pathsPanel    = document.getElementById('pathsPanel'); // ← NEW
-    const backupListDiv = document.getElementById('backupList'); // ← NEW
-    let   selectedBackupDir = "";  // "" → дефолт, иначе «ДД__ММ__ГГГГ»
-    const btnStop = document.getElementById('btnStop');
-    const btnStart = document.getElementById('btnStart');
-    const btnCheck = document.getElementById('btnCheck');
-    const btnFixSelected = document.getElementById('btnFixSelected');
-    const btnFixCfgSelected = document.getElementById('btnFixCfgSelected');   // ← NEW
-    const btnFixAll = document.getElementById('btnFixAll');           // ← NEW
-    const sortFixBtn = document.getElementById('sortFix');
-    const sortAlphaBtn = document.getElementById('sortAlpha');
-    const refreshLog = document.getElementById('refreshLog');
-    const fixLog = document.getElementById('fixLog');
-    const checkLog = document.getElementById('checkLog');
-    const accList = document.getElementById('accList');
-    const leftPanel = document.getElementById('leftPanel');
-    const splitter = document.getElementById('splitter');
-    let crashedList = [], currentAccounts = [], sortMode = 'fix';
-
-
-    // СТАВИМ где-нибудь выше остальных функций (сразу после const-ов)
-
-    // Универсальный вызов API с таймаутом и JSON-ответом
-    async function api(url, {method='GET', headers={}, body, timeout=30000} = {}){
-      const ctrl = new AbortController();
-      const t = setTimeout(()=>ctrl.abort(), timeout);
-      try{
-        const res = await fetch(url, {method, headers, body, signal: ctrl.signal});
-        if(!res.ok){
-          const txt = await res.text().catch(()=> '');
-          throw new Error(`${res.status} ${res.statusText}${txt?`: ${txt}`:''}`);
-        }
-        // Пытаемся JSON, иначе текст
-        const ct = res.headers.get('content-type') || '';
-        return ct.includes('application/json') ? res.json() : res.text();
-      } finally{
-        clearTimeout(t);
-      }
-    }
-
-
-
-    // открытие/закрытие панели
-    btnPaths.onclick = ()=> pathsPanel.classList.toggle('hidden');
-    // Закрытие по клику вне и по ESC
-    document.addEventListener('click', (e)=>{
-      if(pathsPanel.classList.contains('hidden')) return;
-      if(!pathsPanel.contains(e.target) && e.target !== btnPaths){
-        pathsPanel.classList.add('hidden');
-      }
-    });
-    document.addEventListener('keydown', (e)=>{
-      if(e.key === 'Escape'){ pathsPanel.classList.add('hidden'); }
-    });
-
-
-    // загрузка последних 5 папок из /api/backup_dirs
-    async function loadBackupDirs(){
-      try{
-        const res  = await fetch('/api/backup_dirs');
-        const dirs = await res.json();          // ["31__05__2025", ...]
-        backupListDiv.innerHTML = "";
-        dirs.forEach(dir=>{
-          const id = 'bp_'+dir.replace(/[^a-zA-Z0-9_]/g,'');
-          backupListDiv.insertAdjacentHTML('beforeend',
-            `<label><input type="radio" name="backupPath" value="${dir}"> ${dir}</label>`);
-        });
-        document.querySelectorAll('input[name="backupPath"]').forEach(el=>{
-          el.addEventListener('change',e=>{
-            selectedBackupDir = e.target.value; // пустая строка ⇒ дефолт
-          });
-        });
-      }catch(e){
-        console.error("backup_dirs:",e);
-      }
-    }
-    loadBackupDirs();   // вызываем при загрузке страницы
-
-
-    function showSpinner(){ spinner.style.display='block'; }
-    function hideSpinner(){ spinner.style.display='none'; }
-    function disableButtons(flag){ document.querySelectorAll('button').forEach(b=>b.disabled=flag); }
-
-
-    // Лёгкий toast
-    function showToast(msg, isError=false){
-      const el = document.createElement('div');
-      el.textContent = msg;
-      el.style = `
-        position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-        background:${isError?'#e74c3c':'#2ECC71'};color:#fff;border-radius:20px;
-        padding:10px 16px;box-shadow:0 2px 10px rgba(0,0,0,.2);z-index:2000;opacity:.95;
-      `;
-      document.body.appendChild(el);
-      setTimeout(()=>{ el.style.transition='opacity .4s'; el.style.opacity='0'; }, 1800);
-      setTimeout(()=> el.remove(), 2200);
-    }
-
-    // Автопрокрутка вниз для логов при изменении
-    function autoStick(el){
-      const obs = new MutationObserver(()=> el.scrollTop = el.scrollHeight);
-      obs.observe(el, {childList:true, characterData:true, subtree:true});
-    }
-    autoStick(refreshLog); autoStick(fixLog); autoStick(checkLog);
-
-
-
-    function renderAccList(){
-      accList.innerHTML = '';
-      let arr = [...currentAccounts];
-      if (sortMode==='alpha') arr.sort((a,b)=>a.nickname.localeCompare(b.nickname));
-      else arr.sort((a,b)=>{
-        const aC=crashedList.includes(`leidian${a.instanceId}.config`);
-        const bC=crashedList.includes(`leidian${b.instanceId}.config`);
-        return (aC===bC?0:(aC?-1:1));
-      });
-      arr.forEach(acc=>{
-        const li=document.createElement('li');
-        const chk=document.createElement('input'); chk.type='checkbox'; chk.value=acc.id;
-        const btn=document.createElement('button');
-        const crashed=crashedList.includes(`leidian${acc.instanceId}.config`);
-        btn.className='accBtn'+(crashed?' accBtn--failed':'');
-        btn.textContent=`${acc.nickname}_${acc.instanceId}`;
-        btn.onclick=()=>doFix(acc.id,acc.nickname);
-        li.appendChild(chk);
-        li.appendChild(btn);
-        accList.appendChild(li);
-      });
-    }
-
-    async function doRefresh(){
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 45000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      disableButtons(true);
-      showSpinner();
-      refreshLog.textContent = '1) parse_logs...\n';
-
-      try{
-        // 1) попросим бэк пересчитать кэш логов/ресурсов
-        await call('/api/refresh', { method:'POST' });
-        refreshLog.textContent += '2) загрузка списков...\n';
-
-        // 2) параллельно тянем упавшие конфиги и ресурсы
-        const [crashed, resources] = await Promise.all([
-          call('/api/crashedEmus'),        // ожидаем массив имён файлов/идентификаторов
-          call('/api/resources')           // ожидаем { accounts:[], account_count:n, ... }
-        ]);
-
-        // 3) применяем данные к UI
-        crashedList     = Array.isArray(crashed) ? crashed : (crashed?.list || []);
-        const accData   = (resources && typeof resources==='object') ? resources : {};
-        currentAccounts = Array.isArray(accData.accounts) ? accData.accounts : [];
-        const count     = typeof accData.account_count === 'number' ? accData.account_count : currentAccounts.length;
-
-        refreshLog.textContent += `3) crashed: ${crashedList.length}\n`;
-        refreshLog.textContent += `4) accounts: ${count}\n`;
-
-        // 4) перерисовать список аккаунтов
-        renderAccList();
-
-        if (typeof showToast==='function') showToast('Данные обновлены');
-      }catch(e){
-        refreshLog.textContent += 'Err: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка обновления', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-      }
-    }
-
-
-    // Точечный FIX конфигов выбранного аккаунта — безопасный POST с JSON.
-    async function doFix(id, nick){
-      // локальный фолбэк, если общий api() ещё не подключен
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 45000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += `-- FIX-CFG ${nick} --\n`;
-
-      try{
-        const payload = {
-          acc_id: id,
-          config_only: 1,
-          ...(selectedBackupDir ? {backup_dir: selectedBackupDir} : {})
-        };
-        const data = await call('/api/fix/do', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify(payload)
-        });
-
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast(`FIX-CFG для ${nick} выполнен`);
-      } catch(e){
-        fixLog.textContent += 'Err FIX-CFG: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка FIX-CFG', true);
-      } finally {
-        hideSpinner();
-        disableButtons(false);
-        await finishFixCycle(); // ldcheck + refresh
-      }
-    }
-
-
-    async function doStop(){
-      // локальный безопасный вызов API: сначала пробуем глобальный api(), иначе — надёжный fetch с JSON/текст распознаванием
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 30000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += '-- Stop --\n';
-
-      try{
-        // POST на /api/stop: останавливаем эмуляторы/службы (как реализовано на бэке)
-        const data = await call('/api/stop', { method:'POST' });
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast('Остановлено успешно');
-      }catch(e){
-        fixLog.textContent += 'Err Stop: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка остановки', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-      }
-    }
-
-
-    async function doStart(){
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 30000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += '-- Start --\n';
-
-      try{
-        // POST на /api/reboot: перезапуск сервиса/эмуляторов (как реализовано на бэке)
-        const data = await call('/api/reboot', { method:'POST' });
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast('Перезапуск выполнен');
-      }catch(e){
-        fixLog.textContent += 'Err Start: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка перезапуска', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-      }
-    }
-
-
-    async function doCheck(){
-      disableButtons(true); showSpinner(); checkLog.textContent='Checking emus...\n';
-      try{
-        const data = await api('/api/check_ld', {method:'POST'});
-        (data.logs || []).forEach(l=> checkLog.textContent+=l+'\n');
-        checkLog.textContent+='-- done --\n';
-        showToast('Проверка эмуляторов завершена');
-      } catch(e){
-        checkLog.textContent+='Err Check: '+e+'\n';
-        console.error(e);
-        showToast('Ошибка проверки эмуляторов', true);
-      } finally{
-        hideSpinner(); disableButtons(false);
-      }
-    }
-
-
-
-    // Завершение цикла фикса: сперва ldcheck, затем обновление UI.
-    // ВАЖНО: функция должна быть async, т.к. внутри await.
-    async function finishFixCycle(){
-      try{
-        await doCheck();     // ldcheck – убеждаемся, что FIX помог
-      } finally{
-        await doRefresh();   // перерисовываем список и цвета в любом случае
-      }
-    }
-
-
-
-    // Пакетный FIX конфигов выделенных аккаунтов
-    async function doBatchFixCfg(){
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 90000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      const ids = Array.from(accList.querySelectorAll('input:checked')).map(c=>c.value);
-      if (!ids.length){
-        if (typeof showToast==='function') showToast('Ни один аккаунт не выбран', true);
-        return;
-      }
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += `-- Batch FIX-CFG: ${ids.join(', ')} --\n`;
-
-      try{
-        const payload = { acc_ids: ids, ...(selectedBackupDir? {backup_dir:selectedBackupDir}: {}) };
-        const data = await call('/api/fix/config_batch', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast('Batch FIX-CFG завершён');
-      }catch(e){
-        fixLog.textContent += 'Err Batch FIX-CFG: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка Batch FIX-CFG', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-        await finishFixCycle(); // ldcheck + refresh
-      }
-    }
-
-
-    async function doBatchFix(){
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 60000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      // собираем отмеченные чекбоксы аккаунтов
-      const selected = Array
-        .from(accList.querySelectorAll('input[type="checkbox"]:checked'))
-        .map(c => c.value);
-
-      if (!selected.length){
-        if (typeof showToast==='function') showToast('Ни один аккаунт не выбран', true);
-        return;
-      }
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += `-- Batch FIX: ${selected.join(', ')} --\n`;
-
-      try{
-        // для бэка формируем JSON-пейлоад
-        const payload = { acc_ids: selected };
-        if (selectedBackupDir) payload.backup_dir = selectedBackupDir;
-
-        const data = await call('/api/fix/batch', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast('Batch FIX завершён');
-      }catch(e){
-        fixLog.textContent += 'Err batch FIX: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка batch FIX', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-        // прогоняем ldcheck + обновление UI (как у вас сделано внутри finishFixCycle)
-        await finishFixCycle();
-      }
-    }
-
-
-    // СТАВИМ СРАЗУ ПОД doBatchFix()
-    async function doFixAll(){
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 90000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      // набираем ID всех аккаунтов, чьи конфиги попали в crashedList
-      const ids = currentAccounts
-        .filter(acc => crashedList.includes(`leidian${acc.instanceId}.config`))
-        .map(acc => acc.id);
-
-      if (!ids.length){
-        fixLog.textContent += '-- Нет упавших аккаунтов --\n';
-        if (typeof showToast==='function') showToast('Нет упавших аккаунтов', true);
-        return;
-      }
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += `-- FIX ALL: ${ids.join(', ')} --\n`;
-
-      try{
-        const payload = { acc_ids: ids };
-        if (selectedBackupDir) payload.backup_dir = selectedBackupDir;
-
-        // на бэке реализован /api/fix/config_batch — починка конфигов пачкой
-        const data = await call('/api/fix/config_batch', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast('FIX ALL завершён');
-      }catch(e){
-        fixLog.textContent += 'Err FIX ALL: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка FIX ALL', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-        await finishFixCycle(); // ldcheck + refresh
-      }
-    }
-
-
-
-    // СТАВИМ ниже других FIX-функций
-    async function doReplaceAll(){
-      const call = (url, opts={}) => {
-        if (typeof api === 'function') return api(url, opts);
-        const ctrl = new AbortController();
-        const t = setTimeout(()=>ctrl.abort(), opts.timeout ?? 120000);
-        return fetch(url, {...opts, signal: ctrl.signal}).then(async r=>{
-          clearTimeout(t);
-          if(!r.ok){
-            const txt = await r.text().catch(()=> '');
-            throw new Error(`${r.status} ${r.statusText}${txt?`: ${txt}`:''}`);
-          }
-          const ct = r.headers.get('content-type') || '';
-          return ct.includes('application/json') ? r.json() : r.text();
-        });
-      };
-
-      // жёсткая операция — подтверждение обязательно
-      if (!confirm("⚠ Полная замена ВСЕХ config-файлов.\nПродолжить?")) return;
-
-      disableButtons(true);
-      showSpinner();
-      fixLog.textContent += "-- EMERGENCY REPLACE CONFIGS --\n";
-
-      try{
-        const payload = {};
-        if (selectedBackupDir) payload.backup_dir = selectedBackupDir;
-
-        // на бэке реализован /api/fix/replace_configs — полная замена конфигов на копии из backup_dir/дефолтного бэкапа
-        const data = await call('/api/fix/replace_configs', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-
-        (data?.logs || []).forEach(l => fixLog.textContent += l + '\n');
-        fixLog.textContent += '-- done --\n';
-        if (typeof showToast==='function') showToast('Замена конфигов выполнена');
-      }catch(e){
-        fixLog.textContent += 'Err replace: ' + e + '\n';
-        console.error(e);
-        if (typeof showToast==='function') showToast('Ошибка замены конфигов', true);
-      }finally{
-        hideSpinner();
-        disableButtons(false);
-        await finishFixCycle(); // ldcheck + refresh
-      }
-    }
-
-
-
-    // Restore or center splitter and init
-    document.addEventListener('DOMContentLoaded', ()=>{
-      const parentRect = leftPanel.parentElement.getBoundingClientRect();
-      const saved = localStorage.getItem('splitPos');
-      const width = saved ? parseInt(saved) : (parentRect.width/2);
-      leftPanel.style.flex = `0 0 ${width}px`;
-      doRefresh();
-    });
-
-    // Drag splitter
-    let isDragging = false;
-
-    function onMove(clientX){
-      const rect = leftPanel.parentElement.getBoundingClientRect();
-      let newW = clientX - rect.left;
-      newW = Math.max(200, Math.min(newW, rect.width-200));
-      leftPanel.style.flex = `0 0 ${newW}px`;
-      localStorage.setItem('splitPos', newW);
-    }
-
-    splitter.addEventListener('pointerdown', (e)=>{
-      isDragging = true;
-      splitter.setPointerCapture(e.pointerId);
-    });
-    document.addEventListener('pointerup', ()=> isDragging=false);
-    document.addEventListener('pointermove', (e)=>{
-      if(!isDragging) return;
-      onMove(e.clientX);
-    });
-
-
-    // Bind events
-    btnRefresh.onclick = doRefresh;
-    btnStop.onclick = doStop;
-    btnStart.onclick = doStart;
-    btnCheck.onclick = doCheck;
-    btnFixSelected.onclick = doBatchFix;
-    btnFixCfgSelected.onclick = doBatchFixCfg;
-    btnFixAll.onclick         = doFixAll;              // ← NEW
-    btnReplaceAll.onclick = doReplaceAll;    // ← NEW
-    sortFixBtn.onclick = ()=>{ sortMode='fix'; renderAccList(); };
-    sortAlphaBtn.onclick = ()=>{ sortMode='alpha'; renderAccList(); };
-  </script>
+<main class="page">
+<header class="header"><div><div class="eyebrow">Сервер {{ server_name }}</div><h1>Эмуляторы</h1></div>
+<div class="tools"><div><div id="botStatus" class="bot-status"><span class="dot"></span>Проверяем состояние</div>
+<div id="updatedAt" class="timestamp">Обновление…</div></div><button id="refresh" class="btn">Обновить</button></div></header>
+<div id="notice" class="notice" role="alert" hidden></div>
+<section class="stats" aria-label="Сводка">
+<button class="stat" data-filter="all" aria-pressed="true"><span class="stat-label">Всего эмуляторов</span><strong class="stat-value" id="statAll">—</strong><span class="stat-meta" id="metaAll">Загружаем список</span></button>
+<button class="stat warn" data-filter="issues" aria-pressed="false"><span class="stat-label">Нужен ремонт</span><strong class="stat-value" id="statIssues">—</strong><span class="stat-meta">Проблемы с настройками</span></button>
+<button class="stat" data-filter="unlinked" aria-pressed="false"><span class="stat-label">Без аккаунта</span><strong class="stat-value" id="statUnlinked">—</strong><span class="stat-meta" id="metaUnlinked">— на диске</span></button>
+<button class="stat" data-filter="disabled" aria-pressed="false"><span class="stat-label">Отключены в профиле</span><strong class="stat-value" id="statDisabled">—</strong><span class="stat-meta" id="metaDisabled">— на диске</span></button>
+</section>
+<div class="workspace"><section class="panel" aria-label="Список эмуляторов">
+<div class="toolbar"><nav class="tabs" aria-label="Фильтр эмуляторов">
+<button class="tab" data-filter="all" aria-pressed="true">Все <span id="countAll"></span></button>
+<button class="tab" data-filter="issues" aria-pressed="false">Проблемные <span id="countIssues"></span></button>
+<button class="tab" data-filter="unlinked" aria-pressed="false">Без аккаунта <span id="countUnlinked"></span></button>
+<button class="tab" data-filter="disabled" aria-pressed="false">Отключены <span id="countDisabled"></span></button>
+</nav><span id="busyLabel" class="loading" role="status" hidden>Проверяем…</span></div>
+<div class="filters"><input id="search" class="search" type="search" placeholder="Найти по имени или номеру" aria-label="Поиск эмулятора">
+<select id="sort" aria-label="Сортировка"><option value="issues">Сначала проблемные</option><option value="disk">Сначала большие</option><option value="name">По имени</option><option value="number">По номеру</option></select></div>
+<div class="table-scroll"><table><thead><tr><th><input type="checkbox" id="selectAll" aria-label="Выбрать все видимые"></th><th>Эмулятор</th><th>Настройки / запуск</th><th>Аккаунт</th><th>На диске</th><th></th></tr></thead>
+<tbody id="rows"><tr><td colspan="6" class="empty-table">Загружаем эмуляторы…</td></tr></tbody></table></div>
+<div id="listFooter" class="footer">Остановленный эмулятор не считается неисправным.</div></section>
+<aside class="sidebar"><section class="panel action-panel"><div class="panel-title"><h2>Восстановление</h2><span id="selectionCount" class="selection-count">Не выбрано</span></div>
+<button id="repairSelected" class="btn primary" disabled>Восстановить выбранные</button><button id="planSelected" class="btn" disabled>Проверить перед ремонтом</button>
+<p class="hint">Сначала проверим резервную копию. Перед заменой настроек сохраним откат.</p><hr class="divider">
+<button id="repairAll" class="btn" disabled>Исправить проблемные</button>
+<details><summary>Источник резервной копии</summary><select id="backup" aria-label="Источник резервной копии"><option value="">Автоматический выбор</option></select><p>Выбираем последнюю целую копию этого аккаунта.</p></details>
+<details><summary>Управление GnBots</summary><div class="control-actions"><button id="stop" class="btn">Остановить</button><button id="start" class="btn">Запустить</button></div></details></section>
+<section class="panel results" aria-live="polite"><h2 id="resultHeading">Последнее действие</h2><div id="results" class="empty-result">Выберите эмуляторы в таблице, чтобы проверить или восстановить их настройки.</div>
+<details class="technical"><summary>Технические подробности</summary><pre id="technicalLog">Действий ещё не было.</pre></details></section></aside></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+let report=null,busy=false,filter='all';
+const selected=new Set(),expanded=new Set();
+const reasons={player_name_lost:'Сбросились настройки',resolution_invalid:'Ошибка разрешения',config_missing:'Нет настроек',config_unreadable:'Не читаются настройки',config_not_object:'Ошибка настроек',vm_directory_missing:'Нет файлов эмулятора',instance_not_registered:'Не найден в LDPlayer'};
+const size=value=>value==null?'—':(value/1024**3).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ГиБ';
+const label=row=>row.accounts.map(a=>a.name).join(' / ')||row.player_name||'Без имени';
+const sumDisk=rows=>rows.some(row=>row.disk_bytes==null)?null:rows.reduce((sum,row)=>sum+row.disk_bytes,0);
+const allRows=()=>report?.instances||[];
+const problemRows=()=>allRows().filter(row=>row.issues.length);
+function node(tag,cls,text){const el=document.createElement(tag);if(cls)el.className=cls;if(text!=null)el.textContent=text;return el;}
+async function api(url,payload){
+ const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
+ try{const response=await fetch(url,{method:payload?'POST':'GET',cache:'no-store',signal:controller.signal,headers:payload?{'Content-Type':'application/json'}:{},body:payload?JSON.stringify(payload):undefined});
+ const data=await response.json();if(!response.ok&&!(response.status===409&&Array.isArray(data.results)))throw new Error(data.error||(data.errors||[]).join('; ')||`HTTP ${response.status}`);return data;
+ }finally{clearTimeout(timer);}
+}
+function updateControls(){
+ document.querySelectorAll('button,input,select').forEach(el=>el.disabled=busy);
+ $('repairSelected').disabled=busy||!report||!selected.size;$('planSelected').disabled=busy||!report||!selected.size;
+ $('repairAll').disabled=busy||!problemRows().length;$('selectAll').disabled=busy||!visibleRows().length;
+ $('selectionCount').textContent=selected.size?`Выбрано: ${selected.size}`:'Не выбрано';$('busyLabel').hidden=!busy;
+}
+function setBusy(value){busy=value;updateControls();}
+function visibleRows(){
+ const query=$('search').value.trim().toLocaleLowerCase('ru-RU');
+ const rows=allRows().filter(row=>(filter==='all'||filter==='issues'&&row.issues.length||row.usage_class===filter)&&(!query||`${label(row)} ${row.instance_id} ldplayer ${row.instance_id}`.toLocaleLowerCase('ru-RU').includes(query)));
+ const sort=$('sort').value;return rows.sort((a,b)=>sort==='disk'?(b.disk_bytes??-1)-(a.disk_bytes??-1):sort==='name'?label(a).localeCompare(label(b),'ru'):sort==='number'?a.instance_id-b.instance_id:Number(Boolean(b.issues.length))-Number(Boolean(a.issues.length))||a.instance_id-b.instance_id);
+}
+function render(){
+ const rows=visibleRows();$('rows').replaceChildren();
+ for(const row of rows){
+ const tr=node('tr',(row.issues.length?'issue ':'')+(selected.has(row.instance_id)?'selected':''));
+ const checkCell=node('td'),checkbox=node('input');checkbox.type='checkbox';checkbox.checked=selected.has(row.instance_id);checkbox.setAttribute('aria-label',`Выбрать ${label(row)}, №${row.instance_id}`);
+ checkbox.onchange=()=>{if(checkbox.checked)selected.add(row.instance_id);else selected.delete(row.instance_id);render();};checkCell.append(checkbox);
+ const name=node('td','name');name.append(node('span','account-name',label(row)),node('div','instance',`LDPlayer ${row.instance_id}`));
+ const state=node('td');state.append(node('span',`badge ${row.issues.length?'bad':'good'}`,row.issues.length?(reasons[row.issues[0]]||'Нужна проверка'):'В порядке'));
+ const runtime=row.runtime_status==='stopped'?'Остановлен':row.android_status==='ready'?'Android готов':row.runtime_status==='running'?'Открыт · Android не готов':'Запуск не проверен';state.append(node('div','runtime',runtime));
+ const binding=node('td');binding.append(node('span',`badge ${row.orphan?'amber':'neutral'}`,row.orphan?'Без аккаунта':row.active?'В очереди':'Отключён'));
+ const disk=node('td','disk',size(row.disk_bytes)),moreCell=node('td'),more=node('button','more',expanded.has(row.instance_id)?'−':'+');
+ more.setAttribute('aria-label',`Подробности об эмуляторе ${row.instance_id}`);more.setAttribute('aria-expanded',String(expanded.has(row.instance_id)));
+ more.onclick=()=>{if(expanded.has(row.instance_id))expanded.delete(row.instance_id);else expanded.add(row.instance_id);render();};moreCell.append(more);tr.append(checkCell,name,state,binding,disk,moreCell);$('rows').append(tr);
+ if(expanded.has(row.instance_id)){
+ const detailRow=node('tr','row-details'),detail=node('td');detail.colSpan=6;
+ if(row.orphan)detail.append(node('p','','Нет привязки к текущему профилю GnBots. Возможно, это неиспользуемый или ручной эмулятор.'));
+ if(row.usage_class==='disabled')detail.append(node('p','','Аккаунт выключен в профиле и не участвует в очереди.'));
+ if(row.issues.length)detail.append(node('p','',row.issues.map(value=>reasons[value]||value).join('; ')));
+ detail.append(node('p','','Настройки и запуск Android проверяются отдельно. Работу игры подтверждают новые игровые события.'));
+ detail.append(node('p','',`Файл: ${row.filename}. Размер на диске обновляется раз в две минуты.`));detailRow.append(detail);$('rows').append(detailRow);
+ }}
+ if(!rows.length){const tr=node('tr'),td=node('td','empty-table',report?'По этому фильтру эмуляторов нет.':'Не удалось загрузить список.');td.colSpan=6;tr.append(td);$('rows').append(tr);}
+ const checked=rows.filter(row=>selected.has(row.instance_id)).length;$('selectAll').checked=Boolean(rows.length)&&checked===rows.length;$('selectAll').indeterminate=checked>0&&checked<rows.length;
+ $('listFooter').textContent=`Показано ${rows.length} из ${allRows().length}. Остановленный эмулятор не считается неисправным.`;updateControls();
+}
+function renderStats(){
+ const rows=allRows(),unlinked=rows.filter(row=>row.orphan),disabled=rows.filter(row=>row.usage_class==='disabled');
+ for(const [key,value] of [['All',rows.length],['Issues',problemRows().length],['Unlinked',unlinked.length],['Disabled',disabled.length]]){$('stat'+key).textContent=report?value:'—';$('count'+key).textContent=report?value:'';}
+ $('metaAll').textContent=report?`${rows.filter(row=>row.runtime_status==='running').length} сейчас запущено`:'Нет свежих данных';
+ $('metaUnlinked').textContent=`${size(sumDisk(unlinked))} на диске`;$('metaDisabled').textContent=`${size(sumDisk(disabled))} на диске`;
+ $('botStatus').replaceChildren(node('span',`dot ${report?.gn_running?'on':''}`),document.createTextNode(report?report.gn_running?'GnBots открыт':'GnBots закрыт':'GnBots: нет данных'));
+ $('updatedAt').textContent=report?'Проверено в '+new Date(report.checked_at).toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'}):'Проверка недоступна';
+}
+async function refresh(){
+ try{report=await api('/api/fix/diagnosis');$('notice').hidden=true;for(const index of selected)if(!allRows().some(row=>row.instance_id===index))selected.delete(index);renderStats();render();return true;}
+ catch(error){report=null;selected.clear();renderStats();render();$('notice').textContent='Не удалось проверить эмуляторы. Попробуйте обновить страницу.';$('notice').hidden=false;$('technicalLog').textContent=String(error);return false;}
+}
+async function runRefresh(){if(busy)return;setBusy(true);try{await refresh();}finally{setBusy(false);}}
+function friendlyMessage(result){
+ if(result.status==='planned')return 'Резервная копия подходит. Можно восстановить настройки.';
+ if(result.status==='config_restored')return 'Настройки восстановлены. Android и игра ещё не проверены.';
+ if(result.status==='unchanged')return 'Настройки целые — заменять их не требуется.';
+ const message=result.message||'';
+ if(message.includes('Нет привязки'))return 'Сначала нужно определить аккаунт этого эмулятора. Автоматический ремонт заблокирован.';
+ if(message.includes('Сначала остановите')||message.includes('ещё работает'))return 'Для ремонта нужно остановить GnBots и эмуляторы.';
+ if(message.includes('Нет целого бэкапа'))return 'Подходящая резервная копия не найдена.';return message||'Не удалось завершить проверку.';
+}
+function showResults(data,dryRun){
+ $('resultHeading').textContent=dryRun?'Проверка перед ремонтом':'Результат восстановления';$('results').className='';$('results').replaceChildren();
+ for(const result of data.results||[]){const item=node('div','result'),title=node('div','result-title'),row=allRows().find(row=>row.instance_id===result.instance_id);
+ title.append(node('span','',`${row?label(row):'Эмулятор'} · №${result.instance_id}`),node('span',`badge ${result.ok?'good':'amber'}`,result.ok?dryRun?'Готово':'Успешно':'Заблокировано'));
+ item.append(title,node('p','',friendlyMessage(result)));$('results').append(item);}
+ $('technicalLog').textContent=(data.logs||[]).join('\n')+'\n\n'+JSON.stringify(data.results||data,null,2);
+}
+async function repair(indices,dryRun=false){
+ if(busy||!indices.length)return;setBusy(true);
+ try{const payload={instance_ids:indices,dry_run:dryRun};if($('backup').value)payload.backup_dir=$('backup').value;const data=await api('/api/fix/instances',payload);showResults(data,dryRun);}
+ catch(error){$('resultHeading').textContent='Действие не выполнено';$('results').className='empty-result';$('results').textContent='Не удалось завершить запрос. Обновите данные и попробуйте снова.';$('technicalLog').textContent=String(error);}
+ finally{await refresh();setBusy(false);}
+}
+async function repairAll(){if(busy)return;setBusy(true);const fresh=await refresh();setBusy(false);if(fresh)await repair(problemRows().map(row=>row.instance_id));}
+async function control(url){
+ if(busy)return;setBusy(true);try{const data=await api(url,{});$('resultHeading').textContent='Управление GnBots';$('results').className='empty-result';$('results').textContent='Команда выполнена. Текущее состояние показано сверху.';$('technicalLog').textContent=(data.logs||[]).join('\n');}
+ catch(error){$('results').textContent='Не удалось выполнить команду.';$('technicalLog').textContent=String(error);}finally{await refresh();setBusy(false);}
+}
+document.querySelectorAll('[data-filter]').forEach(button=>button.onclick=()=>{filter=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(item=>item.setAttribute('aria-pressed',String(item.dataset.filter===filter)));render();});
+$('selectAll').onchange=()=>{for(const row of visibleRows())if($('selectAll').checked)selected.add(row.instance_id);else selected.delete(row.instance_id);render();};
+$('search').oninput=render;$('sort').onchange=render;$('refresh').onclick=runRefresh;
+$('repairSelected').onclick=()=>repair([...selected]);$('planSelected').onclick=()=>repair([...selected],true);$('repairAll').onclick=repairAll;
+$('stop').onclick=()=>control('/api/stop');$('start').onclick=()=>control('/api/reboot');
+api('/api/backup_dirs').then(dirs=>{for(const dir of dirs){const option=node('option','',dir);option.value=dir;$('backup').append(option);}}).catch(()=>{$('backup').title='Список ручных копий недоступен; используется автоматический выбор.';});
+runRefresh();setInterval(()=>{if(!busy&&!document.hidden)runRefresh();},60000);
+</script>
 </body>
 </html>
-
-
