@@ -142,9 +142,9 @@ def _farms_from_records(records: list[dict]) -> list[Farm]:
                     else None
                 ),
                 reactivation_pending=(
-                    isinstance(record.get("UsersDashReactivation"), dict)
-                    and record["UsersDashReactivation"].get("status")
-                    in {"prepared", "emulator_ready"}
+                    any(isinstance(record.get(key), dict)
+                        and record[key].get("status") in {"prepared", "emulator_ready"}
+                        for key in ("UsersDashReactivation", "VikingRecoveryRestore"))
                 ),
             )
         )
@@ -242,11 +242,14 @@ def prepare_profile_recovery(profile_path: Path, farm: Farm) -> Farm:
     ):
         raise RecoveryError("В выбранном архиве нет полной конфигурации Viking Rise")
     record.update(InstanceId=-1, Active=False, SessionId=-1, HealthCheckPassed=False)
-    record["UsersDashReactivation"] = {
+    previous_reactivation = record.pop("UsersDashReactivation", None)
+    record["VikingRecoveryRestore"] = {
         "status": "prepared", "account_id": farm.record_id,
         "requested_at": datetime.now().astimezone().isoformat(),
         "source": "viking_archive", "archive": str(farm.archive_source),
     }
+    if previous_reactivation is not None:
+        record["VikingRecoveryRestore"]["previous_reactivation"] = previous_reactivation
     records.append(record)
     _write_verified_profile(profile_path, raw, records)
     return next(item for item in load_farms(profile_path) if item.record_id == farm.record_id)
@@ -362,12 +365,14 @@ def update_profile_instance(
     if recovery_verified:
         for position in moving:
             record = records[position]
-            marker = record.get("UsersDashReactivation")
-            if (isinstance(marker, dict) and marker.get("status") == "prepared"
-                    and marker.get("account_id") == str(record.get("Id") or "")):
-                marker.update(status="emulator_ready", instance_id=int(new_index),
-                              emulator_ready_at=datetime.now().astimezone().isoformat())
-                record["Active"] = True
+            for key in ("UsersDashReactivation", "VikingRecoveryRestore"):
+                marker = record.get(key)
+                if (isinstance(marker, dict) and marker.get("status") == "prepared"
+                        and marker.get("account_id") == str(record.get("Id") or "")):
+                    status = "emulator_ready" if key == "UsersDashReactivation" else "completed"
+                    marker.update(status=status, instance_id=int(new_index),
+                                  emulator_ready_at=datetime.now().astimezone().isoformat())
+                    record["Active"] = True
     if json.loads(raw) != records:
         _write_verified_profile(profile_path, raw, records)
     return old_index
@@ -1302,7 +1307,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"старый экземпляр: {backup or 'не найден'}"
             )
             if farm.reactivation_pending:
-                print("UsersDash завершит привязку и включит ферму автоматически.")
+                print("Подготовленная запись GnBots включена после проверки игры.")
             return 0
         parser.print_help()
         return 0

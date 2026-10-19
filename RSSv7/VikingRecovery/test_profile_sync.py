@@ -62,7 +62,8 @@ class ArchiveSyncTests(unittest.TestCase):
         self.assertEqual(saved[0], self.newcomer)
         self.assertEqual(saved[1]['InstanceId'], 13)
         self.assertTrue(saved[1]['Active'])
-        self.assertEqual(saved[1]['UsersDashReactivation']['status'], 'emulator_ready')
+        self.assertEqual(saved[1]['VikingRecoveryRestore']['status'], 'completed')
+        self.assertNotIn('UsersDashReactivation', saved[1])
         for field in ['Id', 'Name', 'AppId', 'Data', 'MenuData', 'CustomField']:
             self.assertEqual(saved[1][field], self.archived[field])
 
@@ -75,6 +76,28 @@ class ArchiveSyncTests(unittest.TestCase):
         self.assertEqual(repeated.instance_id, 13)
         self.assertEqual(self.profile.read_bytes(), before)
         self.assertEqual(len(load_farms(self.profile)), 2)
+
+    def test_archive_restore_does_not_replay_an_old_payment_reactivation(self):
+        old_marker = {'status': 'prepared', 'account_id': 'returning', 'requested_at': 'old'}
+        self.archived['UsersDashReactivation'] = old_marker
+        self.archive.write_text(json.dumps([self.archived]), encoding='utf-8')
+        farm = prepare_profile_recovery(self.profile, self.selected())
+        update_profile_instance(self.profile, farm, 13, recovery_verified=True)
+        saved = json.loads(self.profile.read_text(encoding='utf-8'))[1]
+        self.assertNotIn('UsersDashReactivation', saved)
+        self.assertEqual(saved['VikingRecoveryRestore']['previous_reactivation'], old_marker)
+
+    def test_usersdash_prepared_record_keeps_its_existing_completion_flow(self):
+        prepared = record(index=-1)
+        prepared['Active'] = False
+        prepared['UsersDashReactivation'] = {'status': 'prepared', 'account_id': 'returning'}
+        self.profile.write_text(json.dumps([self.newcomer, prepared]), encoding='utf-8')
+        farm = next(farm for farm in load_farms(self.profile) if farm.record_id == 'returning')
+        update_profile_instance(self.profile, farm, 13, recovery_verified=True)
+        saved = json.loads(self.profile.read_text(encoding='utf-8'))
+        self.assertTrue(saved[1]['Active'])
+        self.assertEqual(saved[1]['UsersDashReactivation']['status'], 'emulator_ready')
+        self.assertEqual(saved[0], self.newcomer)
 
     def test_latest_daily_snapshot_wins_and_other_profiles_are_excluded(self):
         self.backup('19__10__2026', [record(index=27)])
