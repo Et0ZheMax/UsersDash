@@ -9,7 +9,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from subprocess import CompletedProcess
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from viking_recovery import (
     OcrWord,
@@ -76,6 +76,51 @@ class ProfileTests(unittest.TestCase):
             )
             result = resolve_profile_path(root)
         self.assertEqual(result.name, "FRESH_NOX.json")
+
+    def test_moves_all_characters_of_same_vm_without_changing_their_settings(self) -> None:
+        payload = [
+            {'Id': 'p1', 'Name': 'Filosof1', 'InstanceId': 12, 'Active': True,
+             'Data': 'character 1', 'MenuData': 'login a'},
+            {'Id': 'p2', 'Name': 'Filosof2', 'InstanceId': 12, 'Active': False,
+             'Data': 'character 2', 'MenuData': 'login a'},
+            {'Id': 'p3', 'Name': 'Other', 'InstanceId': 19, 'Data': 'other', 'MenuData': 'login b'},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps(payload), encoding='utf-8')
+            farm = Farm('Filosof1', 'm', 'p', '', 'igg', True, 'p1', 12)
+            self.assertEqual(update_profile_instance(path, farm, 8), 12)
+            saved = json.loads(path.read_text(encoding='utf-8'))
+            expected = json.loads(json.dumps(payload))
+            expected[0]['InstanceId'] = expected[1]['InstanceId'] = 8
+            self.assertEqual(saved, expected)
+            self.assertEqual(len(list(path.parent.glob('*.before_viking_recovery.*'))), 1)
+
+    def test_stale_farm_binding_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps([{'Id': 'p1', 'Name': 'Filosof1', 'InstanceId': 9}]), encoding='utf-8')
+            original = path.read_bytes()
+            farm = Farm('Filosof1', 'm', 'p', '', 'igg', True, 'p1', 12)
+            with self.assertRaises(RecoveryError):
+                update_profile_instance(path, farm, 8)
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_concurrent_profile_edit_cancels_group_move(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'profile.json'
+            path.write_text(json.dumps([{'Id': 'p1', 'Name': 'Filosof1', 'InstanceId': 12}]), encoding='utf-8')
+            farm = Farm('Filosof1', 'm', 'p', '', 'igg', True, 'p1', 12)
+            real_copy = __import__('shutil').copy2
+            edited = json.dumps([{'Id': 'p1', 'Name': 'Filosof1', 'InstanceId': 15}])
+            def copying(source, target, *args, **kwargs):
+                result = real_copy(source, target, *args, **kwargs)
+                path.write_text(edited, encoding='utf-8')
+                return result
+            with patch('viking_recovery.shutil.copy2', side_effect=copying):
+                with self.assertRaises(RecoveryError):
+                    update_profile_instance(path, farm, 8)
+            self.assertEqual(path.read_text(encoding='utf-8'), edited)
 
 
 class RenameTests(unittest.TestCase):

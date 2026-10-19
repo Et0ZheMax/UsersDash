@@ -79,7 +79,7 @@ pre{font:11px/1.6 Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere
 const $=id=>document.getElementById(id);
 let report=null,busy=false,filter='all';
 const selected=new Set(),expanded=new Set();
-const reasons={player_name_lost:'Сбросились настройки',resolution_invalid:'Ошибка разрешения',config_missing:'Нет настроек',config_unreadable:'Не читаются настройки',config_not_object:'Ошибка настроек',vm_directory_missing:'Нет файлов эмулятора',instance_not_registered:'Не найден в LDPlayer'};
+const reasons={player_name_lost:'Сбросились настройки',resolution_invalid:'Ошибка разрешения',config_missing:'Нет настроек LDPlayer',config_unreadable:'Не читаются настройки',config_not_object:'Ошибка настроек',vm_directory_missing:'Эмулятор не найден',instance_not_registered:'Не найден в LDPlayer'};
 const size=value=>value==null?'—':(value/1024**3).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ГиБ';
 const label=row=>row.accounts.map(a=>a.name).join(' / ')||row.player_name||'Без имени';
 const sumDisk=rows=>rows.some(row=>row.disk_bytes==null)?null:rows.reduce((sum,row)=>sum+row.disk_bytes,0);
@@ -110,10 +110,16 @@ function render(){
  const tr=node('tr',(row.issues.length?'issue ':'')+(selected.has(row.instance_id)?'selected':''));
  const checkCell=node('td'),checkbox=node('input');checkbox.type='checkbox';checkbox.checked=selected.has(row.instance_id);checkbox.setAttribute('aria-label',`Выбрать ${label(row)}, №${row.instance_id}`);
  checkbox.onchange=()=>{if(checkbox.checked)selected.add(row.instance_id);else selected.delete(row.instance_id);render();};checkCell.append(checkbox);
- const name=node('td','name');name.append(node('span','account-name',label(row)),node('div','instance',`LDPlayer ${row.instance_id}`));
- const state=node('td');state.append(node('span',`badge ${row.issues.length?'bad':'good'}`,row.issues.length?(reasons[row.issues[0]]||'Нужна проверка'):'В порядке'));
+ const name=node('td','name');
+ const characters=new Set(row.accounts.map(account=>account.character).filter(value=>value!=null));
+ const sharedInfo=row.accounts.length>1?(characters.size>1?` · ${characters.size} персонажа`:` · ${row.accounts.length} аккаунта`):characters.size?` · персонаж ${[...characters][0]}`:'';
+ name.append(node('span','account-name',label(row)),node('div','instance',`LDPlayer ${row.instance_id}${sharedInfo}`));
+ const issue=row.issues.includes('vm_directory_missing')?'vm_directory_missing':row.issues[0];
+ const state=node('td');state.append(node('span',`badge ${row.issues.length?'bad':'good'}`,row.issues.length?(reasons[issue]||'Нужна проверка'):'В порядке'));
  const runtime=row.runtime_status==='stopped'?'Остановлен':row.android_status==='ready'?'Android готов':row.runtime_status==='running'?'Открыт · Android не готов':'Запуск не проверен';state.append(node('div','runtime',runtime));
- const binding=node('td');binding.append(node('span',`badge ${row.orphan?'amber':'neutral'}`,row.orphan?'Без аккаунта':row.active?'В очереди':'Отключён'));
+ const oldBinding=row.accounts.some(account=>account.binding_source==='shared_character_vm');
+ const binding=node('td');binding.append(node('span',`badge ${row.orphan||oldBinding?'amber':'neutral'}`,
+ row.orphan?'Без аккаунта':oldBinding?'Есть старый ID':row.active?'В очереди':'Отключён'));
  const disk=node('td','disk',size(row.disk_bytes)),moreCell=node('td'),more=node('button','more',expanded.has(row.instance_id)?'−':'+');
  more.setAttribute('aria-label',`Подробности об эмуляторе ${row.instance_id}`);more.setAttribute('aria-expanded',String(expanded.has(row.instance_id)));
  more.onclick=()=>{if(expanded.has(row.instance_id))expanded.delete(row.instance_id);else expanded.add(row.instance_id);render();};moreCell.append(more);tr.append(checkCell,name,state,binding,disk,moreCell);$('rows').append(tr);
@@ -122,6 +128,11 @@ function render(){
  if(row.orphan)detail.append(node('p','','Нет привязки к текущему профилю GnBots. Возможно, это неиспользуемый или ручной эмулятор.'));
  if(row.usage_class==='disabled')detail.append(node('p','','Аккаунт выключен в профиле и не участвует в очереди.'));
  if(row.issues.length)detail.append(node('p','',row.issues.map(value=>reasons[value]||value).join('; ')));
+ for(const account of row.accounts){
+  if(account.character!=null)detail.append(node('p','',`${account.name}: персонаж ${account.character}.`));
+  if(account.binding_source==='shared_character_vm')detail.append(node('p','',
+   `${account.name}: в профиле указан №${account.configured_instance_id}. Найден общий LDPlayer ${row.instance_id} по общему игровому входу и переключению персонажей. Профиль не изменялся.`));
+ }
  detail.append(node('p','','Настройки и запуск Android проверяются отдельно. Работу игры подтверждают новые игровые события.'));
  detail.append(node('p','',`Файл: ${row.filename}. Размер на диске обновляется раз в две минуты.`));detailRow.append(detail);$('rows').append(detailRow);
  }}

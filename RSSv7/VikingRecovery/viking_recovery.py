@@ -175,7 +175,7 @@ def choose_backup_name(target: str, existing_names: Iterable[str], now: datetime
 
 
 def update_profile_instance(profile_path: Path, farm: Farm, new_index: int) -> int | None:
-    """Атомарно заменить InstanceId выбранной фермы и подтвердить запись."""
+    """Атомарно перенести все аккаунты общей старой VM, сохранив выбор персонажей."""
 
     try:
         raw = profile_path.read_text(encoding="utf-8-sig")
@@ -202,7 +202,17 @@ def update_profile_instance(profile_path: Path, farm: Farm, new_index: int) -> i
     record = matches[0]
     old_raw = record.get("InstanceId")
     old_index = int(old_raw) if str(old_raw).strip().isdigit() else None
-    record["InstanceId"] = int(new_index)
+    if farm.instance_id is not None and old_index != farm.instance_id:
+        raise RecoveryError("Привязка фермы изменилась во время восстановления; обновите список")
+    if old_index == int(new_index):
+        return old_index
+    for item in records:
+        if not isinstance(item, dict):
+            continue
+        same_instance = old_index is not None and str(item.get("InstanceId", "")).strip() == str(old_index)
+        if item is record or same_instance:
+            # Data/MenuData, Active и номера игровых персонажей остаются у каждой записи свои.
+            item["InstanceId"] = int(new_index)
 
     backup_path = profile_path.with_name(profile_path.name + ".before_viking_recovery")
     fd, temp_name = tempfile.mkstemp(
@@ -212,12 +222,20 @@ def update_profile_instance(profile_path: Path, farm: Farm, new_index: int) -> i
         text=True,
     )
     try:
+        if profile_path.read_text(encoding="utf-8-sig") != raw:
+            raise RecoveryError("Профиль изменился до записи; восстановление привязок отменено")
+        dated_backup = profile_path.with_name(
+            profile_path.name + f".before_viking_recovery.{datetime.now():%Y%m%d_%H%M%S_%f}"
+        )
+        shutil.copy2(profile_path, dated_backup)
         shutil.copy2(profile_path, backup_path)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(records, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
+        if profile_path.read_text(encoding="utf-8-sig") != raw:
+            raise RecoveryError("Профиль изменился перед заменой; восстановление привязок отменено")
         os.replace(temp_name, profile_path)
     except Exception as exc:
         try:
@@ -230,20 +248,8 @@ def update_profile_instance(profile_path: Path, farm: Farm, new_index: int) -> i
         saved = json.loads(profile_path.read_text(encoding="utf-8-sig"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RecoveryError(f"Не удалось проверить профиль GnBots после записи: {exc}") from exc
-    saved_record = next(
-        (
-            item
-            for item in saved
-            if isinstance(item, dict)
-            and (
-                (farm.record_id and str(item.get("Id", "")).strip() == farm.record_id)
-                or (not farm.record_id and str(item.get("Name", "")).strip() == farm.name)
-            )
-        ),
-        None,
-    )
-    if saved_record is None or str(saved_record.get("InstanceId")) != str(int(new_index)):
-        raise RecoveryError("Профиль GnBots не подтвердил новый LDPlayer ID")
+    if saved != records:
+        raise RecoveryError("Профиль GnBots не подтвердил общие привязки и сохранность настроек")
     return old_index
 
 

@@ -2601,7 +2601,7 @@ def _config_diagnosis() -> dict:
 def _assert_config_repair_stopped(index: int) -> None:
     """Блокирует запись при работающем боте/LDPlayer или неполной диагностике."""
     # Консервативно: не гоняемся с GUI, очередью бота и скрытыми headless-процессами.
-    allow_gui = target_is_disabled(index, Path(PROFILE_PATH), Path(PROFILE_PATH).parent.parent / 'config.json')
+    allow_gui = target_is_disabled(index, Path(PROFILE_PATH), Path(PROFILE_PATH).parent.parent / 'config.json', Path(DST_VMS))
     try:
         for process in psutil.process_iter(['name']):
             name = (process.info.get('name') or '').lower()
@@ -2640,8 +2640,11 @@ def _repair_config_request(data: dict) -> tuple[dict, int]:
                 ids = [data['acc_id']]
             if not isinstance(ids, list) or not ids:
                 raise RepairBlocked("Нужен acc_ids или instance_ids")
-            profiles = load_profile(Path(PROFILE_PATH))
-            mapping = {str(row.get('Id')): row.get('InstanceId') for row in profiles}
+            report = ld_inventory(Path(DST_VMS), Path(PROFILE_PATH))
+            if not report['ok']:
+                raise RepairBlocked('; '.join(report['errors']))
+            mapping = {account['id']: row['instance_id']
+                       for row in report['instances'] for account in row['accounts']}
             if any(not isinstance(key, str) or key not in mapping for key in ids):
                 raise RepairBlocked("Аккаунт не найден в текущем профиле")
             indices = [mapping[key] for key in ids]

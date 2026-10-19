@@ -120,7 +120,116 @@ def load_profile(path: Path) -> list[dict]:
     return data
 
 
-def target_is_disabled(index: int, profile: Path, gn_config: Path) -> bool:
+def _json_field(value: object) -> object:
+    """Разбирает строковые Data/MenuData без изменения профиля."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except ValueError:
+            return None
+    return value
+
+
+def _setting(value: object) -> object:
+    """Извлекает value из схемы параметров GnBots."""
+    return value.get('value') if isinstance(value, dict) else value
+
+
+def character_slot(account: dict) -> int | None:
+    """Возвращает явно включённый выбор персонажа; login/IGG ID наружу не передаются."""
+    steps = _json_field(account.get('Data'))
+    slots = set()
+    if not isinstance(steps, list):
+        return None
+    for step in steps:
+        if (not isinstance(step, dict) or step.get('ScriptId') != 'vikingbot.base.accountswitch'
+                or step.get('IsActive') is not True):
+            continue
+        config = step.get('Config')
+        if not isinstance(config, dict):
+            continue
+        if (_setting(config.get('mode')) != 'Player'
+                or _setting(config.get('skip', 0)) not in (0, False, '0', None)):
+            continue
+        value = _setting(config.get('account'))
+        if not isinstance(value, bool) and str(value) in {str(n) for n in range(1, 8)}:
+            slots.add(int(value))
+    return next(iter(slots)) if len(slots) == 1 else None
+
+
+def _shared_login(account: dict) -> str | None:
+    """Внутренний ключ общего IGG-входа. Не возвращать его в API/журналах."""
+    menu = _json_field(account.get('MenuData'))
+    config = menu.get('Config') if isinstance(menu, dict) else None
+    if not isinstance(config, dict) or _setting(config.get('Slot')) != 'igg':
+        return None
+    email = _setting(config.get('Email'))
+    if isinstance(email, str) and email.strip() and character_slot(account) is not None:
+        return email.strip().casefold()
+    return None
+
+
+def _binding_accounts(profiles: list[dict], vms: Path) -> tuple[dict, dict]:
+    """Собирает несколько персонажей в одну VM, включая исчезнувший старый индекс.
+
+    Для вывода об устаревшей ссылке требуются общий IGG-вход, разные явно выбранные
+    персонажи, ровно один существующий каталог VM среди привязок этой группы и полное
+    отсутствие файлов/каталога старого индекса. При неоднозначности индексы сохраняются.
+    Профиль, пароль и выбор персонажа не меняются; email в публичный результат не попадает.
+    """
+    indices = [instance_number(account.get('InstanceId')) for account in profiles]
+    def absent(path: Path) -> bool:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return False
+    groups: dict[str, list[int]] = {}
+    for position, account in enumerate(profiles):
+        key = _shared_login(account)
+        if key:
+            groups.setdefault(key, []).append(position)
+    resolved = list(indices)
+    aliases = {}
+    for positions in groups.values():
+        characters = [character_slot(profiles[position]) for position in positions]
+        if len(positions) < 2 or len(set(characters)) != len(characters):
+            continue
+        declared = {indices[position] for position in positions}
+        try:
+            existing = {index for index in declared if (vms / f'leidian{index}').is_dir()}
+            if len(existing) != 1:
+                continue
+            target = next(iter(existing))
+            # Общий рабочий индекс не должен одновременно принадлежать другому игровому входу.
+            key = _shared_login(profiles[positions[0]])
+            if any(index == target and _shared_login(profiles[position]) != key
+                   for position, index in enumerate(indices)):
+                continue
+            for position in positions:
+                old = indices[position]
+                paths = (vms / f'leidian{old}', vms / 'config' / f'leidian{old}.config')
+                if old != target and all(absent(path) for path in paths):
+                    resolved[position] = target
+                    aliases[str(old)] = target
+        except OSError:
+            # Непроверенный или отключённый junction не считается удалённой VM.
+            continue
+    accounts = {}
+    for position, account in enumerate(profiles):
+        index = resolved[position]
+        accounts.setdefault(index, []).append({
+            'id': str(account.get('Id') or ''), 'name': str(account.get('Name') or ''),
+            'active': bool(account.get('Active')), 'character': character_slot(account),
+            'configured_instance_id': indices[position],
+            'binding_source': 'shared_character_vm' if index != indices[position] else 'profile',
+        })
+    return accounts, aliases
+
+
+def target_is_disabled(index: int, profile: Path, gn_config: Path, vms: Path | None = None) -> bool:
     """Разрешает открытый GUI только для выключенной VM в реально выбранном профиле."""
     try:
         selected = read_json(gn_config).get('SelectedProfile')
@@ -130,22 +239,21 @@ def target_is_disabled(index: int, profile: Path, gn_config: Path) -> bool:
             selected += '.json'
         if selected.casefold() != profile.name.casefold():
             return False
-        rows = [row for row in load_profile(profile) if instance_number(row.get('InstanceId')) == index]
-        return bool(rows) and all(row.get('Active') is False for row in rows)
+        if vms is None:
+            # Без фактической папки VM нельзя доказать отсутствие активных связанных персонажей.
+            return False
+        accounts, _ = _binding_accounts(load_profile(profile), vms)
+        rows = accounts.get(index, [])
+        return bool(rows) and all(row['active'] is False for row in rows)
     except (OSError, ValueError, AttributeError, ConfigRecoveryError):
         return False
 
 
 def inventory(vms: Path, profile: Path) -> dict:
     """Объединяет индексы из профиля, config и каталогов VM; ошибки не скрывает."""
-    errors, accounts = [], {}
+    errors, accounts, aliases = [], {}, {}
     try:
-        for row in load_profile(profile):
-            index = instance_number(row.get("InstanceId"))
-            accounts.setdefault(index, []).append({
-                "id": str(row.get("Id") or ""), "name": str(row.get("Name") or ""),
-                "active": bool(row.get("Active")),
-            })
+        accounts, aliases = _binding_accounts(load_profile(profile), vms)
     except (OSError, ValueError, ConfigRecoveryError) as exc:
         errors.append(f"profile: {exc}")
     indices = set(accounts)
@@ -184,7 +292,7 @@ def inventory(vms: Path, profile: Path) -> dict:
                 "active" if any(a["active"] for a in linked) else "disabled"),
         })
     return {"checked_at": datetime.now(timezone.utc).isoformat(), "ok": not errors,
-            "errors": errors, "instances": rows,
+            "errors": errors, "instances": rows, "binding_aliases": aliases,
             "crashed": [row["filename"] for row in rows if row["issues"]]}
 
 
@@ -355,6 +463,9 @@ def repair_instances(indices: list, *, vms: Path, profile: Path, snapshot_root: 
             try:
                 row = rows.get(index)
                 if row is None:
+                    shared = report.get('binding_aliases', {}).get(str(index))
+                    if shared is not None:
+                        raise RepairBlocked(f"Этот персонаж использует общий LDPlayer {shared}; выберите его")
                     raise RepairBlocked("Индекс не найден в инвентаризации")
                 if not row["issues"]:
                     item.update(ok=True, status="unchanged", message="Config уже целый; запись не нужна")

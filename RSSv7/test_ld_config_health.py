@@ -7,9 +7,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from config_recovery import create_snapshot
+from config_recovery import ConfigRecoveryError, create_snapshot
 from ld_config_health import (RepairBlocked, config_problems, inventory, console_rows,
                               runtime_inventory, repair_instances, repair_lock, select_source, disk_usage,
                               target_is_disabled)
@@ -76,11 +77,11 @@ class ConfigHealthTests(unittest.TestCase):
     def test_disabled_target_requires_current_selected_profile(self):
         gn_config = self.root / 'gn-config.json'
         gn_config.write_text(json.dumps({'SelectedProfile': 'profile'}))
-        self.assertTrue(target_is_disabled(7, self.profile, gn_config))
+        self.assertTrue(target_is_disabled(7, self.profile, gn_config, self.vms))
         gn_config.write_text(json.dumps({'SelectedProfile': 'another'}))
-        self.assertFalse(target_is_disabled(7, self.profile, gn_config))
+        self.assertFalse(target_is_disabled(7, self.profile, gn_config, self.vms))
         gn_config.write_text('{')
-        self.assertFalse(target_is_disabled(7, self.profile, gn_config))
+        self.assertFalse(target_is_disabled(7, self.profile, gn_config, self.vms))
 
     def test_shared_target_with_any_active_account_blocks_gui_exception(self):
         rows = json.loads(self.profile.read_text())
@@ -88,7 +89,7 @@ class ConfigHealthTests(unittest.TestCase):
         self.profile.write_text(json.dumps(rows))
         gn_config = self.root / 'gn-config.json'
         gn_config.write_text(json.dumps({'SelectedProfile': 'profile.json'}))
-        self.assertFalse(target_is_disabled(7, self.profile, gn_config))
+        self.assertFalse(target_is_disabled(7, self.profile, gn_config, self.vms))
 
     def test_bad_profile_not_empty_success(self):
         self.profile.write_text("{")
@@ -255,6 +256,7 @@ class EndpointTests(unittest.TestCase):
         self.ns = {"app": self.app, "jsonify": jsonify, "request": request,
                    "_config_diagnosis": lambda: {"ok": True, "crashed": ["leidian7.config", "leidian10.config"]}}
         exec(compile(module, "routes", "exec"), self.ns)
+        self.real_repair = self.ns['_repair_config_request']
         self.ns['_repair_config_request'] = lambda data: ({'ok': False, 'results': [{'ok': False}]}, 409)
         self.client = self.app.test_client()
 
@@ -277,6 +279,153 @@ class EndpointTests(unittest.TestCase):
 
     def test_blind_replacement_disabled(self):
         self.assertEqual(self.client.post('/api/fix/replace_configs', json={}).status_code, 409)
+
+    def test_account_api_uses_shared_vm_instead_of_stale_instance_id(self):
+        calls = []
+        def repair(indices, **kwargs):
+            calls.append(indices)
+            return {'ok': True, 'results': []}
+        self.ns.update({
+            '_repair_config_request': self.real_repair, 'Path': Path,
+            'DST_VMS': 'vms', 'PROFILE_PATH': 'profile.json', 'BACKUP_CONFIG_DST_ROOT': 'daily',
+            'CONFIG_SNAPSHOT_ROOT': 'snapshots', 'FIX_BACKUP_ROOT': 'rollback',
+            'RepairBlocked': RepairBlocked, 'ConfigRecoveryError': ConfigRecoveryError,
+            'psutil': SimpleNamespace(Error=RuntimeError),
+            '_assert_config_repair_stopped': lambda index: None, 'repair_instances': repair,
+            'ld_inventory': lambda *args: {
+                'ok': True, 'instances': [{'instance_id': 8, 'accounts': [
+                    {'id': 'Filosof1', 'configured_instance_id': 8},
+                    {'id': 'Filosof2', 'configured_instance_id': 12}]}]},
+        })
+        response = self.client.post('/api/fix/config_batch', json={'acc_ids': ['Filosof1', 'Filosof2']})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(calls, [[8, 8]])  # Дедупликация выполняется под OS lock в repair_instances.
+
+    def test_account_api_does_not_repair_after_failed_binding_diagnosis(self):
+        self.ns.update({
+            '_repair_config_request': self.real_repair, 'Path': Path, 'DST_VMS': 'vms',
+            'PROFILE_PATH': 'profile.json', 'RepairBlocked': RepairBlocked,
+            'ConfigRecoveryError': ConfigRecoveryError, 'psutil': SimpleNamespace(Error=RuntimeError),
+            'ld_inventory': lambda *args: {'ok': False, 'errors': ['profile unavailable']},
+        })
+        response = self.client.post('/api/fix/config_batch', json={'acc_ids': ['Filosof2']})
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(response.json['ok'])
+
+
+class SharedCharacterTests(unittest.TestCase):
+    """Пара персонажей после переноса одной общей VM, без изменения профиля."""
+
+    def setUp(self):
+        ConfigHealthTests.setUp(self)
+        self.accounts = [self.account('Filosof1', 7, 1), self.account('Filosof2', 12, 2)]
+        self.profile.write_text(json.dumps(self.accounts))
+        self.destination.write_text(json.dumps(config('Filosof1')))
+
+    repair = ConfigHealthTests.repair
+
+    @staticmethod
+    def account(name, instance, character, email='private-login@example.test'):
+        return {
+            'Id': name, 'Name': name, 'InstanceId': instance, 'Active': True,
+            'MenuData': json.dumps({'Config': {'Slot': 'igg', 'Email': email, 'Password': 'private-password'}}),
+            'Data': json.dumps([{'ScriptId': 'vikingbot.base.accountswitch', 'IsActive': True,
+                                 'Config': {'mode': {'value': 'Player'}, 'account': {'value': str(character)},
+                                            'skip': 0}}]),
+        }
+
+    def save(self):
+        self.profile.write_text(json.dumps(self.accounts))
+
+    def test_missing_old_index_shares_existing_vm_with_two_characters(self):
+        before = self.profile.read_bytes()
+        report = inventory(self.vms, self.profile)
+        rows = {row['instance_id']: row for row in report['instances']}
+        self.assertNotIn(12, rows)
+        self.assertEqual([a['name'] for a in rows[7]['accounts']], ['Filosof1', 'Filosof2'])
+        self.assertEqual([a['character'] for a in rows[7]['accounts']], [1, 2])
+        self.assertEqual(rows[7]['accounts'][1]['configured_instance_id'], 12)
+        self.assertEqual(rows[7]['accounts'][1]['binding_source'], 'shared_character_vm')
+        self.assertEqual(rows[7]['issues'], [])
+        self.assertEqual(report['binding_aliases'], {'12': 7})
+        self.assertEqual(self.profile.read_bytes(), before)
+        self.assertNotIn('private-login', json.dumps(report))
+        self.assertNotIn('private-password', json.dumps(report))
+
+    def test_distinct_login_not_inferred_from_similar_names(self):
+        self.accounts[1] = self.account('Filosof2', 12, 2, 'another@example.test')
+        self.save()
+        self.assertIn('leidian12.config', inventory(self.vms, self.profile)['crashed'])
+
+    def test_two_existing_vms_are_not_merged(self):
+        (self.vms / 'leidian12').mkdir()
+        (self.vms / 'config/leidian12.config').write_text(json.dumps(config('Filosof2')))
+        report = inventory(self.vms, self.profile)
+        self.assertEqual(report['binding_aliases'], {})
+        self.assertTrue(any(row['instance_id'] == 12 for row in report['instances']))
+
+    def test_remaining_config_is_not_hidden(self):
+        (self.vms / 'config/leidian12.config').write_text(json.dumps(config('Filosof2')))
+        self.assertIn('leidian12.config', inventory(self.vms, self.profile)['crashed'])
+
+    def test_broken_junction_is_not_treated_as_removed(self):
+        original = Path.lstat
+        def fake_lstat(path, *args, **kwargs):
+            if path == self.vms / 'leidian12':
+                return self.vms.stat()
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'lstat', fake_lstat):
+            self.assertIn('leidian12.config', inventory(self.vms, self.profile)['crashed'])
+
+    def test_unreadable_old_path_prevents_inference(self):
+        original = Path.lstat
+        def fake_lstat(path, *args, **kwargs):
+            if path == self.vms / 'leidian12':
+                raise PermissionError('cannot inspect')
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'lstat', fake_lstat):
+            self.assertIn('leidian12.config', inventory(self.vms, self.profile)['crashed'])
+
+    def test_disabled_switch_or_same_character_does_not_prove_shared_vm(self):
+        for field, value in [('IsActive', False), ('character', 1)]:
+            self.accounts[1] = self.account('Filosof2', 12, 2)
+            steps = json.loads(self.accounts[1]['Data'])
+            if field == 'character':
+                steps[0]['Config']['account']['value'] = str(value)
+            else:
+                steps[0][field] = value
+            self.accounts[1]['Data'] = json.dumps(steps)
+            self.save()
+            self.assertEqual(inventory(self.vms, self.profile)['binding_aliases'], {})
+
+    def test_custom_slot_does_not_prove_shared_vm(self):
+        menu = json.loads(self.accounts[1]['MenuData'])
+        menu['Config']['Slot'] = 'custom'
+        self.accounts[1]['MenuData'] = json.dumps(menu)
+        self.save()
+        self.assertEqual(inventory(self.vms, self.profile)['binding_aliases'], {})
+
+    def test_unrelated_owner_of_target_prevents_inference(self):
+        self.accounts.append(self.account('Other', 7, 1, 'other@example.test'))
+        self.save()
+        self.assertEqual(inventory(self.vms, self.profile)['binding_aliases'], {})
+
+    def test_active_second_character_blocks_repair_with_open_bot(self):
+        self.accounts[0]['Active'] = False
+        self.save()
+        gn_config = self.root / 'gn-config.json'
+        gn_config.write_text(json.dumps({'SelectedProfile': 'profile'}))
+        self.assertFalse(target_is_disabled(7, self.profile, gn_config, self.vms))
+        self.accounts[1]['Active'] = False
+        self.save()
+        self.assertTrue(target_is_disabled(7, self.profile, gn_config, self.vms))
+
+    def test_direct_repair_of_old_index_does_not_create_or_copy_vm(self):
+        result = self.repair([12])
+        self.assertFalse(result['ok'])
+        self.assertIn('общий LDPlayer 7', result['results'][0]['message'])
+        self.assertFalse((self.vms / 'leidian12').exists())
+        self.assertFalse((self.vms / 'config/leidian12.config').exists())
 
 
 if __name__ == "__main__":
