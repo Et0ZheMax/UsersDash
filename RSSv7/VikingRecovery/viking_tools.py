@@ -300,6 +300,27 @@ class Maintenance:
         raise RecoveryError('Задачи восстановлены, но GnBots не подтвердил запуск свежей записью в журнале')
 
 
+def recover_profile_farm(engine: RecoveryEngine, farm: Farm, state_dir: Path | None = None) -> tuple[str | None, int]:
+    """Восстановить VM и строку профиля при остановленном GnBots, затем вернуть работу сервера."""
+
+    state_dir = state_dir or Path(__file__).with_name('state')
+    state_dir.mkdir(parents=True, exist_ok=True)
+    maintenance = Maintenance(engine, state_dir / 'maintenance.json')
+    before = maintenance.state_path.read_bytes() if maintenance.state_path.exists() else None
+    if before is not None and read_json(maintenance.state_path).get('phase') != 'restored':
+        raise RecoveryError('Есть незавершённая остановка сервера; сначала нажмите «Восстановить работу бота»')
+    inspected = maintenance.call('Inspect')
+    if not inspected.get('administrator') or inspected.get('session_id') == 0:
+        raise RecoveryError('Восстановление запускается от администратора из рабочего стола Windows')
+    engine.validate()
+    try:
+        maintenance.pause()
+        return engine.recover(farm)
+    finally:
+        if maintenance.state_path.exists() and maintenance.state_path.read_bytes() != before:
+            maintenance.resume()
+
+
 def install_profile_record(engine: RecoveryEngine, item: NewFarm, steps: list[dict], index: int = -1,
                            igg_id: str | None = None, active: bool = False) -> None:
     """Добавить новую запись без замены остальных ферм; перепроверить атомарную запись."""

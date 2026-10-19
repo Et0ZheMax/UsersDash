@@ -22,7 +22,7 @@ import sys
 import tempfile
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
@@ -31,6 +31,7 @@ from typing import Callable, Iterable, Sequence
 LDPLAYER_DIR = Path(r"C:\LDPlayer\LDPlayer9")
 GNBOTS_DIR = Path(r"C:\Program Files\GnBots")
 PROFILE_PATH = GNBOTS_DIR / "profiles" / "LDPplayer.json"
+BACKUP_PROFILES_ROOT = Path(r"C:\LD_backup\bot_acc_configs")
 TEMPLATE_INDEX = 0
 PACKAGE = "com.igg.android.vikingriseglobal"
 ACTIVITY = f"{PACKAGE}/com.gpc.sdk.unity.GPCSDKMainActivity"
@@ -62,6 +63,7 @@ class Farm:
     record_id: str = ""
     instance_id: int | None = None
     reactivation_pending: bool = False
+    archive_source: str = field(default="", repr=False)
 
     @property
     def ready(self) -> bool:
@@ -110,17 +112,8 @@ def resolve_profile_path(gnbots_dir: Path = GNBOTS_DIR) -> Path:
     return profile
 
 
-def load_farms(path: Path | None = None) -> list[Farm]:
-    """Загрузить фермы, не сохраняя отдельную базу логинов и паролей."""
-
-    path = path or resolve_profile_path()
-    try:
-        records = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RecoveryError(f"Не удалось прочитать профиль GnBots: {exc}") from exc
-    if not isinstance(records, list):
-        raise RecoveryError("Профиль GnBots имеет неожиданный формат: ожидался список")
-
+def _farms_from_records(records: list[dict]) -> list[Farm]:
+    """Разобрать записи GnBots без изменения профиля и вывода реквизитов."""
     farms: list[Farm] = []
     for record in records:
         if not isinstance(record, dict):
@@ -142,7 +135,7 @@ def load_farms(path: Path | None = None) -> list[Farm]:
                 custom=str(config.get("Custom", "")).strip(),
                 slot=str(config.get("Slot", "")).strip(),
                 active=bool(record.get("Active", False)),
-                record_id=str(record.get("Id", "")).strip(),
+                record_id=str(record.get("Id") or "").strip(),
                 instance_id=(
                     int(record["InstanceId"])
                     if str(record.get("InstanceId", "")).strip().isdigit()
@@ -156,6 +149,107 @@ def load_farms(path: Path | None = None) -> list[Farm]:
             )
         )
     return sorted((farm for farm in farms if farm.name), key=lambda item: item.name.casefold())
+
+
+def load_farms(path: Path | None = None) -> list[Farm]:
+    """Загрузить фермы, не сохраняя отдельную базу логинов и паролей."""
+
+    path = path or resolve_profile_path()
+    try:
+        records = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RecoveryError(f"Не удалось прочитать профиль GnBots: {exc}") from exc
+    if not isinstance(records, list):
+        raise RecoveryError("Профиль GnBots имеет неожиданный формат: ожидался список")
+    return _farms_from_records(records)
+
+
+def load_archived_farms(profile_path: Path, backup_root: Path = BACKUP_PROFILES_ROOT) -> list[Farm]:
+    """Показать удалённые записи из последних дневных архивов именно этого профиля."""
+
+    current = load_farms(profile_path)
+    current_ids = {farm.record_id for farm in current if farm.record_id}
+    if not backup_root.is_dir():
+        raise RecoveryError(f"Каталог архивов не найден: {backup_root}")
+    dated = []
+    for folder in backup_root.iterdir():
+        try:
+            stamp = datetime.strptime(folder.name, "%d__%m__%Y")
+        except ValueError:
+            continue
+        path = folder / profile_path.name
+        if path.is_file():
+            dated.append((stamp, path))
+    found = {}
+    for _, path in sorted(dated, reverse=True):
+        try:
+            records = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            raise RecoveryError(f"Не удалось прочитать дневной архив {path.name}: {exc}") from exc
+        if not isinstance(records, list):
+            raise RecoveryError(f"В дневном архиве {path} ожидался список ферм")
+        farms = _farms_from_records(records)
+        ids = [farm.record_id for farm in farms if farm.record_id]
+        if len(ids) != len(set(ids)):
+            raise RecoveryError(f"В дневном архиве {path} повторяется ID фермы")
+        for farm in farms:
+            if farm.record_id and farm.record_id not in current_ids and farm.record_id not in found:
+                found[farm.record_id] = replace(farm, instance_id=None, active=False,
+                                               reactivation_pending=True, archive_source=str(path))
+    return sorted(found.values(), key=lambda farm: (farm.name.casefold(), farm.record_id))
+
+
+def prepare_profile_recovery(profile_path: Path, farm: Farm) -> Farm:
+    """Создать отсутствующую строку из явно выбранного архива до работы с эмулятором."""
+
+    if not farm.archive_source:
+        return farm
+    if not farm.record_id:
+        raise RecoveryError("Нельзя вернуть архивную ферму без постоянного ID записи")
+    try:
+        raw = profile_path.read_text(encoding="utf-8-sig")
+        records = json.loads(raw)
+        archived = json.loads(Path(farm.archive_source).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        raise RecoveryError(f"Не удалось прочитать профиль или выбранный архив: {exc}") from exc
+    if (not isinstance(records, list) or not isinstance(archived, list)
+            or any(not isinstance(item, dict) for item in records + archived)):
+        raise RecoveryError("Профиль или архив имеет неверный формат")
+    matches = [item for item in records if str(item.get("Id") or "").strip() == farm.record_id]
+    candidates = [item for item in archived if str(item.get("Id") or "").strip() == farm.record_id]
+    if len(matches) > 1 or len(candidates) != 1:
+        raise RecoveryError("Архивная запись не найдена однозначно по постоянному ID")
+    if any(str(item.get("Name") or "").strip().casefold() == farm.name.casefold()
+           and str(item.get("Id") or "").strip() != farm.record_id for item in records):
+        raise RecoveryError(f"Имя {farm.name} уже занято другой записью; требуется отдельное имя")
+    candidate_farms = _farms_from_records(matches or candidates)
+    if len(candidate_farms) != 1:
+        raise RecoveryError("У архивной фермы нет полной конфигурации GnBots")
+    candidate = candidate_farms[0]
+    if (candidate.name != farm.name or candidate.email != farm.email or candidate.password != farm.password
+            or candidate.custom != farm.custom or candidate.slot != farm.slot):
+        raise RecoveryError("Данные выбранной фермы изменились; обновите список архива")
+    if matches:
+        # Повторный вызов не сбрасывает уже назначенный номер и не создаёт дубликат.
+        return candidate
+    record = candidates[0]
+    try:
+        steps = _nested_json(record.get("Data"))
+    except (ValueError, TypeError) as exc:
+        raise RecoveryError("В выбранном архиве повреждены настройки действий GnBots") from exc
+    if record.get("AppId") != "vikingbot" or not isinstance(steps, list) or any(
+        not isinstance(step, dict) for step in steps
+    ):
+        raise RecoveryError("В выбранном архиве нет полной конфигурации Viking Rise")
+    record.update(InstanceId=-1, Active=False, SessionId=-1, HealthCheckPassed=False)
+    record["UsersDashReactivation"] = {
+        "status": "prepared", "account_id": farm.record_id,
+        "requested_at": datetime.now().astimezone().isoformat(),
+        "source": "viking_archive", "archive": str(farm.archive_source),
+    }
+    records.append(record)
+    _write_verified_profile(profile_path, raw, records)
+    return next(item for item in load_farms(profile_path) if item.record_id == farm.record_id)
 
 
 def choose_backup_name(target: str, existing_names: Iterable[str], now: datetime | None = None) -> str:
@@ -258,13 +352,30 @@ def _profile_instance_plan(profile_path: Path, farm: Farm, new_index: int) -> tu
 
 
 def update_profile_instance(
-    profile_path: Path, farm: Farm, new_index: int, *, dry_run: bool = False,
+    profile_path: Path, farm: Farm, new_index: int, *, dry_run: bool = False, recovery_verified: bool = False,
 ) -> int | None:
     """Перенести выбранного клиента и доказанных общих персонажей на свободную VM."""
 
-    raw, records, old_index, _ = _profile_instance_plan(profile_path, farm, new_index)
-    if dry_run or old_index == int(new_index):
+    raw, records, old_index, moving = _profile_instance_plan(profile_path, farm, new_index)
+    if dry_run:
         return old_index
+    if recovery_verified:
+        for position in moving:
+            record = records[position]
+            marker = record.get("UsersDashReactivation")
+            if (isinstance(marker, dict) and marker.get("status") == "prepared"
+                    and marker.get("account_id") == str(record.get("Id") or "")):
+                marker.update(status="emulator_ready", instance_id=int(new_index),
+                              emulator_ready_at=datetime.now().astimezone().isoformat())
+                record["Active"] = True
+    if json.loads(raw) != records:
+        _write_verified_profile(profile_path, raw, records)
+    return old_index
+
+
+def _write_verified_profile(profile_path: Path, raw: str, records: list[dict]) -> None:
+    """Сохранить полный профиль с backup, проверкой конкуренции и перечитыванием."""
+
     backup_path = profile_path.with_name(profile_path.name + ".before_viking_recovery")
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{profile_path.name}.",
@@ -281,6 +392,7 @@ def update_profile_instance(
         shutil.copy2(profile_path, dated_backup)
         shutil.copy2(profile_path, backup_path)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
             json.dump(records, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
             handle.flush()
@@ -289,6 +401,8 @@ def update_profile_instance(
             raise RecoveryError("Профиль изменился перед заменой; восстановление привязок отменено")
         os.replace(temp_name, profile_path)
     except Exception as exc:
+        if fd is not None:
+            os.close(fd)
         try:
             os.unlink(temp_name)
         except OSError:
@@ -301,7 +415,6 @@ def update_profile_instance(
         raise RecoveryError(f"Не удалось проверить профиль GnBots после записи: {exc}") from exc
     if saved != records:
         raise RecoveryError("Профиль GnBots не подтвердил общие привязки и сохранность настроек")
-    return old_index
 
 
 def parse_wm_size(output: str) -> tuple[int, int] | None:
@@ -1075,6 +1188,7 @@ class RecoveryEngine:
         if not farm.ready:
             raise RecoveryError("Для фермы нужны непустые Email/Password и Slot=igg")
         self.validate()
+        farm = prepare_profile_recovery(self.profile_path, farm)
         self.clone_template(farm)
         update_profile_instance(self.profile_path, farm, self.new_index, dry_run=True)
         self.launch_and_wait()
@@ -1084,7 +1198,7 @@ class RecoveryEngine:
         self.wait_for_game()
         backup_name, new_index = self.rename_transaction(farm.name, farm=farm)
         self._step("Обновление LDPlayer ID в профиле GnBots")
-        old_index = update_profile_instance(self.profile_path, farm, new_index)
+        old_index = update_profile_instance(self.profile_path, farm, new_index, recovery_verified=True)
         self.logger.info(
             "Профиль GnBots обновлён: ферма %s, LDPlayer ID %s -> %s",
             farm.name,
@@ -1154,10 +1268,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="проверить окружение без изменений")
     parser.add_argument("--farm", help="запустить восстановление указанной фермы")
     parser.add_argument("--dry-run", action="store_true", help="проверить выбранную ферму без изменений")
+    parser.add_argument("--from-archive", action="store_true", help="выбрать удалённую ферму из дневного архива")
+    parser.add_argument("--record-id", help="постоянный ID записи для выбора одноимённых ферм")
     args = parser.parse_args(argv)
     logger = configure_logging()
     try:
         farms = load_farms()
+        if args.from_archive:
+            farms = load_archived_farms(resolve_profile_path())
+        if args.record_id:
+            farms = [farm for farm in farms if farm.record_id == args.record_id]
         if args.list:
             for farm in farms:
                 print(f"{farm.name}\tIGG={farm.custom or '-'}\tготова={'да' if farm.ready else 'нет'}")

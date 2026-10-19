@@ -17,7 +17,7 @@ function Save-State($value) {
 
 if ($Action -eq 'Inspect') {
     $tasks = @(Get-ScheduledTask | Where-Object {
-        ($_.Actions | Out-String) -match $taskPattern
+        (($_.Actions | Out-String) -match $taskPattern) -or $_.TaskName -match '^BotOps-AutoRecovery(?:$|-)'
     } | ForEach-Object {
         @{Name=$_.TaskName; Path=$_.TaskPath; Enabled=[bool]$_.Settings.Enabled}
     })
@@ -33,7 +33,7 @@ if ($Action -eq 'Pause') {
         if ($existing.phase -ne 'restored') { throw 'Сначала восстановите предыдущую остановку сервера' }
     }
     $tasks = @(Get-ScheduledTask | Where-Object {
-        ($_.Actions | Out-String) -match $taskPattern
+        (($_.Actions | Out-String) -match $taskPattern) -or $_.TaskName -match '^BotOps-AutoRecovery(?:$|-)'
     } | ForEach-Object {
         @{Name=$_.TaskName; Path=$_.TaskPath; Enabled=[bool]$_.Settings.Enabled}
     })
@@ -45,10 +45,20 @@ if ($Action -eq 'Pause') {
     })
     $state = @{phase='pausing'; tasks=$tasks; monitors=$monitors; bot_started=$false}
     Save-State $state
-    foreach ($task in $tasks) {
+    # Сначала останавливаем TaskGuard: он может снова включить уже выключенный worker.
+    foreach ($task in @($tasks | Sort-Object @{Expression={if ($_.Name -match 'TaskGuard') {0} else {1}}}, Name)) {
         if ($task.Enabled) {
             Disable-ScheduledTask -TaskName $task.Name -TaskPath $task.Path | Out-Null
-            Stop-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -ErrorAction SilentlyContinue
+        }
+        Stop-ScheduledTask -TaskName $task.Name -TaskPath $task.Path -ErrorAction SilentlyContinue
+    }
+    foreach ($task in $tasks) {
+        $current = Get-ScheduledTask -TaskName $task.Name -TaskPath $task.Path
+        if ($current.Settings.Enabled) {
+            Disable-ScheduledTask -TaskName $task.Name -TaskPath $task.Path | Out-Null
+        }
+        if ((Get-ScheduledTask -TaskName $task.Name -TaskPath $task.Path).Settings.Enabled) {
+            throw 'Не подтверждена остановка задач перезапуска'
         }
     }
     foreach ($monitor in $monitors) { Stop-Process -Id $monitor.Id -Force -ErrorAction SilentlyContinue }

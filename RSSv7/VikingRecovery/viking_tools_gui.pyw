@@ -13,9 +13,12 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 from viking_login import build_login_targets
-from viking_recovery import CancelledError, RecoveryError, SingleRunLock, configure_logging, load_farms
+from viking_recovery import (
+    CancelledError, RecoveryError, SingleRunLock, configure_logging, load_archived_farms, load_farms,
+)
 from viking_tools import (
     Maintenance, NewFarm, Provisioner, TARIFFS, ToolsConfig, ToolsLoginEngine, ToolsRecoveryEngine,
+    recover_profile_farm,
 )
 
 
@@ -45,6 +48,7 @@ class VikingToolsApp(tk.Tk):
         self.worker = None
         self.rows = []
         self.resume_items = None
+        self.archive_generation = 0
         self.logger = configure_logging(Path(__file__).with_name('logs') / 'viking_tools.log')
         handler = QueueHandler(self.events)
         handler.setFormatter(logging.Formatter('%(asctime)s  %(message)s', '%H:%M:%S'))
@@ -53,6 +57,9 @@ class VikingToolsApp(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
         self.recovery_page = self.selection_page('Восстановление', 'Восстановить ферму', self.recover)
+        self.show_archived = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self.recovery_page['controls'], text='Показать удалённые из архива',
+                        variable=self.show_archived, command=self.reload).pack(side=tk.LEFT, padx=8)
         self.login_page = self.selection_page('Повторный вход', 'Авторизовать эмулятор', self.login)
         self.build_creation_page()
         footer = ttk.Frame(self, padding=(12, 0, 12, 12))
@@ -86,13 +93,14 @@ class VikingToolsApp(tk.Tk):
             tree.column(column, width=width)
         tree.pack(fill=tk.BOTH, expand=True)
         ttk.Button(frame, text=button, command=callback).pack(anchor=tk.W, pady=10)
-        page = dict(frame=frame, tree=tree, search=search, records={})
+        page = dict(frame=frame, controls=controls, tree=tree, search=search, records={})
         search.trace_add('write', lambda *_: self.fill(page))
         return page
 
     def reload(self):
         if self.worker and self.worker.is_alive():
             return
+        self.archive_generation += 1
         try:
             engine = ToolsRecoveryEngine(self.logger)
             farms = load_farms(engine.profile_path)
@@ -106,9 +114,35 @@ class VikingToolsApp(tk.Tk):
             self.login_page['records'] = {str(i): (t.farm, t.instance, t.issue) for i, t in enumerate(targets)}
             self.fill(self.recovery_page)
             self.fill(self.login_page)
-            self.status.set(f'Активный профиль: {engine.profile_path.name}')
+            self.status.set(f'Профиль: {engine.profile_path.name}. Записей: {len(farms)}')
+            if self.show_archived.get():
+                self.status.set('Чтение архива удалённых ферм… Можно пользоваться поиском.')
+                threading.Thread(target=self.read_archive, args=(engine.profile_path, self.archive_generation),
+                                 daemon=True).start()
         except Exception as exc:
             messagebox.showerror('Ошибка загрузки профиля', str(exc), parent=self)
+
+    def read_archive(self, profile_path, generation):
+        try:
+            payload = (generation, load_archived_farms(profile_path), '')
+        except Exception as exc:
+            payload = (generation, [], str(exc))
+        self.events.put(('archive', payload))
+
+    def show_archive_result(self, payload):
+        generation, farms, error = payload
+        if (generation != self.archive_generation or not self.show_archived.get()
+                or self.worker and self.worker.is_alive()):
+            return
+        if error:
+            self.status.set(error)
+            return
+        for index, farm in enumerate(farms):
+            self.recovery_page['records']['archive-' + str(index)] = (
+                farm, None, '' if farm.ready else 'Нет данных входа',
+            )
+        self.fill(self.recovery_page)
+        self.status.set(f'Из архива: {len(farms)}. При восстановлении запись GnBots будет создана автоматически.')
 
     def fill(self, page):
         tree = page['tree']
@@ -117,7 +151,7 @@ class VikingToolsApp(tk.Tk):
         for key, (farm, instance, issue) in page['records'].items():
             values = (farm.name if farm else '—', instance.name if instance else '—',
                       instance.index if instance else '—', farm.custom or 'Первый в списке' if farm else '—',
-                      issue or 'Да')
+                      issue or ('Из архива · создаст запись' if farm and farm.archive_source else 'Да'))
             if needle and needle not in ' '.join(map(str, values)).casefold():
                 continue
             tree.insert('', tk.END, iid=key, values=values)
@@ -203,7 +237,10 @@ class VikingToolsApp(tk.Tk):
     def recover(self):
         try:
             farm, _ = self.selected(self.recovery_page)
-            text = f'Восстановить {farm.name}? Старый эмулятор будет сохранён с _OLD.'
+            operation = 'Создать запись GnBots из архива' if farm.archive_source else 'Обновить запись GnBots'
+            text = (f'Восстановить {farm.name}?\n\n{operation} и назначить новый свободный ID эмулятора. '
+                    'Настройки и выбор персонажа сохранятся.\n\n'
+                    'GnBots и эмуляторы будут временно остановлены; после операции бот запустится снова.')
             if not messagebox.askyesno('Восстановление', text, parent=self):
                 return
             self.start(lambda: self.recover_work(farm))
@@ -211,8 +248,10 @@ class VikingToolsApp(tk.Tk):
             messagebox.showerror('Ошибка', str(exc), parent=self)
 
     def recover_work(self, farm):
-        backup, index = self.engine().recover(farm)
-        return f'{farm.name} восстановлена, LDPlayer ID {index}; старый экземпляр: {backup or "не найден"}'
+        backup, index = recover_profile_farm(self.engine(), farm)
+        operation = 'создана из архива' if farm.archive_source else 'обновлена'
+        return (f'{farm.name}: запись GnBots {operation}, LDPlayer ID {index} проверен и сохранён. '
+                f'Бот запущен; старый экземпляр: {backup or "не найден"}')
 
     def login(self):
         try:
@@ -312,6 +351,8 @@ class VikingToolsApp(tk.Tk):
                     self.log.configure(state=tk.DISABLED)
                 elif kind == 'status':
                     self.status.set(str(payload))
+                elif kind == 'archive':
+                    self.show_archive_result(payload)
                 elif kind == 'success':
                     self.status.set('✓ ГОТОВО · ' + str(payload))
                     self.status_label.configure(background='#188038', foreground='white')
