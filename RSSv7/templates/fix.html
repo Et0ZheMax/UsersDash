@@ -80,6 +80,7 @@ const $=id=>document.getElementById(id);
 let report=null,busy=false,filter='all';
 const selected=new Set(),expanded=new Set();
 const reasons={player_name_lost:'Сбросились настройки',resolution_invalid:'Ошибка разрешения',config_missing:'Нет настроек LDPlayer',config_unreadable:'Не читаются настройки',config_not_object:'Ошибка настроек',vm_directory_missing:'Эмулятор не найден',instance_not_registered:'Не найден в LDPlayer'};
+Object.assign(reasons,{account_binding_mismatch:'Имя VM не совпадает с аккаунтом',unproven_shared_binding:'Не подтверждён общий эмулятор',stale_profile_binding:'В профиле остался старый ID'});
 const size=value=>value==null?'—':(value/1024**3).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ГиБ';
 const label=row=>row.accounts.map(a=>a.name).join(' / ')||row.player_name||'Без имени';
 const sumDisk=rows=>rows.some(row=>row.disk_bytes==null)?null:rows.reduce((sum,row)=>sum+row.disk_bytes,0);
@@ -128,6 +129,10 @@ function render(){
  if(row.orphan)detail.append(node('p','','Нет привязки к текущему профилю GnBots. Возможно, это неиспользуемый или ручной эмулятор.'));
  if(row.usage_class==='disabled')detail.append(node('p','','Аккаунт выключен в профиле и не участвует в очереди.'));
  if(row.issues.length)detail.append(node('p','',row.issues.map(value=>reasons[value]||value).join('; ')));
+ if(row.binding_issues?.includes('account_binding_mismatch'))detail.append(node('p','',
+  `В профиле: ${label(row)} → №${row.instance_id}. Имя этого эмулятора в LDPlayer: ${row.player_name}.`));
+ if(row.candidate_instance_ids?.length)detail.append(node('p','',
+  `Совпадение имени найдено у №${row.candidate_instance_ids.join(', №')}. Это подсказка для проверки, привязка автоматически не меняется.`));
  for(const account of row.accounts){
   if(account.character!=null)detail.append(node('p','',`${account.name}: персонаж ${account.character}.`));
   if(account.binding_source==='shared_character_vm')detail.append(node('p','',
@@ -155,17 +160,17 @@ async function refresh(){
 async function runRefresh(){if(busy)return;setBusy(true);try{await refresh();}finally{setBusy(false);}}
 function friendlyMessage(result){
  if(result.status==='planned')return 'Резервная копия подходит. Можно восстановить настройки.';
- if(result.status==='config_restored')return 'Настройки восстановлены. Android и игра ещё не проверены.';
+ if(result.status==='config_restored')return 'Настройки и привязки проверены, идентичность VM сохранена. Игра ещё не проверена.';
  if(result.status==='unchanged')return 'Настройки целые — заменять их не требуется.';
  const message=result.message||'';
  if(message.includes('Нет привязки'))return 'Сначала нужно определить аккаунт этого эмулятора. Автоматический ремонт заблокирован.';
  if(message.includes('Сначала остановите')||message.includes('ещё работает'))return 'Для ремонта нужно остановить GnBots и эмуляторы.';
- if(message.includes('Нет целого бэкапа'))return 'Подходящая резервная копия не найдена.';return message||'Не удалось завершить проверку.';
+ if(message.includes('Нет бэкапа')||message.includes('Нет целого бэкапа'))return 'Нет резервной копии с подтверждённой идентичностью этого эмулятора. Подмена устройства заблокирована.';return message||'Не удалось завершить проверку.';
 }
 function showResults(data,dryRun){
- $('resultHeading').textContent=dryRun?'Проверка перед ремонтом':'Результат восстановления';$('results').className='';$('results').replaceChildren();
+ $('resultHeading').textContent=dryRun?'Проверка перед ремонтом':'Восстановление настроек';$('results').className='';$('results').replaceChildren();
  for(const result of data.results||[]){const item=node('div','result'),title=node('div','result-title'),row=allRows().find(row=>row.instance_id===result.instance_id);
- title.append(node('span','',`${row?label(row):'Эмулятор'} · №${result.instance_id}`),node('span',`badge ${result.ok?'good':'amber'}`,result.ok?dryRun?'Готово':'Успешно':'Заблокировано'));
+ title.append(node('span','',`${row?label(row):'Эмулятор'} · №${result.instance_id}`),node('span',`badge ${result.ok?'good':'amber'}`,result.ok?dryRun?'Проверено':result.status==='unchanged'?'Без изменений':'Настройки готовы':'Заблокировано'));
  item.append(title,node('p','',friendlyMessage(result)));$('results').append(item);}
  $('technicalLog').textContent=(data.logs||[]).join('\n')+'\n\n'+JSON.stringify(data.results||data,null,2);
 }

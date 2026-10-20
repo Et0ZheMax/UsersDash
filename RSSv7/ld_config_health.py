@@ -21,7 +21,7 @@ import time
 import threading
 from typing import Callable
 
-from config_recovery import ConfigRecoveryError, restore_config
+from config_recovery import ConfigRecoveryError, restore_config, device_identity, vm_generation
 
 
 class RepairBlocked(ConfigRecoveryError):
@@ -157,16 +157,21 @@ def character_slot(account: dict) -> int | None:
     return next(iter(slots)) if len(slots) == 1 else None
 
 
-def _shared_login(account: dict) -> str | None:
-    """Внутренний ключ общего IGG-входа. Не возвращать его в API/журналах."""
+def _login_identity(account: dict) -> tuple[str, str] | None:
+    """Внутренний ключ IGG-входа. Не возвращать его в API/журналах."""
     menu = _json_field(account.get('MenuData'))
     config = menu.get('Config') if isinstance(menu, dict) else None
     if not isinstance(config, dict) or _setting(config.get('Slot')) != 'igg':
         return None
     email = _setting(config.get('Email'))
-    if isinstance(email, str) and email.strip() and character_slot(account) is not None:
-        return email.strip().casefold()
+    if isinstance(email, str) and email.strip():
+        return email.strip().casefold(), str(_setting(config.get('Custom')) or '').strip()
     return None
+
+
+def _shared_login(account: dict) -> tuple[str, str] | None:
+    """Для вывода об общей VM дополнительно нужен явный выбор персонажа."""
+    return _login_identity(account) if character_slot(account) is not None else None
 
 
 def _binding_accounts(profiles: list[dict], vms: Path) -> tuple[dict, dict]:
@@ -186,7 +191,7 @@ def _binding_accounts(profiles: list[dict], vms: Path) -> tuple[dict, dict]:
         except OSError:
             return False
         return False
-    groups: dict[str, list[int]] = {}
+    groups: dict[tuple[str, str], list[int]] = {}
     for position, account in enumerate(profiles):
         key = _shared_login(account)
         if key:
@@ -251,9 +256,13 @@ def target_is_disabled(index: int, profile: Path, gn_config: Path, vms: Path | N
 
 def inventory(vms: Path, profile: Path) -> dict:
     """Объединяет индексы из профиля, config и каталогов VM; ошибки не скрывает."""
-    errors, accounts, aliases = [], {}, {}
+    errors, accounts, aliases, profiles = [], {}, {}, []
     try:
-        accounts, aliases = _binding_accounts(load_profile(profile), vms)
+        profiles = load_profile(profile)
+        ids = [str(account.get('Id')) for account in profiles if account.get('Id')]
+        if len(ids) != len(set(ids)):
+            raise RepairBlocked('В профиле повторяется постоянный ID аккаунта')
+        accounts, aliases = _binding_accounts(profiles, vms)
     except (OSError, ValueError, ConfigRecoveryError) as exc:
         errors.append(f"profile: {exc}")
     indices = set(accounts)
@@ -291,8 +300,41 @@ def inventory(vms: Path, profile: Path) -> dict:
             "usage_class": "unlinked" if not linked else (
                 "active" if any(a["active"] for a in linked) else "disabled"),
         })
+    by_id = {str(account.get('Id') or ''): account for account in profiles}
+    for row in rows:
+        linked = row['accounts']
+        binding_issues = []
+        expected = {account['name'] for account in linked}
+        name = row['player_name']
+        known_name = bool(name and 'player_name_lost' not in row['issues'])
+        if linked and known_name and not _name_matches(name, expected):
+            binding_issues.append('account_binding_mismatch')
+        if len(linked) > 1:
+            keys = [_shared_login(by_id.get(account['id'], {})) for account in linked]
+            slots = [account['character'] for account in linked]
+            characters_valid = (None not in keys and len(set(keys)) == 1
+                                and None not in slots and len(set(slots)) == len(slots))
+            # GnBots также умеет менять IGG-вход на одной явно указанной VM.
+            # Это не основание переносить на неё другие номера автоматически.
+            logins = [_login_identity(by_id.get(account['id'], {})) for account in linked]
+            login_switch_valid = (all(slot is None for slot in slots)
+                and all(key and key[1] for key in logins) and len(set(logins)) == len(logins))
+            if not characters_valid and not login_switch_valid:
+                binding_issues.append('unproven_shared_binding')
+        if any(account['binding_source'] == 'shared_character_vm' for account in linked):
+            binding_issues.append('stale_profile_binding')
+        row['binding_issues'] = binding_issues
+        row['binding_status'] = 'conflict' if binding_issues else (
+            'unlinked' if not linked else 'matched' if known_name else 'unknown')
+        row['candidate_instance_ids'] = [other['instance_id'] for other in rows
+            if linked and other['player_name'] and _name_matches(other['player_name'], expected)
+            and other['instance_id'] != row['instance_id']] if binding_issues else []
+        row['issues'].extend(binding_issues)
+        if binding_issues:
+            row['config_status'] = 'damaged'
     return {"checked_at": datetime.now(timezone.utc).isoformat(), "ok": not errors,
             "errors": errors, "instances": rows, "binding_aliases": aliases,
+            'binding_conflicts': [row['instance_id'] for row in rows if row['binding_issues']],
             "crashed": [row["filename"] for row in rows if row["issues"]]}
 
 
@@ -367,7 +409,8 @@ def _name_matches(name: str, expected: set[str]) -> bool:
 
 
 def select_source(index: int, expected: set[str], snapshot_root: Path, daily_root: Path,
-                  override: Path | None = None) -> tuple[Path, bytes]:
+                  override: Path | None = None, *, vms: Path | None = None,
+                  current: dict | None = None, account_ids: set[str] | None = None) -> tuple[Path, bytes]:
     """Выбирает семантически целый снимок нужного владельца, затем сверяет manifest.
 
     Непривязанный индекс без имени владельца не восстанавливается по истории:
@@ -406,10 +449,24 @@ def select_source(index: int, expected: set[str], snapshot_root: Path, daily_roo
             config = json.loads(raw.decode("utf-8-sig"))
             if config_problems(config) or not _name_matches(config["statusSettings.playerName"], expected):
                 continue
+            if vms is not None:
+                if entry and 'account_ids' in entry:
+                    saved_ids = entry['account_ids']
+                    if (not isinstance(saved_ids, list) or any(not isinstance(key, str) for key in saved_ids)
+                            or set(saved_ids) != (account_ids or set())):
+                        continue
+                saved_generation = entry.get('vm_generation') if entry else None
+                live_generation = vm_generation(vms, index)
+                if saved_generation:
+                    if saved_generation != live_generation:
+                        continue
+                elif not device_identity(current) or device_identity(current) != device_identity(config):
+                    continue
             return path, raw
         except (OSError, ValueError, KeyError):
             continue
-    raise RepairBlocked(f"Нет целого бэкапа {filename} для владельцев: {', '.join(sorted(expected))}")
+    raise RepairBlocked(f"Нет бэкапа {filename} с подтверждённым владельцем и идентичностью VM: "
+                        f"{', '.join(sorted(expected))}")
 
 
 @contextmanager
@@ -458,6 +515,7 @@ def repair_instances(indices: list, *, vms: Path, profile: Path, snapshot_root: 
         if not report["ok"]:
             raise RepairBlocked("; ".join(report["errors"]))
         rows = {row["instance_id"]: row for row in report["instances"]}
+        conflicts = [row for row in report['instances'] if row['active'] and row.get('binding_issues')]
         for index in indices:
             item = {"instance_id": index, "ok": False, "android_status": "not_checked"}
             try:
@@ -467,17 +525,36 @@ def repair_instances(indices: list, *, vms: Path, profile: Path, snapshot_root: 
                     if shared is not None:
                         raise RepairBlocked(f"Этот персонаж использует общий LDPlayer {shared}; выберите его")
                     raise RepairBlocked("Индекс не найден в инвентаризации")
+                relevant_conflicts = conflicts + ([row] if row['binding_issues'] and row not in conflicts else [])
+                if relevant_conflicts:
+                    details = '; '.join(f"{', '.join(a['name'] for a in conflict['accounts'])} → "
+                        f"№{conflict['instance_id']} ({conflict['player_name'] or 'без имени'})"
+                        for conflict in relevant_conflicts)
+                    raise RepairBlocked('Сначала проверьте имена VM и привязки профиля GnBots: ' + details)
                 if not row["issues"]:
                     item.update(ok=True, status="unchanged", message="Config уже целый; запись не нужна")
                     results.append(item)
                     continue
                 if "vm_directory_missing" in row["issues"]:
                     raise RepairBlocked("Каталог VM отсутствует: восстановление config не вернёт диски")
-                source, raw = select_source(index, {a["name"] for a in row["accounts"]},
-                                            snapshot_root, daily_root, override)
                 destination = vms / "config" / f"leidian{index}.config"
                 before = destination.read_bytes() if destination.exists() else None
-                item.update(source=str(source), sha256=hashlib.sha256(raw).hexdigest())
+                try:
+                    current_config = json.loads(before.decode('utf-8-sig')) if before is not None else {}
+                except (ValueError, UnicodeError):
+                    current_config = {}
+                source, source_raw = select_source(index, {a["name"] for a in row["accounts"]},
+                    snapshot_root, daily_root, override, vms=vms, current=current_config,
+                    account_ids={a['id'] for a in row['accounts']})
+                restored = json.loads(source_raw.decode('utf-8-sig'))
+                # Восстанавливаем настройки, сохраняя действующие аппаратные/сетевые свойства VM.
+                if isinstance(current_config, dict):
+                    for key, value in current_config.items():
+                        if key.startswith(('propertySettings.', 'networkSettings.')):
+                            restored[key] = value
+                raw = (json.dumps(restored, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+                item.update(source=str(source), sha256=hashlib.sha256(raw).hexdigest(),
+                            source_sha256=hashlib.sha256(source_raw).hexdigest(), identity_preserved=True)
                 assert_stopped(index)
                 if profile.read_bytes() != profile_bytes:
                     raise RepairBlocked("Профиль изменился во время подготовки; повторите диагностику")
@@ -498,6 +575,9 @@ def repair_instances(indices: list, *, vms: Path, profile: Path, snapshot_root: 
                         item["rollback"] = str(rollback) if rollback else None
                         if destination.read_bytes() != raw or config_problems(read_json(destination)):
                             raise RepairBlocked("Проверка записанного config не прошла; сохранён откат")
+                        post = inventory(vms, profile)
+                        if not post['ok'] or any(r['active'] and r['binding_issues'] for r in post['instances']):
+                            raise RepairBlocked('После записи обнаружена ошибка привязок; запуск бота запрещён')
                     item.update(ok=True, status="config_restored",
                                 message="Config восстановлен и прочитан повторно. Android и игра ещё не проверены")
             except (OSError, ValueError, ConfigRecoveryError, subprocess.SubprocessError) as exc:

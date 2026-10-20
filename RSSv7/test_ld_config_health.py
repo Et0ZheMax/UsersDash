@@ -16,8 +16,10 @@ from ld_config_health import (RepairBlocked, config_problems, inventory, console
                               target_is_disabled)
 
 
-def config(name="KR"):
-    return {"statusSettings.playerName": name, "advancedSettings.resolution": {"width": 640, "height": 480}}
+def config(name="KR", device="same-device"):
+    return {"statusSettings.playerName": name, "advancedSettings.resolution": {"width": 640, "height": 480},
+            "propertySettings.phoneIMEI": device + '-imei', "propertySettings.phoneAndroidId": device + '-android',
+            "propertySettings.macAddress": device + '-mac'}
 
 
 class ConfigHealthTests(unittest.TestCase):
@@ -40,7 +42,7 @@ class ConfigHealthTests(unittest.TestCase):
         source = self.root / "source"
         source.mkdir(exist_ok=True)
         (source / "leidian7.config").write_text(json.dumps(value))
-        return create_snapshot(source, self.snapshots, now=datetime(2026, 10, day))
+        return create_snapshot(source, self.snapshots, now=datetime(2026, 10, day), vms=self.vms)
 
     def repair(self, indices=None, **kwargs):
         return repair_instances(indices or [7], vms=self.vms, profile=self.profile,
@@ -148,11 +150,101 @@ class ConfigHealthTests(unittest.TestCase):
         self.assertEqual(disk.read_bytes(), b"original android data")
         self.assertEqual(result["results"][0]["android_status"], "not_checked")
 
+    def make_generation(self):
+        folder = self.vms / 'leidian7'
+        (folder / 'data.vmdk').write_bytes(b'vm-generation-one')
+        (folder / 'leidian.vbox').write_text('<VirtualBox><Machine uuid="same-index-derived-uuid"/></VirtualBox>')
+
+    def test_legacy_other_device_is_blocked_even_when_number_and_owner_name_match(self):
+        self.snapshot(config('KR', 'previous-client-device'))
+        before = self.destination.read_bytes()
+        result = self.repair()
+        self.assertFalse(result['ok'])
+        self.assertEqual(self.destination.read_bytes(), before)
+        self.assertIn('идентичностью VM', result['results'][0]['message'])
+
+    def test_verified_same_generation_preserves_current_device_and_network_settings(self):
+        self.make_generation()
+        self.snapshot(config('KR', 'old-device-properties'))
+        current = config(None, 'current-device-properties')
+        current['networkSettings.networkAddress'] = 'private-current-network'
+        current['propertySettings.phoneModel'] = 'current-phone-model'
+        self.destination.write_text(json.dumps(current))
+        result = self.repair()
+        self.assertTrue(result['ok'])
+        restored = json.loads(self.destination.read_text())
+        for key in current:
+            if key.startswith(('propertySettings.', 'networkSettings.')):
+                self.assertEqual(restored[key], current[key])
+        self.assertEqual(restored['statusSettings.playerName'], 'KR')
+
+    def test_reused_index_with_same_uuid_and_copied_phone_ids_cannot_use_previous_generation(self):
+        self.make_generation()
+        self.snapshot(config())
+        disk = self.vms / 'leidian7/data.vmdk'
+        disk.rename(disk.with_name('previous-client.vmdk'))
+        disk.write_bytes(b'new-customer-disk')
+        before = self.destination.read_bytes()
+        self.assertFalse(self.repair()['ok'])
+        self.assertEqual(self.destination.read_bytes(), before)
+
+    def test_current_guid_must_match_verified_snapshot_account_guid(self):
+        self.make_generation()
+        source = self.root / 'source'
+        source.mkdir()
+        (source / self.destination.name).write_text(json.dumps(config()))
+        create_snapshot(source, self.snapshots, vms=self.vms, profile=self.profile)
+        records = json.loads(self.profile.read_text())
+        records[0]['Id'] = 'new-client-same-name'
+        self.profile.write_text(json.dumps(records))
+        self.assertFalse(self.repair()['ok'])
+
+    def test_unrelated_wrong_binding_blocks_batch_before_any_config_is_replaced(self):
+        self.snapshot(config())
+        (self.vms / 'leidian2').mkdir()
+        (self.vms / 'config/leidian2.config').write_text(json.dumps(config('Oo2')))
+        records = json.loads(self.profile.read_text())
+        records.append({'Id': 'german', 'Name': 'German4', 'InstanceId': 2, 'Active': True})
+        self.profile.write_text(json.dumps(records))
+        before = self.destination.read_bytes()
+        report = inventory(self.vms, self.profile)
+        row = next(row for row in report['instances'] if row['instance_id'] == 2)
+        self.assertIn('account_binding_mismatch', row['issues'])
+        result = self.repair()
+        self.assertFalse(result['ok'])
+        self.assertIn('German4', result['results'][0]['message'])
+        self.assertEqual(self.destination.read_bytes(), before)
+
     def test_dry_run_writes_no_config(self):
         self.snapshot(config())
         original = self.destination.read_bytes()
         self.assertEqual(self.repair(dry_run=True)["results"][0]["status"], "planned")
         self.assertEqual(self.destination.read_bytes(), original)
+
+    def test_declared_shared_vm_supports_distinct_igg_logins(self):
+        accounts = []
+        for name in ['Amina', 'ANGEL']:
+            accounts.append({'Id': name, 'Name': name, 'InstanceId': 7, 'Active': True,
+                'MenuData': {'Config': {'Slot': 'igg', 'Email': name+'@example.invalid', 'Custom': name+'-id'}}})
+        self.profile.write_text(json.dumps(accounts))
+        self.destination.write_text(json.dumps(config('ANGEL')))
+        row = inventory(self.vms, self.profile)['instances'][0]
+        self.assertEqual(row['issues'], [])
+
+    def test_ambiguous_shared_vm_is_not_accepted_without_login_or_character(self):
+        rows = [{'Id': name, 'Name': name, 'InstanceId': 7, 'Active': True} for name in ['KR', 'KR2']]
+        self.profile.write_text(json.dumps(rows))
+        self.destination.write_text(json.dumps(config('KR')))
+        self.assertIn('unproven_shared_binding', inventory(self.vms, self.profile)['instances'][0]['issues'])
+
+    def test_unrelated_disabled_name_conflict_does_not_block_active_repair(self):
+        self.snapshot(config())
+        rows = json.loads(self.profile.read_text())
+        rows[0]['Active'] = True
+        rows.append({'Id': 'old', 'Name': 'Old', 'InstanceId': 10, 'Active': False})
+        self.profile.write_text(json.dumps(rows))
+        (self.vms / 'config/leidian10.config').write_text(json.dumps(config('Custom old name')))
+        self.assertTrue(self.repair()['ok'])
 
     def test_running_guard_blocks_and_no_write(self):
         self.snapshot(config())
@@ -249,7 +341,7 @@ class EndpointTests(unittest.TestCase):
         source = Path(__file__).with_name("RssCounterWebV7.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         names = {"api_fix_do", "api_fix_config_batch", "api_fix_batch", "api_replace_configs",
-                 "api_crashed_emu", "api_fix_diagnosis", "api_fix_instances", "_repair_config_request"}
+                 "api_crashed_emu", "api_fix_diagnosis", "api_fix_instances", "_repair_config_request", 'api_reboot'}
         module = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef)
                                  and node.name in names], type_ignores=[])
         self.app = Flask(__name__)
@@ -279,6 +371,17 @@ class EndpointTests(unittest.TestCase):
 
     def test_blind_replacement_disabled(self):
         self.assertEqual(self.client.post('/api/fix/replace_configs', json={}).status_code, 409)
+
+    def test_start_never_calls_bot_control_with_wrong_active_binding(self):
+        called = []
+        self.ns.update({'Path': Path, 'DST_VMS': 'vms', 'PROFILE_PATH': 'profile.json',
+            'do_reboot_logic': lambda: called.append(True),
+            'ld_inventory': lambda *args: {'ok': True, 'errors': [], 'instances': [
+                {'instance_id': 2, 'active': True, 'issues': ['account_binding_mismatch'],
+                 'accounts': [{'name': 'German4'}]}]}})
+        response = self.client.post('/api/reboot')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(called, [])
 
     def test_account_api_uses_shared_vm_instead_of_stale_instance_id(self):
         calls = []
@@ -346,7 +449,7 @@ class SharedCharacterTests(unittest.TestCase):
         self.assertEqual([a['character'] for a in rows[7]['accounts']], [1, 2])
         self.assertEqual(rows[7]['accounts'][1]['configured_instance_id'], 12)
         self.assertEqual(rows[7]['accounts'][1]['binding_source'], 'shared_character_vm')
-        self.assertEqual(rows[7]['issues'], [])
+        self.assertEqual(rows[7]['issues'], ['stale_profile_binding'])
         self.assertEqual(report['binding_aliases'], {'12': 7})
         self.assertEqual(self.profile.read_bytes(), before)
         self.assertNotIn('private-login', json.dumps(report))

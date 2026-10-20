@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -29,7 +30,30 @@ def _is_candidate(path: Path) -> bool:
     return path.is_file() and path.name.lower().startswith("leidian") and path.suffix.lower() == ".config"
 
 
-def create_snapshot(source: Path, snapshot_root: Path, *, now: datetime | None = None) -> Path:
+def device_identity(config: object) -> str | None:
+    """Отпечаток устройства, без публикации IMEI/Android ID/MAC."""
+    keys = ('propertySettings.phoneIMEI', 'propertySettings.phoneAndroidId', 'propertySettings.macAddress')
+    if not isinstance(config, dict) or not all(isinstance(config.get(key), str) and config[key].strip() for key in keys):
+        return None
+    return hashlib.sha256(json.dumps({key: config[key] for key in keys}, sort_keys=True).encode()).hexdigest()
+
+
+def vm_generation(vms: Path, index: int) -> dict | None:
+    """Поколение диска: один номер или index-derived UUID не доказывают одну и ту же VM."""
+    folder = Path(vms) / f'leidian{index}'
+    try:
+        disk = (folder / 'data.vmdk').stat()
+        tree = ET.parse(folder / 'leidian.vbox')
+        machine = next(node for node in tree.iter() if node.tag.rsplit('}', 1)[-1] == 'Machine')
+        if not disk.st_ino or not machine.get('uuid'):
+            return None
+        return {'device': str(disk.st_dev), 'file_id': str(disk.st_ino), 'machine_uuid': machine.get('uuid')}
+    except (OSError, ET.ParseError, StopIteration):
+        return None
+
+
+def create_snapshot(source: Path, snapshot_root: Path, *, now: datetime | None = None,
+                    vms: Path | None = None, profile: Path | None = None) -> Path:
     """Создаёт полный проверенный снимок без перезаписи прошлых снимков.
 
     Снимок публикуется только после копирования и сверки SHA-256. Незаконченные
@@ -44,6 +68,21 @@ def create_snapshot(source: Path, snapshot_root: Path, *, now: datetime | None =
     snapshot_root.mkdir(parents=True, exist_ok=True)
     staging = snapshot_root / f".{stamp}.{uuid.uuid4().hex}.new"
     published = snapshot_root / stamp
+    vm_root = Path(vms) if vms is not None else (source.parent if source.name.lower() == 'config' else None)
+    generations = {path.stem[7:]: vm_generation(vm_root, int(path.stem[7:]))
+                   for path in source.glob('leidian*.config') if vm_root is not None and path.stem[7:].isdigit()}
+    try:
+        profile_bytes = Path(profile).read_bytes() if profile is not None else None
+        owners = {}
+        if profile_bytes is not None:
+            records = json.loads(profile_bytes.decode('utf-8-sig'))
+            if not isinstance(records, list):
+                raise ValueError('Корень профиля должен быть массивом')
+            for account in records:
+                if isinstance(account, dict) and account.get('Id') and str(account.get('InstanceId', '')).isdigit():
+                    owners.setdefault(str(account['InstanceId']), []).append(str(account['Id']))
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise ConfigRecoveryError(f'Не удалось проверить владельцев снимка: {exc}') from exc
     try:
         shutil.copytree(source, staging)
         files = sorted(path for path in staging.rglob("*") if _is_candidate(path))
@@ -56,6 +95,18 @@ def create_snapshot(source: Path, snapshot_root: Path, *, now: datetime | None =
                 for path in files
             },
         }
+        for path in files:
+            number = path.stem[7:]
+            if vm_root is not None and number.isdigit():
+                generation = vm_generation(vm_root, int(number))
+                if generation != generations.get(number):
+                    raise ConfigRecoveryError('Поколение VM изменилось во время снимка')
+                entry = manifest['files'][path.relative_to(staging).as_posix()]
+                entry['vm_generation'] = generation
+                if profile_bytes is not None:
+                    entry['account_ids'] = sorted(owners.get(number, []))
+        if profile_bytes is not None and Path(profile).read_bytes() != profile_bytes:
+            raise ConfigRecoveryError('Профиль изменился во время снимка')
         (staging / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
         )

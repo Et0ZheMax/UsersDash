@@ -2314,7 +2314,8 @@ def backup_configs() -> None:
     При ошибках копирования — планирует повторные попытки.
     """
     try:
-        snapshot = create_snapshot(Path(BACKUP_CONFIG_SRC), Path(CONFIG_SNAPSHOT_ROOT))
+        snapshot = create_snapshot(Path(BACKUP_CONFIG_SRC), Path(CONFIG_SNAPSHOT_ROOT),
+                                   vms=Path(DST_VMS), profile=Path(PROFILE_PATH))
         print(f"[BACKUP] verified config snapshot → {snapshot}", flush=True)
     except ConfigRecoveryError as exc:
         print(f"[BACKUP] config snapshot rejected: {exc}", flush=True)
@@ -2601,12 +2602,9 @@ def _config_diagnosis() -> dict:
 def _assert_config_repair_stopped(index: int) -> None:
     """Блокирует запись при работающем боте/LDPlayer или неполной диагностике."""
     # Консервативно: не гоняемся с GUI, очередью бота и скрытыми headless-процессами.
-    allow_gui = target_is_disabled(index, Path(PROFILE_PATH), Path(PROFILE_PATH).parent.parent / 'config.json', Path(DST_VMS))
     try:
         for process in psutil.process_iter(['name']):
             name = (process.info.get('name') or '').lower()
-            if name == 'gnbots.exe' and allow_gui:
-                continue
             if name in {'gnbots.exe', 'gnrestarter.exe', 'dnplayer.exe', 'ld9boxheadless.exe',
                         'ldvboxheadless.exe'}:
                 raise RepairBlocked(f"Сначала остановите GnBots/restarter и LDPlayer: работает {name}")
@@ -5665,6 +5663,14 @@ def api_stop():
 
 @app.route("/api/reboot", methods=["POST"])
 def api_reboot():
+    report = ld_inventory(Path(DST_VMS), Path(PROFILE_PATH))
+    bad = [row for row in report['instances'] if row['active'] and row['issues']]
+    if not report['ok'] or bad:
+        logs = ['Запуск заблокирован: сначала проверьте настройки и привязки активных аккаунтов.']
+        logs += [f"№{row['instance_id']}: {', '.join(a['name'] for a in row['accounts'])}; "
+                 f"{', '.join(row['issues'])}" for row in bad]
+        logs += report['errors']
+        return jsonify({'ok': False, 'error': logs[0], 'logs': logs}), 409
     logs= do_reboot_logic()
     return {"status":"ok","logs": logs}
 
