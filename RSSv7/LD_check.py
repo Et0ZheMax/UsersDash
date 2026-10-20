@@ -287,48 +287,28 @@ def health_check(verbose: bool=False) -> None:
 # Сканер конфигов (общий для обычного и «тихого» прохода)
 # ─────────────────────────────────────────────────────────────
 def collect_crashed(inst2name: Dict[str, str], active_inst_ids: set) -> Tuple[List[str], List[str]]:
-    """
-    Возвращает:
-      crashed_files — имена файлов (leidianXX.config) для UI,
-      crashed_names — человеко-читаемые имена для Telegram.
-    """
-    crashed_files: List[str] = []
-    crashed_names: List[str] = []
-
-    for root, _, files in os.walk(config_folder):
-        for fname in files:
-            if not fname.endswith('.config'):
-                continue
-            if fname.lower() == 'leidians.config':
-                continue
-
-            inst_id = extract_instance_id(fname)
-            if not inst_id or inst_id not in active_inst_ids:
-                continue
-
-            fpath = os.path.join(root, fname)
-            try:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    cfg = json.load(f)
-            except Exception as e:
-                print(f"[ERR] Ошибка чтения {fpath}: {e}")
-                continue
-
-            player_name = find_key_recursive(cfg, 'statusSettings.playerName') or ''
-            player_name = str(player_name).strip()
-            is_bad = (not player_name) or (player_name.lower() == 'ldplayer')
-
-            if is_bad:
-                crashed_files.append(fname)
-                crashed_names.append(inst2name.get(inst_id, f'inst{inst_id}'))
-
-    return crashed_files, crashed_names
+    """Общий живой сканер: выключенные и непривязанные VM также видны в UI."""
+    from pathlib import Path
+    from ld_config_health import inventory
+    report = inventory(Path(config_folder).parent, Path(profile_file))
+    if not report['ok']:
+        raise RuntimeError('; '.join(report['errors']))
+    files = report['crashed']
+    names = [inst2name.get(extract_instance_id(name), name) for name in files]
+    return files, names
 
 def write_crashed_file(files: List[str]) -> None:
     try:
         os.makedirs(os.path.dirname(crashed_file), exist_ok=True)
-        with open(crashed_file, 'w', encoding='utf-8') as f:
-            json.dump(files, f, ensure_ascii=False, indent=2)
+        import tempfile
+        fd, temporary = tempfile.mkstemp(dir=os.path.dirname(crashed_file), suffix='.new')
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(files, f, ensure_ascii=False, indent=2)
+            os.replace(temporary, crashed_file)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
     except Exception as e:
         print(f"[ERR] Не могу записать {crashed_file}: {e}")
 
@@ -411,7 +391,7 @@ async def check_all_configs_and_notify():
     inst2name, active_inst_ids, inst2acc = build_maps(profiles)
     if not active_inst_ids:
         print('[INFO] Нет активных аккаунтов в профиле. Нечего проверять.')
-        return
+        # Инвентаризацию непривязанных VM всё равно выполняем.
 
     server_name = resolve_server_name()
     msg_prefix = server_name
@@ -431,7 +411,7 @@ async def check_all_configs_and_notify():
         acc_ids: List[str] = []
         for fname in crashed_files:
             inst = extract_instance_id(fname)
-            if inst and inst in inst2acc:
+            if inst and inst in active_inst_ids and inst in inst2acc:
                 acc_ids.append(inst2acc[inst])
 
         if acc_ids:
@@ -442,7 +422,7 @@ async def check_all_configs_and_notify():
                 print(f"[AUTO-FIX] POST {url}")
                 resp = requests.post(url, json={"acc_ids": acc_ids}, timeout=600)
                 if resp.ok:
-                    print(f"[AUTO-FIX] OK: fixed {len(acc_ids)} accounts")
+                    print(f"[AUTO-FIX] Config API: {resp.json().get('verification', 'config_only')}")
                 else:
                     print(f"[AUTO-FIX] HTTP {resp.status_code}: {resp.text}")
             except Exception as e:

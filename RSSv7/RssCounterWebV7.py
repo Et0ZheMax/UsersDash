@@ -5,6 +5,9 @@ import re
 import stat
 import sqlite3
 import psutil
+from config_recovery import ConfigRecoveryError, create_snapshot, find_latest_config, restore_config
+from ld_config_health import (RepairBlocked, inventory as ld_inventory, runtime_inventory,
+                              console_rows, repair_instances, load_profile, instance_number, disk_usage, target_is_disabled)
 import subprocess
 import shlex
 import time
@@ -1155,7 +1158,7 @@ def do_stop_logic() -> list[str]:
     Возвращает список сообщений о результатах.
     """
     logs: list[str] = []
-    for name in ("GnBots.exe", "dnplayer.exe", "Ld9BoxHeadless.exe"):
+    for name in ("gnrestarter.exe", "GnBots.exe", "dnplayer.exe", "Ld9BoxHeadless.exe"):
         logs.append(f"⏹ Останавливаем {name}...")
         # kill_process возвращает список PID‑ов, которые были убиты
         try:
@@ -2255,6 +2258,7 @@ BACKUP_CONFIG_DST_ROOT = r"C:\LD_backup\configs"
 BACKUP_ACCS_DST_ROOT   = r"C:\LD_backup\accs_data"
 BACKUP_PROFILES_DST_ROOT = r"C:\LD_backup\bot_acc_configs"
 FIX_BACKUP_ROOT = r"C:\LD_backup\fix_backup"   # ← NEW
+CONFIG_SNAPSHOT_ROOT = r"C:\LD_backup\config_snapshots"
 REACTIVATION_ROLLBACK_ROOT = os.path.join(BACKUP_PROFILES_DST_ROOT, "reactivation")
 
 
@@ -2309,23 +2313,25 @@ def backup_configs() -> None:
       C:\\LD_backup\\configs\\<ДД__ММ__ГГГГ>\\
     При ошибках копирования — планирует повторные попытки.
     """
-    dst = os.path.join(BACKUP_CONFIG_DST_ROOT,
-                       datetime.now().strftime("%d__%m__%Y"))
-    _ensure_dir(dst)
-    failed = []
-    for fname in os.listdir(BACKUP_CONFIG_SRC):
-        src = os.path.join(BACKUP_CONFIG_SRC, fname)
-        if os.path.isfile(src):
-            try:
-                shutil.copy2(src, dst)
-            except Exception as e:
-                failed.append(fname)
-                print(f"[BACKUP] error copying {fname}: {e}", flush=True)
-    if failed:
-        print(f"[BACKUP] Scheduling retries for: {failed}", flush=True)
-        _retry_failed_configs(failed, dst)
-    else:
-        print(f"[BACKUP] configs  →  {dst}", flush=True)
+    try:
+        snapshot = create_snapshot(Path(BACKUP_CONFIG_SRC), Path(CONFIG_SNAPSHOT_ROOT),
+                                   vms=Path(DST_VMS), profile=Path(PROFILE_PATH))
+        print(f"[BACKUP] verified config snapshot → {snapshot}", flush=True)
+    except ConfigRecoveryError as exc:
+        print(f"[BACKUP] config snapshot rejected: {exc}", flush=True)
+        return
+
+    dst = os.path.join(BACKUP_CONFIG_DST_ROOT, datetime.now().strftime("%d__%m__%Y"))
+    if os.path.isdir(dst):
+        return
+    staged = f"{dst}.new-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(BACKUP_CONFIG_SRC, staged)
+        os.replace(staged, dst)
+        print(f"[BACKUP] daily config snapshot → {dst}", flush=True)
+    except Exception as exc:
+        shutil.rmtree(staged, ignore_errors=True)
+        print(f"[BACKUP] error creating daily config snapshot: {exc}", flush=True)
 # ───────────────────────────────────────────────────────────────
 
 # ───── вставьте рядом с backup_configs() ─────
@@ -2576,100 +2582,89 @@ def remove_readonly(folder_path):
     else:
         print(f"Папка не найдена: {folder_path}")
 
-def do_fix_logic(acc_id: str,
-                 *, only_config: bool = False,
+def _config_diagnosis() -> dict:
+    """Живой срез всех VM, включая неактивные и не привязанные к профилю."""
+    report = runtime_inventory(ld_inventory(Path(DST_VMS), Path(PROFILE_PATH)), Path(LD_CONSOLE_PATH))
+    for row in report['instances']:
+        row.update(disk_usage(Path(DST_VMS) / f"leidian{row['instance_id']}"))
+        row['memory_bytes'] = None
+        if row.get('runtime_status') == 'stopped':
+            row['memory_bytes'] = 0
+        elif row.get('pids'):
+            try:
+                row['memory_bytes'] = sum(psutil.Process(pid).memory_info().rss for pid in set(row['pids']))
+            except psutil.Error:
+                pass
+    report['gn_running'] = is_process_running('GnBots.exe')
+    return report
+
+
+def _assert_config_repair_stopped(index: int) -> None:
+    """Блокирует запись при работающем боте/LDPlayer или неполной диагностике."""
+    # Консервативно: не гоняемся с GUI, очередью бота и скрытыми headless-процессами.
+    try:
+        for process in psutil.process_iter(['name']):
+            name = (process.info.get('name') or '').lower()
+            if name in {'gnbots.exe', 'gnrestarter.exe', 'dnplayer.exe', 'ld9boxheadless.exe',
+                        'ldvboxheadless.exe'}:
+                raise RepairBlocked(f"Сначала остановите GnBots/restarter и LDPlayer: работает {name}")
+    except psutil.Error as exc:
+        raise RepairBlocked("Не удалось достоверно проверить процессы") from exc
+    live = console_rows(Path(LD_CONSOLE_PATH))
+    if index not in live:
+        raise RepairBlocked("VM не зарегистрирована в LDPlayer; требуется отдельная диагностика")
+    if live[index]['running']:
+        raise RepairBlocked("LDPlayer ещё работает; запись отменена")
+
+
+def _repair_config_request(data: dict) -> tuple[dict, int]:
+    """Общая транзакция для всех кнопок, старого API и автофикса."""
+    try:
+        if not isinstance(data, dict):
+            raise RepairBlocked("Требуется JSON object")
+        if data.get('cfg_src_override'):
+            raise RepairBlocked("Произвольный путь запрещён; используйте backup_dir")
+        backup_dir = data.get('backup_dir') or ''
+        override = None
+        if backup_dir:
+            if not isinstance(backup_dir, str) or not re.fullmatch(r'\d{2}__\d{2}__\d{4}', backup_dir):
+                raise RepairBlocked("Некорректная дата backup_dir")
+            datetime.strptime(backup_dir, '%d__%m__%Y')
+            override = Path(BACKUP_CONFIG_DST_ROOT) / backup_dir
+        indices = data.get('instance_ids')
+        if indices is None:
+            ids = data.get('acc_ids')
+            if ids is None and data.get('acc_id'):
+                ids = [data['acc_id']]
+            if not isinstance(ids, list) or not ids:
+                raise RepairBlocked("Нужен acc_ids или instance_ids")
+            report = ld_inventory(Path(DST_VMS), Path(PROFILE_PATH))
+            if not report['ok']:
+                raise RepairBlocked('; '.join(report['errors']))
+            mapping = {account['id']: row['instance_id']
+                       for row in report['instances'] for account in row['accounts']}
+            if any(not isinstance(key, str) or key not in mapping for key in ids):
+                raise RepairBlocked("Аккаунт не найден в текущем профиле")
+            indices = [mapping[key] for key in ids]
+        result = repair_instances(
+            indices, vms=Path(DST_VMS), profile=Path(PROFILE_PATH),
+            snapshot_root=Path(CONFIG_SNAPSHOT_ROOT), daily_root=Path(BACKUP_CONFIG_DST_ROOT),
+            rollback_root=Path(FIX_BACKUP_ROOT), assert_stopped=_assert_config_repair_stopped,
+            override=override, dry_run=data.get('dry_run') is True,
+        )
+        return result, (200 if result['ok'] else 409)
+    except (OSError, ValueError, ConfigRecoveryError, psutil.Error) as exc:
+        return {'ok': False, 'error': str(exc), 'logs': [f'BLOCKED: {exc}']}, 409
+
+
+def do_fix_logic(acc_id: str, *, only_config: bool = False,
                  cfg_src_override: str | None = None) -> list[str]:
-    """
-    Выполняет «FIX» для указанного аккаунта.
-
-    :param acc_id:   ID аккаунта (GUID).
-    :param only_config: True → копируется только файл leidianXX.config;
-                        False → полный Fix (папка эмулятора + config).
-    :return: список строк‑логов.
-    """
-    logs: list[str] = []
-    logs.append(f"─── FIX start (only_config={only_config}) — acc_id={acc_id}")
-
-    # ───────────────────── поиск InstanceId в профиле ─────────────────────
-    profiles = load_profiles()
-    inst_id, nickname = None, "???"
-    for p in profiles:
-        if p.get("Id") == acc_id:
-            inst_id  = p.get("InstanceId")
-            nickname = p.get("Name", "???")
-            break
-
-    if inst_id is None:
-        logs.append("❗ Аккаунт не найден в JSON‑профиле.")
-        return logs
-
-    logs.append(f"Аккаунт {nickname}, InstanceId={inst_id}")
-
-    # ───────────────────── копирование CONFIG ─────────────────────────────
-    src_cfg_dir = cfg_src_override if cfg_src_override \
-                else os.path.join(SRC_VMS, "config")
-    src_cfg     = os.path.join(src_cfg_dir, f"leidian{inst_id}.config")
-    dst_cfg = os.path.join(DST_VMS, "config", f"leidian{inst_id}.config")
-    logs.append(f"Копируем config\n  {src_cfg}\n  → {dst_cfg}")
-
-    # NEW — проверка совпадения ника при использовании бэкапа
+    """Совместимый вызов безопасного ремонта config; диски VM не заменяет."""
+    payload = {'acc_id': acc_id}
     if cfg_src_override:
-        try:
-            with open(src_cfg, "rb") as fh:
-                buf = fh.read()
-            if nickname.encode("utf-8", "ignore") not in buf:
-                logs.append(f"❌ Конфликт: в бэкапе нет ника «{nickname}»")
-                return logs
-        except Exception as e:
-            logs.append(f"⚠ Не удалось проверить ник в конфиге: {e}")
-            return logs
-
-
-    try:
-        if os.path.exists(dst_cfg):
-            os.chmod(dst_cfg, stat.S_IWRITE)        # снимаем Read‑only
-            os.remove(dst_cfg)
-        shutil.copy2(src_cfg, dst_cfg)
-        logs.append("✅ Config скопирован.")
-    except Exception as e:
-        logs.append(f"❗ Ошибка копирования config: {e}")
-
-    # ───────────────────── если нужен только config – выходим ─────────────
-    if only_config:
-        logs.append("FIX (config‑only) завершён.")
-        return logs
-
-    # ───────────────────── СТОП процессов GnBots/dnplayer ────────────────
-    for proc_name in ("GnBots.exe", "dnplayer.exe", "Ld9BoxHeadless.exe"):
-        logs.append(f"⏹ Закрываю {proc_name}…")
-        kill_process(proc_name)
-        time.sleep(2)
-        if is_process_running(proc_name):
-            logs.append(f"⚠ {proc_name} всё ещё запущен.")
-
-    # ───────────────────── копирование папки leidianXX ────────────────────
-    src_dir = os.path.join(SRC_VMS, f"leidian{inst_id}")
-    dst_dir = os.path.join(DST_VMS, f"leidian{inst_id}")
-    logs.append(f"Копируем папку\n  {src_dir}\n  → {dst_dir}")
-
-    try:
-        real_dst = os.path.realpath(dst_dir) if os.path.islink(dst_dir) else dst_dir
-        if os.path.exists(real_dst):
-            shutil.rmtree(real_dst)
-        shutil.copytree(src_dir, real_dst)
-        logs.append("✅ Папка скопирована.")
-    except Exception as e:
-        logs.append(f"❗ Ошибка копирования папки: {e}")
-
-    # ───────────────────── запуск GnBots ──────────────────────────────────
-    logs.append("▶ Запускаю GnBots.exe -start")
-    try:
-        start_process(GNBOTS_SHORTCUT)       # путь берётся из config.json
-    except Exception as e:
-        logs.append(f"❗ Ошибка запуска GnBots: {e}")
-
-    logs.append("FIX (full) завершён.")
-    return logs
+        payload['cfg_src_override'] = cfg_src_override
+    result, _ = _repair_config_request(payload)
+    return result['logs']
 
 
 
@@ -5091,48 +5086,28 @@ def api_manage_account_setting_step(acc_id, step_idx):
 
 @app.route("/api/fix/batch", methods=["POST"])
 def api_fix_batch():
-    """
-    Принимает JSON вида {"acc_ids": ["id1","id2",...]},
-    прогоняет do_fix_logic для каждого acc_id, но старт GnBots.exe
-    (последняя часть логов) оставляет только для последнего аккаунта.
-    """
-    data = request.get_json() or {}
-    ids  = data.get("acc_ids", [])
-    backup_dir = (data.get("backup_dir") or "").strip()
-
-    cfg_override = data.get("cfg_src_override") or (
-        os.path.join(BACKUP_CONFIG_DST_ROOT, backup_dir) if backup_dir else None
-    )
-
-    if not ids:
-        return jsonify({"error": "acc_ids missing or empty"}), 400
-
-    batch_logs = []
-    total = len(ids)
-    for idx, acc_id in enumerate(ids):
-        # собственно фиксим
-        single = do_fix_logic(acc_id,
-                      only_config=False,
-                      cfg_src_override=cfg_override)
-        # для всех кроме последнего — отрезаем часть со стартом
-        if idx < total - 1:
-            single = _strip_start(single)
-        batch_logs.extend(single)
-
-    return jsonify({"logs": batch_logs})
+    """Совместимый пакетный endpoint; выполняет только безопасный config repair."""
+    result, code = _repair_config_request(request.get_json(silent=True) or {})
+    return jsonify(result), code
 
 
 # ───── вставьте рядом с другими /api/fix/... роутами ─────
 @app.route("/api/fix/replace_configs", methods=["POST"])
 def api_replace_configs():
-    """
-    JSON {"backup_dir":"ДД__ММ__ГГГГ"}  – копирует ВСЕ config’ы.
-             "" или параметра нет → стандартный SRC_VMS\\config
-    """
-    data = request.get_json() or {}
-    bdir = data.get("backup_dir", "") or None
-    logs = emergency_replace_configs(bdir)
-    return jsonify({"logs": logs})
+    """Массовая слепая перезапись отключена в пользу проверяемого восстановления."""
+    return jsonify({'ok': False, 'error': 'Используйте диагностику и Починить всё: замена без проверки отключена'}), 409
+
+
+@app.route("/api/fix/diagnosis")
+def api_fix_diagnosis():
+    report = _config_diagnosis()
+    return jsonify(report), (200 if report['ok'] else 503)
+
+
+@app.route("/api/fix/instances", methods=["POST"])
+def api_fix_instances():
+    result, code = _repair_config_request(request.get_json(silent=True) or {})
+    return jsonify(result), code
 
 
 
@@ -5144,42 +5119,13 @@ def _local_request_base_url() -> str:
     return "http://127.0.0.1"
 
 def _run_ld_check():
-    """Запускает LD_check.py, подставляя пути и имя сервера из config.json."""
-    script_path = os.path.join(BASE_DIR, "LD_check.py")
-    logs = []
-    if not os.path.isfile(script_path):
-        return [f"LD_check.py не найден по пути {script_path}"], 404
-
-    env = os.environ.copy()
-    if PROFILE_PATH:
-        env["LDCHECK_PROFILE_FILE"] = PROFILE_PATH
-    if SERVER_NAME:
-        env["SERVER_NAME"] = SERVER_NAME
-
-    # LD_check.py запускается из веб-приложения отдельным процессом и для автофикса
-    # вызывает тот же API, что и кнопка «Починить всё» на странице /fix. Host header
-    # может быть публичным cloudpub-доменом, где POST на Flask API возвращает 405,
-    # поэтому для внутреннего автофикса берём локальный порт текущего RSSv7.
-    env["DASH_API"] = _local_request_base_url()
-
-    env.setdefault("PYTHONIOENCODING", "utf-8")
-
-    try:
-        proc = subprocess.Popen(
-            ["python", script_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=env,
-        )
-        for line in proc.stdout or []:
-            logs.append(line.rstrip())
-        proc.wait()
-    except Exception as e:
-        logs.append(f"Error running LD_check.py: {e}")
-    return logs, 200
+    """Проверка из UI только читает состояние, без скрытого автофикса и Telegram."""
+    report = _config_diagnosis()
+    logs = [f"LDPlayer {row['instance_id']}: {', '.join(row['issues']) if row['issues'] else 'config valid'}; "
+            f"runtime={row.get('runtime_status', 'unknown')}; Android не проверен"
+            for row in report['instances']]
+    logs += report['errors']
+    return logs, (200 if report['ok'] else 503)
 
 
 @app.route("/api/check_ld", methods=["POST"])
@@ -5296,12 +5242,11 @@ def api_ld_launch():
 
 @app.route("/api/crashedEmus")
 def api_crashed_emu():
-    path = r"C:\LDPlayer\ldChecker\crashed.json"
-    if not os.path.exists(path):
-        return jsonify([])
-    with open(path, "r", encoding="utf-8") as f:
-        arr = json.load(f)
-    return jsonify(arr)  # например ["leidian5.config", "leidian36.config"]
+    # Legacy API сохраняет массив, но больше не доверяет устаревшему crashed.json.
+    report = _config_diagnosis()
+    if not report['ok']:
+        return jsonify({'ok': False, 'errors': report['errors']}), 503
+    return jsonify(report['crashed'])
 
 
 
@@ -5718,6 +5663,14 @@ def api_stop():
 
 @app.route("/api/reboot", methods=["POST"])
 def api_reboot():
+    report = ld_inventory(Path(DST_VMS), Path(PROFILE_PATH))
+    bad = [row for row in report['instances'] if row['active'] and row['issues']]
+    if not report['ok'] or bad:
+        logs = ['Запуск заблокирован: сначала проверьте настройки и привязки активных аккаунтов.']
+        logs += [f"№{row['instance_id']}: {', '.join(a['name'] for a in row['accounts'])}; "
+                 f"{', '.join(row['issues'])}" for row in bad]
+        logs += report['errors']
+        return jsonify({'ok': False, 'error': logs[0], 'logs': logs}), 409
     logs= do_reboot_logic()
     return {"status":"ok","logs": logs}
 
@@ -5911,49 +5864,16 @@ def api_logstatus():
 # Принимаем и GET, и POST. Читаем JSON-тело или query-параметры.
 @app.route("/api/fix/do", methods=["GET", "POST"])
 def api_fix_do():
-    data = request.get_json(silent=True) or request.args
-
-    acc_id_raw   = (data.get("acc_id") or "").strip()
-    only_raw     = str(data.get("config_only", "0")).strip().lower()
-    backup_dir   = (data.get("backup_dir") or "").strip()
-    # Если явно передали cfg_src_override — используем его; иначе построим из backup_dir
-    cfg_override = data.get("cfg_src_override") or (
-        os.path.join(BACKUP_CONFIG_DST_ROOT, backup_dir) if backup_dir else None
-    )
-
-    only_config = (only_raw in ("1", "true", "yes", "on"))
-    if not acc_id_raw:
-        return jsonify({"error": "acc_id required"}), 400
-
-    logs = do_fix_logic(
-        acc_id_raw,
-        only_config=only_config,
-        cfg_src_override=cfg_override
-    )
-    return jsonify({"ok": True, "logs": logs})
+    if request.method != 'POST':
+        return jsonify({'ok': False, 'error': 'Для восстановления требуется POST'}), 405
+    result, code = _repair_config_request(request.get_json(silent=True) or {})
+    return jsonify(result), code
 
 
 @app.route("/api/fix/config_batch", methods=["POST"])
 def api_fix_config_batch():
-    data       = request.get_json() or {}
-    ids        = data.get("acc_ids", [])
-    backup_dir = (data.get("backup_dir") or "").strip()
-
-    cfg_override = data.get("cfg_src_override") or (
-        os.path.join(BACKUP_CONFIG_DST_ROOT, backup_dir) if backup_dir else None
-    )
-
-    if not ids:
-        return jsonify({"error": "acc_ids missing or empty"}), 400
-
-    out = []
-    for acc_id in ids:
-        out += do_fix_logic(
-            acc_id,
-            only_config=True,
-            cfg_src_override=cfg_override
-        )
-    return jsonify({"ok": True, "logs": out})
+    result, code = _repair_config_request(request.get_json(silent=True) or {})
+    return jsonify(result), code
 
 
 @app.route("/api/logs")
